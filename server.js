@@ -84,9 +84,9 @@ function formatDate(d) {
 
 app.get('/', async (req, res, next) => {
   try {
-    const totalResult = await pool.query('SELECT COUNT(*)::int AS count FROM risk_assessments');
+    const totalResult = await pool.query('SELECT COUNT(*)::int AS count FROM pera_records');
     const pendingResult = await pool.query(
-      "SELECT COUNT(*)::int AS count FROM risk_assessments WHERE status = 'Pending approval'"
+      "SELECT COUNT(*)::int AS count FROM pera_records WHERE status = 'Pending approval'"
     );
     const caraTotalResult = await pool.query('SELECT COUNT(*)::int AS count FROM cara_records');
     const caraPendingResult = await pool.query(
@@ -102,11 +102,11 @@ app.get('/', async (req, res, next) => {
       </div>
       <div class="stat-grid">
         <div class="stat-tile">
-          <div class="stat-label">Tool risk assessments</div>
+          <div class="stat-label">PERA records</div>
           <div class="stat-value">${totalResult.rows[0].count}</div>
         </div>
         <div class="stat-tile">
-          <div class="stat-label">Tool RAs pending approval</div>
+          <div class="stat-label">PERAs pending approval</div>
           <div class="stat-value">${pendingResult.rows[0].count}</div>
         </div>
         <div class="stat-tile">
@@ -120,8 +120,8 @@ app.get('/', async (req, res, next) => {
       </div>
       <div class="card" style="padding: 24px;">
         <p style="margin:0;font-size:14px;color:#6B6659;">
-          <a href="/risk-assessments" style="color:#1B5E52;font-weight:600;">Risk Assessments</a> holds the equipment/tool
-          risk assessment library. <a href="/cara" style="color:#1B5E52;font-weight:600;">CARA</a> is where teachers put
+          <a href="/pera" style="color:#1B5E52;font-weight:600;">PERA</a> holds the equipment/tool
+          risk assessment library (Plant &amp; Equipment Risk Assessments). <a href="/cara" style="color:#1B5E52;font-weight:600;">CARA</a> is where teachers put
           together a Curriculum Activity Risk Assessment for a class or activity, drawing on tools from that library.
         </p>
       </div>
@@ -133,9 +133,9 @@ app.get('/', async (req, res, next) => {
   }
 });
 
-// ---------- Risk Assessments: list ----------
+// ---------- PERA: list ----------
 
-app.get('/risk-assessments', async (req, res, next) => {
+app.get('/pera', async (req, res, next) => {
   try {
     const { risk, q } = req.query;
     const conditions = [];
@@ -152,22 +152,22 @@ app.get('/risk-assessments', async (req, res, next) => {
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const result = await pool.query(
-      `SELECT * FROM risk_assessments ${where} ORDER BY created_at DESC`,
+      `SELECT * FROM pera_records ${where} ORDER BY created_at DESC`,
       params
     );
 
     const chips = ['All', ...RISK_LEVELS].map((level) => {
       const isActive = level === 'All' ? !risk : risk === level;
-      const href = level === 'All' ? '/risk-assessments' : `/risk-assessments?risk=${encodeURIComponent(level)}`;
+      const href = level === 'All' ? '/pera' : `/pera?risk=${encodeURIComponent(level)}`;
       return `<a class="chip${isActive ? ' active' : ''}" href="${href}">${level}</a>`;
     }).join('');
 
     let rowsHtml;
     if (result.rows.length === 0) {
-      rowsHtml = `<div class="empty-state">No risk assessments yet. Click "New risk assessment" to add the first one.</div>`;
+      rowsHtml = `<div class="empty-state">No PERA records yet. Click "New PERA" to add the first one.</div>`;
     } else {
       const rows = result.rows.map((r) => `
-        <tr class="row-link" onclick="window.location='/risk-assessments/${r.id}'">
+        <tr class="row-link" onclick="window.location='/pera/${r.id}'">
           <td>${escapeHtml(r.activity_name)}</td>
           <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
           <td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
@@ -194,13 +194,13 @@ app.get('/risk-assessments', async (req, res, next) => {
     const body = `
       <div class="page-header">
         <div>
-          <h1 class="page-title">Risk Assessments</h1>
-          <p class="page-subtitle">Tool and equipment risk assessment library across IDT and VET workshops.</p>
+          <h1 class="page-title">PERA Records</h1>
+          <p class="page-subtitle">Plant and equipment risk assessments (PERA) for tools and machinery across IDT and VET workshops.</p>
         </div>
-        <a class="btn btn-primary" href="/risk-assessments/new">+ New risk assessment</a>
+        <a class="btn btn-primary" href="/pera/new">+ New PERA</a>
       </div>
       <div class="filter-row">
-        <form method="get" action="/risk-assessments">
+        <form method="get" action="/pera">
           ${risk ? `<input type="hidden" name="risk" value="${escapeHtml(risk)}">` : ''}
           <input class="search-input" type="search" name="q" placeholder="Search activities..." value="${escapeHtml(q || '')}">
         </form>
@@ -209,22 +209,22 @@ app.get('/risk-assessments', async (req, res, next) => {
       <div class="card">${rowsHtml}</div>
     `;
 
-    res.send(page({ title: 'Risk Assessments', active: 'risk-assessments', body }));
+    res.send(page({ title: 'PERA Records', active: 'pera', body }));
   } catch (err) {
     next(err);
   }
 });
 
-// ---------- Risk Assessments: new (form) ----------
+// ---------- PERA: new (form) ----------
 
-app.get('/risk-assessments/new', (req, res) => {
+app.get('/pera/new', (req, res) => {
   const riskOptions = RISK_LEVELS.map((l) => `<option value="${l}">${l}</option>`).join('');
 
   const body = `
-    <a class="back-link" href="/risk-assessments">← Back to Risk Assessments</a>
-    <h1 class="page-title">New risk assessment</h1>
-    <p class="page-subtitle" style="margin-bottom:24px;">This will be saved as a Draft until you submit it for approval.</p>
-    <form class="form-card" method="post" action="/risk-assessments">
+    <a class="back-link" href="/pera">← Back to PERA Records</a>
+    <h1 class="page-title">New PERA</h1>
+    <p class="page-subtitle" style="margin-bottom:24px;">This Plant &amp; Equipment Risk Assessment (PERA) will be saved as a Draft until you submit it for approval.</p>
+    <form class="form-card" method="post" action="/pera">
       <div class="form-row">
         <label for="activity_name">Activity name</label>
         <input type="text" id="activity_name" name="activity_name" required placeholder="e.g. Angle grinder induction — Yr 11 Metalwork">
@@ -259,17 +259,17 @@ app.get('/risk-assessments/new', (req, res) => {
       </div>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary">Save as draft</button>
-        <a class="btn btn-secondary" href="/risk-assessments">Cancel</a>
+        <a class="btn btn-secondary" href="/pera">Cancel</a>
       </div>
     </form>
   `;
 
-  res.send(page({ title: 'New risk assessment', active: 'risk-assessments', body }));
+  res.send(page({ title: 'New PERA', active: 'pera', body }));
 });
 
-// ---------- Risk Assessments: create ----------
+// ---------- PERA: create ----------
 
-app.post('/risk-assessments', async (req, res, next) => {
+app.post('/pera', async (req, res, next) => {
   try {
     const {
       activity_name, class_unit, risk_level,
@@ -282,7 +282,7 @@ app.post('/risk-assessments', async (req, res, next) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO risk_assessments
+      `INSERT INTO pera_records
         (activity_name, class_unit, risk_level, hazards, control_measures, required_supervision, consent_required, submitted_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        RETURNING id`,
@@ -293,39 +293,39 @@ app.post('/risk-assessments', async (req, res, next) => {
       ]
     );
 
-    res.redirect(`/risk-assessments/${result.rows[0].id}`);
+    res.redirect(`/pera/${result.rows[0].id}`);
   } catch (err) {
     next(err);
   }
 });
 
-// ---------- Risk Assessments: detail ----------
+// ---------- PERA: detail ----------
 
-app.get('/risk-assessments/:id', async (req, res, next) => {
+app.get('/pera/:id', async (req, res, next) => {
   try {
-    const result = await pool.query('SELECT * FROM risk_assessments WHERE id = $1', [req.params.id]);
+    const result = await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id]);
     if (result.rows.length === 0) {
-      return res.status(404).send('Risk assessment not found.');
+      return res.status(404).send('PERA record not found.');
     }
     const r = result.rows[0];
 
     let actionsHtml = '';
     if (r.status === 'Draft') {
       actionsHtml = `
-        <form method="post" action="/risk-assessments/${r.id}/submit">
+        <form method="post" action="/pera/${r.id}/submit">
           <button type="submit" class="btn btn-primary" style="width:100%;">Submit for approval</button>
         </form>
       `;
     } else if (r.status === 'Pending approval' || r.status === 'Changes requested') {
       actionsHtml = `
-        <form method="post" action="/risk-assessments/${r.id}/approve" style="margin-bottom:10px;">
+        <form method="post" action="/pera/${r.id}/approve" style="margin-bottom:10px;">
           <div class="form-row">
             <label for="approver">Approved by</label>
             <input type="text" id="approver" name="approver" placeholder="Name of approver" value="Workplace Health and Safety Officer" required>
           </div>
           <button type="submit" class="btn btn-primary" style="width:100%;">Approve</button>
         </form>
-        <form method="post" action="/risk-assessments/${r.id}/reject">
+        <form method="post" action="/pera/${r.id}/reject">
           <div class="form-row">
             <label for="review_notes">Notes for changes requested</label>
             <textarea id="review_notes" name="review_notes" placeholder="What needs to change?"></textarea>
@@ -347,7 +347,7 @@ app.get('/risk-assessments/:id', async (req, res, next) => {
     }
 
     const body = `
-      <a class="back-link" href="/risk-assessments">← Back to Risk Assessments</a>
+      <a class="back-link" href="/pera">← Back to PERA Records</a>
       <div class="page-header">
         <div>
           <span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)} risk</span>
@@ -391,56 +391,68 @@ app.get('/risk-assessments/:id', async (req, res, next) => {
       </div>
     `;
 
-    res.send(page({ title: r.activity_name, active: 'risk-assessments', body }));
+    res.send(page({ title: r.activity_name, active: 'pera', body }));
   } catch (err) {
     next(err);
   }
 });
 
-// ---------- Risk Assessments: workflow actions ----------
+// ---------- PERA: workflow actions ----------
 
-app.post('/risk-assessments/:id/submit', async (req, res, next) => {
+app.post('/pera/:id/submit', async (req, res, next) => {
   try {
     await pool.query(
-      "UPDATE risk_assessments SET status = 'Pending approval', updated_at = now() WHERE id = $1",
+      "UPDATE pera_records SET status = 'Pending approval', updated_at = now() WHERE id = $1",
       [req.params.id]
     );
-    res.redirect(`/risk-assessments/${req.params.id}`);
+    res.redirect(`/pera/${req.params.id}`);
   } catch (err) {
     next(err);
   }
 });
 
-app.post('/risk-assessments/:id/approve', async (req, res, next) => {
+app.post('/pera/:id/approve', async (req, res, next) => {
   try {
     const { approver } = req.body;
     await pool.query(
-      `UPDATE risk_assessments
+      `UPDATE pera_records
        SET status = 'Approved', approver = $1, approved_at = now(),
            next_review_date = (now() + interval '1 year')::date, updated_at = now()
        WHERE id = $2`,
       [approver || null, req.params.id]
     );
-    res.redirect(`/risk-assessments/${req.params.id}`);
+    res.redirect(`/pera/${req.params.id}`);
   } catch (err) {
     next(err);
   }
 });
 
-app.post('/risk-assessments/:id/reject', async (req, res, next) => {
+app.post('/pera/:id/reject', async (req, res, next) => {
   try {
     const { review_notes } = req.body;
     await pool.query(
-      `UPDATE risk_assessments
+      `UPDATE pera_records
        SET status = 'Changes requested', review_notes = $1, updated_at = now()
        WHERE id = $2`,
       [review_notes || null, req.params.id]
     );
-    res.redirect(`/risk-assessments/${req.params.id}`);
+    res.redirect(`/pera/${req.params.id}`);
   } catch (err) {
     next(err);
   }
 });
+
+// ---------- PERA: legacy URL redirects ----------
+// Old "risk-assessments" links (e.g. bookmarks, printed QR codes on
+// equipment) keep working after the rename to PERA terminology.
+
+app.get('/risk-assessments', (req, res) => {
+  const qs = req.originalUrl.split('?')[1];
+  res.redirect(301, qs ? `/pera?${qs}` : '/pera');
+});
+app.get('/risk-assessments/new', (req, res) => res.redirect(301, '/pera/new'));
+app.get('/risk-assessments/:id', (req, res) => res.redirect(301, `/pera/${req.params.id}`));
+app.get('/admin/risk-assessments/:id/edit', (req, res) => res.redirect(301, `/admin/pera/${req.params.id}/edit`));
 
 // ================================================================
 // CARA (Curriculum Activity Risk Assessments)
@@ -531,7 +543,7 @@ app.get('/cara', async (req, res, next) => {
 app.get('/cara/new', async (req, res, next) => {
   try {
     const toolsResult = await pool.query(
-      `SELECT id, activity_name, class_unit, risk_level FROM risk_assessments
+      `SELECT id, activity_name, class_unit, risk_level FROM pera_records
        WHERE status = 'Approved' ORDER BY class_unit NULLS LAST, activity_name`
     );
 
@@ -554,7 +566,7 @@ app.get('/cara/new', async (req, res, next) => {
       `).join('');
     }
     if (!toolsResult.rows.length) {
-      toolListHtml = '<div class="tool-picker-item">No approved tool risk assessments yet.</div>';
+      toolListHtml = '<div class="tool-picker-item">No approved PERA records yet.</div>';
     }
 
     const riskOptions = RISK_LEVELS.map((l) => `<option value="${l}">${l}</option>`).join('');
@@ -587,8 +599,8 @@ app.get('/cara/new', async (req, res, next) => {
           <select id="risk_level" name="risk_level" required>${riskOptions}</select>
         </div>
 
-        <div class="form-section-title">Tool risk assessments used</div>
-        <p class="form-section-hint">Select any equipment already covered by an approved tool risk assessment. If something you need isn't listed, ask your WHS Coordinator to add it first.</p>
+        <div class="form-section-title">PERA used</div>
+        <p class="form-section-hint">Select any equipment already covered by an approved PERA (Plant &amp; Equipment Risk Assessment). If something you need isn't listed, ask your WHS Coordinator to add it first.</p>
         <div class="tool-picker">
           <div class="tool-picker-search">
             <input type="text" id="tool_search" placeholder="Search tools..." oninput="filterTools(this.value)">
@@ -737,7 +749,7 @@ app.post('/cara', async (req, res, next) => {
     if (toolIds.length) {
       const values = toolIds.map((_, i) => `($1, $${i + 2})`).join(',');
       await pool.query(
-        `INSERT INTO cara_tool_links (cara_id, risk_assessment_id) VALUES ${values} ON CONFLICT DO NOTHING`,
+        `INSERT INTO cara_tool_links (cara_id, pera_id) VALUES ${values} ON CONFLICT DO NOTHING`,
         [caraId, ...toolIds]
       );
     }
@@ -759,7 +771,7 @@ app.get('/cara/:id', async (req, res, next) => {
     const toolsResult = await pool.query(
       `SELECT ra.id, ra.activity_name, ra.risk_level
        FROM cara_tool_links l
-       JOIN risk_assessments ra ON ra.id = l.risk_assessment_id
+       JOIN pera_records ra ON ra.id = l.pera_id
        WHERE l.cara_id = $1
        ORDER BY ra.activity_name`,
       [req.params.id]
@@ -767,12 +779,12 @@ app.get('/cara/:id', async (req, res, next) => {
 
     const toolChips = toolsResult.rows.length
       ? `<div class="tool-chip-list">${toolsResult.rows.map((t) => `
-          <a class="tool-chip" href="/risk-assessments/${t.id}">
+          <a class="tool-chip" href="/pera/${t.id}">
             <span class="badge ${riskBadgeClass(t.risk_level)}">${escapeHtml(t.risk_level)}</span>
             ${escapeHtml(t.activity_name)}
           </a>
         `).join('')}</div>`
-      : `<div class="detail-value">No tool risk assessments linked.</div>`;
+      : `<div class="detail-value">No PERA linked.</div>`;
 
     let actionsHtml = '';
     if (r.status === 'Draft') {
@@ -931,7 +943,7 @@ app.get('/cara/:id', async (req, res, next) => {
             <div class="detail-value">${escapeHtml(r.activity_scope || '—')}</div>
           </div>
           <div class="detail-section">
-            <div class="detail-label">Tool risk assessments used</div>
+            <div class="detail-label">PERA used</div>
             ${toolChips}
           </div>
           <div class="detail-section">
@@ -1026,7 +1038,7 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     const toolsResult = await pool.query(
       `SELECT ra.activity_name, ra.risk_level
        FROM cara_tool_links l
-       JOIN risk_assessments ra ON ra.id = l.risk_assessment_id
+       JOIN pera_records ra ON ra.id = l.pera_id
        WHERE l.cara_id = $1
        ORDER BY ra.activity_name`,
       [req.params.id]
@@ -1062,13 +1074,13 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     section('Activity scope', r.activity_scope);
 
     if (toolsResult.rows.length) {
-      doc.fontSize(10.5).fillColor(GREEN).text('Tool risk assessments used');
+      doc.fontSize(10.5).fillColor(GREEN).text('PERA used');
       doc.fontSize(10).fillColor(TEXT).text(
         toolsResult.rows.map((t) => `${t.activity_name} (${t.risk_level})`).join(', ')
       );
       doc.moveDown(0.6);
     } else {
-      section('Tool risk assessments used', null);
+      section('PERA used', null);
     }
 
     section('Students', r.students_notes);
@@ -1249,18 +1261,18 @@ app.post('/admin/login', (req, res) => {
 
 app.post('/admin/logout', (req, res) => {
   res.setHeader('Set-Cookie', 'admin_token=; HttpOnly; Secure; Path=/; Max-Age=0');
-  res.redirect('/risk-assessments');
+  res.redirect('/pera');
 });
 
 // ---------- Admin: records list ----------
 
 app.get('/admin', requireAdmin, async (req, res, next) => {
   try {
-    const result = await pool.query('SELECT * FROM risk_assessments ORDER BY id');
+    const result = await pool.query('SELECT * FROM pera_records ORDER BY id');
     const caraResult = await pool.query('SELECT * FROM cara_records ORDER BY id');
 
     const rows = result.rows.map((r) => `
-      <tr class="row-link" onclick="window.location='/admin/risk-assessments/${r.id}/edit'">
+      <tr class="row-link" onclick="window.location='/admin/pera/${r.id}/edit'">
         <td>${escapeHtml(r.activity_name)}</td>
         <td>${escapeHtml(r.class_unit || '—')}</td>
         <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
@@ -1289,7 +1301,7 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
           <button type="submit" class="btn btn-secondary">Sign out</button>
         </form>
       </div>
-      <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Tool risk assessments</div>
+      <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">PERA records</div>
       <div class="card">
         <table>
           <thead>
@@ -1329,11 +1341,11 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
 
 // ---------- Admin: edit a record ----------
 
-app.get('/admin/risk-assessments/:id/edit', requireAdmin, async (req, res, next) => {
+app.get('/admin/pera/:id/edit', requireAdmin, async (req, res, next) => {
   try {
-    const result = await pool.query('SELECT * FROM risk_assessments WHERE id = $1', [req.params.id]);
+    const result = await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id]);
     if (result.rows.length === 0) {
-      return res.status(404).send('Risk assessment not found.');
+      return res.status(404).send('PERA record not found.');
     }
     const r = result.rows[0];
 
@@ -1343,7 +1355,7 @@ app.get('/admin/risk-assessments/:id/edit', requireAdmin, async (req, res, next)
     const body = `
       <a class="back-link" href="/admin">← Back to Admin</a>
       <h1 class="page-title" style="margin-bottom:24px;">Edit: ${escapeHtml(r.activity_name)}</h1>
-      <form class="form-card" method="post" action="/admin/risk-assessments/${r.id}">
+      <form class="form-card" method="post" action="/admin/pera/${r.id}">
         <div class="form-row">
           <label for="activity_name">Activity name</label>
           <input type="text" id="activity_name" name="activity_name" value="${escapeHtml(r.activity_name)}" required>
@@ -1389,7 +1401,7 @@ app.get('/admin/risk-assessments/:id/edit', requireAdmin, async (req, res, next)
           <a class="btn btn-secondary" href="/admin">Cancel</a>
         </div>
       </form>
-      <form method="post" action="/admin/risk-assessments/${r.id}/delete" style="margin-top:16px;" onsubmit="return confirm('Delete this record permanently? This cannot be undone.');">
+      <form method="post" action="/admin/pera/${r.id}/delete" style="margin-top:16px;" onsubmit="return confirm('Delete this record permanently? This cannot be undone.');">
         <button type="submit" class="btn btn-secondary" style="color:#B3261E;border-color:#B3261E;">Delete this record</button>
       </form>
     `;
@@ -1400,7 +1412,7 @@ app.get('/admin/risk-assessments/:id/edit', requireAdmin, async (req, res, next)
   }
 });
 
-app.post('/admin/risk-assessments/:id', requireAdmin, async (req, res, next) => {
+app.post('/admin/pera/:id', requireAdmin, async (req, res, next) => {
   try {
     const {
       activity_name, class_unit, risk_level, status,
@@ -1413,7 +1425,7 @@ app.post('/admin/risk-assessments/:id', requireAdmin, async (req, res, next) => 
     }
 
     await pool.query(
-      `UPDATE risk_assessments SET
+      `UPDATE pera_records SET
          activity_name = $1, class_unit = $2, risk_level = $3, status = $4,
          hazards = $5, control_measures = $6, required_supervision = $7, consent_required = $8,
          submitted_by = $9, approver = $10, updated_at = now()
@@ -1426,15 +1438,15 @@ app.post('/admin/risk-assessments/:id', requireAdmin, async (req, res, next) => 
       ]
     );
 
-    res.redirect(`/admin/risk-assessments/${req.params.id}/edit`);
+    res.redirect(`/admin/pera/${req.params.id}/edit`);
   } catch (err) {
     next(err);
   }
 });
 
-app.post('/admin/risk-assessments/:id/delete', requireAdmin, async (req, res, next) => {
+app.post('/admin/pera/:id/delete', requireAdmin, async (req, res, next) => {
   try {
-    await pool.query('DELETE FROM risk_assessments WHERE id = $1', [req.params.id]);
+    await pool.query('DELETE FROM pera_records WHERE id = $1', [req.params.id]);
     res.redirect('/admin');
   } catch (err) {
     next(err);
