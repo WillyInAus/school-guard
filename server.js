@@ -639,11 +639,11 @@ app.get('/cara/new', async (req, res, next) => {
         <p class="form-section-hint">Considering environmental hazards</p>
         <div class="form-row">
           <label for="environmental_hazards">Hazards</label>
-          <textarea id="environmental_hazards" name="environmental_hazards" placeholder="e.g. weather, insects/wildlife, sun exposure"></textarea>
+          <textarea id="environmental_hazards" name="environmental_hazards" placeholder="e.g. dust/fumes from machining or welding, noise from machinery, poor ventilation, workshop heat in summer"></textarea>
         </div>
         <div class="form-row">
           <label for="environmental_controls">Control measures</label>
-          <textarea id="environmental_controls" name="environmental_controls" placeholder="e.g. reschedule outdoor tasks in extreme heat, insect repellent available, sun-safe hats/shade required"></textarea>
+          <textarea id="environmental_controls" name="environmental_controls" placeholder="e.g. dust extraction/ventilation running, hearing protection available, fans/cooling in hot weather, floors kept clear of swarf/sawdust"></textarea>
         </div>
 
         <p class="form-section-hint">Considering facilities and equipment hazards</p>
