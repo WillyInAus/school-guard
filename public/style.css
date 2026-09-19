@@ -557,3 +557,115 @@ tr.row-link:hover {
   background: #fff;
   padding: 6px;
 }
+
+/* ---------- Bottom navigation (mobile) ---------- */
+
+.bottom-nav {
+  display: none;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  align-items: center;
+  justify-content: space-around;
+  background: #123832;
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px)) 4px;
+  border-top: 1px solid rgba(255,255,255,0.12);
+}
+
+.bottom-nav a svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* ---------- Responsive tables ---------- */
+/* Tables scroll horizontally on narrow screens instead of squashing columns. */
+
+.card:has(> table) {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.card:has(> table) table {
+  min-width: 560px;
+}
+
+/* ---------- Mobile layout ---------- */
+
+@media (max-width: 768px) {
+  .sidebar {
+    display: none;
+  }
+
+  .bottom-nav {
+    display: flex;
+  }
+
+  .topbar {
+    height: 56px;
+    padding: 0 16px;
+  }
+
+  .school-switch {
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+
+  .content {
+    padding: 20px 16px calc(80px + env(safe-area-inset-bottom, 0px)) 16px;
+  }
+
+  h1.page-title {
+    font-size: 22px;
+  }
+
+  .page-header {
+    align-items: flex-start;
+  }
+
+  .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-grid > .card {
+    order: -1;
+  }
+
+  .form-card {
+    padding: 18px;
+  }
+
+  .form-actions {
+    flex-wrap: wrap;
+  }
+
+  .form-actions .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .filter-row form {
+    width: 100%;
+  }
+
+  .search-input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .monitoring-row {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+}
+
+@media (max-width: 420px) {
+  .stat-grid {
+    grid-template-columns: 1fr;
+  }
+}
