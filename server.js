@@ -88,9 +88,9 @@ app.get('/', async (req, res, next) => {
     const pendingResult = await pool.query(
       "SELECT COUNT(*)::int AS count FROM pera_records WHERE status = 'Pending approval'"
     );
-    const caraTotalResult = await pool.query('SELECT COUNT(*)::int AS count FROM cara_records');
+    const caraTotalResult = await pool.query('SELECT COUNT(*)::int AS count FROM cara_records WHERE archived = false');
     const caraPendingResult = await pool.query(
-      "SELECT COUNT(*)::int AS count FROM cara_records WHERE status = 'Pending approval'"
+      "SELECT COUNT(*)::int AS count FROM cara_records WHERE status = 'Pending approval' AND archived = false"
     );
 
     const body = `
@@ -461,8 +461,12 @@ app.get('/admin/risk-assessments/:id/edit', (req, res) => res.redirect(301, `/ad
 app.get('/cara', async (req, res, next) => {
   try {
     const { risk, q } = req.query;
+    const showArchived = req.query.archived === '1';
     const conditions = [];
     const params = [];
+
+    params.push(showArchived);
+    conditions.push(`archived = $${params.length}`);
 
     if (risk && RISK_LEVELS.includes(risk)) {
       params.push(risk);
@@ -481,13 +485,19 @@ app.get('/cara', async (req, res, next) => {
 
     const chips = ['All', ...RISK_LEVELS].map((level) => {
       const isActive = level === 'All' ? !risk : risk === level;
-      const href = level === 'All' ? '/cara' : `/cara?risk=${encodeURIComponent(level)}`;
+      const chipParams = new URLSearchParams();
+      if (level !== 'All') chipParams.set('risk', level);
+      if (showArchived) chipParams.set('archived', '1');
+      const qs = chipParams.toString();
+      const href = `/cara${qs ? `?${qs}` : ''}`;
       return `<a class="chip${isActive ? ' active' : ''}" href="${href}">${level}</a>`;
     }).join('');
 
     let rowsHtml;
     if (result.rows.length === 0) {
-      rowsHtml = `<div class="empty-state">No CARA records yet. Click "New CARA" to add the first one.</div>`;
+      rowsHtml = showArchived
+        ? `<div class="empty-state">No archived CARA records.</div>`
+        : `<div class="empty-state">No CARA records yet. Click "New CARA" to add the first one.</div>`;
     } else {
       const rows = result.rows.map((r) => `
         <tr class="row-link" onclick="window.location='/cara/${r.id}'">
@@ -519,22 +529,28 @@ app.get('/cara', async (req, res, next) => {
     const body = `
       <div class="page-header">
         <div>
-          <h1 class="page-title">CARA Records</h1>
-          <p class="page-subtitle">Curriculum Activity Risk Assessments for classes and activities.</p>
+          <h1 class="page-title">${showArchived ? 'Archived CARA Records' : 'CARA Records'}</h1>
+          <p class="page-subtitle">${showArchived
+            ? 'CARA records that have been archived and are hidden from the main list.'
+            : 'Curriculum Activity Risk Assessments for classes and activities.'}</p>
         </div>
-        <a class="btn btn-primary" href="/cara/new">+ New CARA</a>
+        ${showArchived
+          ? `<a class="btn btn-secondary" href="/cara">← Back to active</a>`
+          : `<a class="btn btn-primary" href="/cara/new">+ New CARA</a>`}
       </div>
       <div class="filter-row">
         <form method="get" action="/cara">
           ${risk ? `<input type="hidden" name="risk" value="${escapeHtml(risk)}">` : ''}
+          ${showArchived ? `<input type="hidden" name="archived" value="1">` : ''}
           <input class="search-input" type="search" name="q" placeholder="Search activities..." value="${escapeHtml(q || '')}">
         </form>
         <div class="chip-row">${chips}</div>
       </div>
+      ${!showArchived ? `<p style="margin:-10px 0 18px;"><a href="/cara?archived=1" style="font-size:13px;color:#6B6659;text-decoration:underline;">View archived CARA records →</a></p>` : ''}
       <div class="card">${rowsHtml}</div>
     `;
 
-    res.send(page({ title: 'CARA Records', active: 'cara', body }));
+    res.send(page({ title: showArchived ? 'Archived CARA Records' : 'CARA Records', active: 'cara', body }));
   } catch (err) {
     next(err);
   }
@@ -935,6 +951,7 @@ app.get('/cara/:id', async (req, res, next) => {
           <p class="page-subtitle">${escapeHtml(r.class_unit || 'Class/unit not set')} · Submitted by ${escapeHtml(r.submitted_by || 'unknown')}</p>
         </div>
         <span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
+        ${r.archived ? `<span class="badge" style="background:#F0EDE5;color:#6B6659;margin-left:6px;">Archived</span>` : ''}
       </div>
       <div class="detail-grid">
         <div>
@@ -1013,6 +1030,13 @@ app.get('/cara/:id', async (req, res, next) => {
         </div>
         <div class="card" style="padding:22px;">
           <a class="btn btn-secondary" href="/cara/${r.id}/pdf" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-bottom:14px;">Download PDF</a>
+          <form method="post" action="/cara/${r.id}/duplicate" style="margin-bottom:10px;">
+            <button type="submit" class="btn btn-secondary" style="width:100%;">Duplicate as new CARA</button>
+          </form>
+          <form method="post" action="/cara/${r.id}/${r.archived ? 'unarchive' : 'archive'}" style="margin-bottom:14px;"${r.archived ? '' : ` onsubmit="return confirm('Archive this CARA? It will be hidden from the main CARA list, but can be restored anytime from the Archived view.');"`}>
+            <button type="submit" class="btn btn-secondary" style="width:100%;">${r.archived ? 'Unarchive' : 'Archive'}</button>
+          </form>
+          ${r.archived ? `<div class="note-box" style="margin-bottom:14px;">This CARA is archived and hidden from the main CARA list.</div>` : ''}
           <div class="note-box">${caraApprovalRequirement(r.risk_level)}</div>
           ${actionsHtml}
         </div>
@@ -1216,6 +1240,81 @@ app.post('/cara/:id/review', async (req, res, next) => {
         req.params.id,
       ]
     );
+    res.redirect(`/cara/${req.params.id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- CARA: duplicate ----------
+// Lets a teacher reuse an existing CARA (same content, tools, risk level) for
+// a repeat occurrence of the activity. The copy always starts life as a fresh,
+// unsigned, unapproved Draft — status/signature/approval never carry over —
+// and naturally gets today's date via created_at, so no separate "date" field
+// is needed.
+
+app.post('/cara/:id/duplicate', async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM cara_records WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).send('CARA record not found.');
+    }
+    const r = result.rows[0];
+
+    const insertResult = await pool.query(
+      `INSERT INTO cara_records
+        (activity_name, class_unit, activity_scope, risk_level,
+         students_notes, emergency_first_aid, induction_instruction, consent_required,
+         supervision_notes, supervisor_qualification, facilities_equipment,
+         environmental_hazards, environmental_controls,
+         facilities_hazards, facilities_controls,
+         student_hazards, student_controls,
+         submitted_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+       RETURNING id`,
+      [
+        r.activity_name, r.class_unit, r.activity_scope, r.risk_level,
+        r.students_notes, r.emergency_first_aid, r.induction_instruction, r.consent_required,
+        r.supervision_notes, r.supervisor_qualification, r.facilities_equipment,
+        r.environmental_hazards, r.environmental_controls,
+        r.facilities_hazards, r.facilities_controls,
+        r.student_hazards, r.student_controls,
+        r.submitted_by,
+      ]
+    );
+    const newId = insertResult.rows[0].id;
+
+    const toolLinks = await pool.query('SELECT pera_id FROM cara_tool_links WHERE cara_id = $1', [req.params.id]);
+    if (toolLinks.rows.length) {
+      const values = toolLinks.rows.map((_, i) => `($1, $${i + 2})`).join(',');
+      await pool.query(
+        `INSERT INTO cara_tool_links (cara_id, pera_id) VALUES ${values} ON CONFLICT DO NOTHING`,
+        [newId, ...toolLinks.rows.map((t) => t.pera_id)]
+      );
+    }
+
+    res.redirect(`/cara/${newId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- CARA: archive / unarchive ----------
+// Archiving hides a CARA from the main /cara list (e.g. once it's stale or
+// superseded by a duplicate) without deleting it. It stays fully viewable via
+// the "Archived" view and can be unarchived at any time.
+
+app.post('/cara/:id/archive', async (req, res, next) => {
+  try {
+    await pool.query('UPDATE cara_records SET archived = true, updated_at = now() WHERE id = $1', [req.params.id]);
+    res.redirect('/cara');
+  } catch (err) {
+    next(err);
+  }
+});
+app.post('/cara/:id/unarchive', async (req, res, next) => {
+  try {
+    await pool.query('UPDATE cara_records SET archived = false, updated_at = now() WHERE id = $1', [req.params.id]);
     res.redirect(`/cara/${req.params.id}`);
   } catch (err) {
     next(err);
