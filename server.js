@@ -1,12 +1,13 @@
 const express = require('express');
 const crypto = require('crypto');
+const PDFDocument = require('pdfkit');
 const { pool, migrate } = require('./db');
 const { page, escapeHtml } = require('./views/layout');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use(express.static('public'));
 
 const RISK_LEVELS = ['Low', 'Medium', 'High', 'Extreme'];
@@ -776,9 +777,81 @@ app.get('/cara/:id', async (req, res, next) => {
     let actionsHtml = '';
     if (r.status === 'Draft') {
       actionsHtml = `
-        <form method="post" action="/cara/${r.id}/submit">
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Teacher signature</div>
+        <p class="form-section-hint">Sign below to confirm this CARA is accurate before submitting for approval.</p>
+        <div class="signature-pad-wrap">
+          <canvas id="signature_pad" class="signature-pad" width="400" height="150"></canvas>
+        </div>
+        <div class="signature-pad-actions">
+          <button type="button" class="btn btn-secondary" onclick="window.clearSignature()">Clear</button>
+        </div>
+        <form method="post" action="/cara/${r.id}/submit" id="cara_submit_form" onsubmit="return window.prepareSignature(event)">
+          <input type="hidden" id="teacher_signature" name="teacher_signature">
           <button type="submit" class="btn btn-primary" style="width:100%;">Submit for approval</button>
         </form>
+        <script>
+          (function () {
+            const canvas = document.getElementById('signature_pad');
+            const ctx = canvas.getContext('2d');
+            ctx.strokeStyle = '#1B5E52';
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            let drawing = false;
+            let hasDrawn = false;
+
+            function getPos(e) {
+              const rect = canvas.getBoundingClientRect();
+              const scaleX = canvas.width / rect.width;
+              const scaleY = canvas.height / rect.height;
+              if (e.touches && e.touches.length) {
+                return { x: (e.touches[0].clientX - rect.left) * scaleX, y: (e.touches[0].clientY - rect.top) * scaleY };
+              }
+              return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+            }
+
+            function start(e) {
+              e.preventDefault();
+              drawing = true;
+              const pos = getPos(e);
+              ctx.beginPath();
+              ctx.moveTo(pos.x, pos.y);
+            }
+            function move(e) {
+              if (!drawing) return;
+              e.preventDefault();
+              const pos = getPos(e);
+              ctx.lineTo(pos.x, pos.y);
+              ctx.stroke();
+              hasDrawn = true;
+            }
+            function stop() {
+              drawing = false;
+            }
+
+            canvas.addEventListener('mousedown', start);
+            canvas.addEventListener('mousemove', move);
+            window.addEventListener('mouseup', stop);
+            canvas.addEventListener('touchstart', start, { passive: false });
+            canvas.addEventListener('touchmove', move, { passive: false });
+            canvas.addEventListener('touchend', stop);
+
+            window.clearSignature = function () {
+              ctx.clearRect(0, 0, canvas.width, canvas.height);
+              hasDrawn = false;
+            };
+
+            window.prepareSignature = function (ev) {
+              if (!hasDrawn) {
+                alert('Please sign in the box above before submitting.');
+                ev.preventDefault();
+                return false;
+              }
+              document.getElementById('teacher_signature').value = canvas.toDataURL('image/png');
+              return true;
+            };
+          })();
+        </script>
       `;
     } else if (r.status === 'Pending approval' || r.status === 'Changes requested') {
       actionsHtml = `
@@ -862,6 +935,12 @@ app.get('/cara/:id', async (req, res, next) => {
             ${toolChips}
           </div>
           <div class="detail-section">
+            <div class="detail-label">Teacher signature</div>
+            ${r.teacher_signature
+              ? `<img src="${r.teacher_signature}" alt="Teacher signature" class="signature-image">${r.signed_at ? `<div class="detail-value" style="margin-top:4px;font-size:12px;color:#6B6659;">Signed ${formatDate(r.signed_at)}</div>` : ''}`
+              : `<div class="detail-value">—</div>`}
+          </div>
+          <div class="detail-section">
             <div class="detail-label">Students</div>
             <div class="detail-value">${escapeHtml(r.students_notes || '—')}</div>
           </div>
@@ -921,6 +1000,7 @@ app.get('/cara/:id', async (req, res, next) => {
           ${reviewSection}
         </div>
         <div class="card" style="padding:22px;">
+          <a class="btn btn-secondary" href="/cara/${r.id}/pdf" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-bottom:14px;">Download PDF</a>
           <div class="note-box">${caraApprovalRequirement(r.risk_level)}</div>
           ${actionsHtml}
         </div>
@@ -933,11 +1013,143 @@ app.get('/cara/:id', async (req, res, next) => {
   }
 });
 
+// ---------- CARA: PDF export ----------
+
+app.get('/cara/:id/pdf', async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM cara_records WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).send('CARA record not found.');
+    }
+    const r = result.rows[0];
+
+    const toolsResult = await pool.query(
+      `SELECT ra.activity_name, ra.risk_level
+       FROM cara_tool_links l
+       JOIN risk_assessments ra ON ra.id = l.risk_assessment_id
+       WHERE l.cara_id = $1
+       ORDER BY ra.activity_name`,
+      [req.params.id]
+    );
+
+    const safeName = (r.activity_name || 'CARA').replace(/[^a-z0-9 \-_.]/gi, '').trim() || 'CARA';
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="CARA - ${safeName}.pdf"`);
+
+    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
+    doc.pipe(res);
+
+    const GREEN = '#1B5E52';
+    const MUTED = '#6B6659';
+    const TEXT = '#1a1a1a';
+
+    doc.fontSize(9).fillColor(MUTED).text('School Guard — Faith Lutheran College', { align: 'left' });
+    doc.moveDown(0.3);
+    doc.fontSize(16).fillColor(GREEN).text('Curriculum Activity Risk Assessment (CARA)');
+    doc.moveDown(0.2);
+    doc.fontSize(13).fillColor(TEXT).text(r.activity_name || 'Untitled activity');
+    doc.fontSize(9).fillColor(MUTED).text(
+      `${r.class_unit || 'Class/unit not set'}   ·   Risk level: ${r.risk_level}   ·   Status: ${r.status}`
+    );
+    doc.moveDown(0.8);
+
+    function section(title, value) {
+      doc.fontSize(10.5).fillColor(GREEN).text(title);
+      doc.fontSize(10).fillColor(TEXT).text(value && String(value).trim() ? String(value) : '—');
+      doc.moveDown(0.6);
+    }
+
+    section('Activity scope', r.activity_scope);
+
+    if (toolsResult.rows.length) {
+      doc.fontSize(10.5).fillColor(GREEN).text('Tool risk assessments used');
+      doc.fontSize(10).fillColor(TEXT).text(
+        toolsResult.rows.map((t) => `${t.activity_name} (${t.risk_level})`).join(', ')
+      );
+      doc.moveDown(0.6);
+    } else {
+      section('Tool risk assessments used', null);
+    }
+
+    section('Students', r.students_notes);
+    section('Emergency and first aid', r.emergency_first_aid);
+    section('Induction and instruction', r.induction_instruction);
+    section('Parent consent required', r.consent_required ? 'Yes' : 'No');
+    section('Supervision', r.supervision_notes);
+    section('Supervisor qualification', r.supervisor_qualification);
+    section('Facilities and equipment', r.facilities_equipment);
+    section('Environmental hazards', r.environmental_hazards);
+    section('Environmental control measures', r.environmental_controls);
+    section('Facilities and equipment hazards', r.facilities_hazards);
+    section('Facilities and equipment control measures', r.facilities_controls);
+    section('Student hazards', r.student_hazards);
+    section('Student control measures', r.student_controls);
+
+    if (r.review_notes) {
+      section('Last review notes', r.review_notes);
+    }
+
+    if (r.status === 'Approved') {
+      section('Approved by', `${r.approver || '—'}  on  ${formatDate(r.approved_at)}`);
+      section('Next review due', formatDate(r.next_review_date));
+    }
+
+    if (r.reviewed_at) {
+      doc.fontSize(10.5).fillColor(GREEN).text('Post-activity monitoring & review');
+      const yn = (v) => (v === true ? 'Yes' : v === false ? 'No' : '—');
+      doc.fontSize(10).fillColor(TEXT).text(`Additional hazards identified: ${yn(r.monitoring_new_hazards)}`);
+      doc.text(`Control measures effective: ${yn(r.monitoring_controls_effective)}`);
+      doc.text(`Further action required: ${yn(r.monitoring_further_action)}`);
+      if (r.monitoring_details) doc.text(r.monitoring_details);
+      doc.fontSize(8.5).fillColor(MUTED).text(`Last reviewed ${formatDate(r.reviewed_at)}.`);
+      doc.moveDown(0.6);
+    }
+
+    doc.fontSize(10.5).fillColor(GREEN).text('Teacher signature');
+    doc.fontSize(10).fillColor(TEXT).text(
+      `Submitted by: ${r.submitted_by || 'unknown'}${r.signed_at ? `  on  ${formatDate(r.signed_at)}` : ''}`
+    );
+    if (r.teacher_signature) {
+      try {
+        const base64 = r.teacher_signature.split(',')[1];
+        const imgBuffer = Buffer.from(base64, 'base64');
+        doc.moveDown(0.3);
+        doc.image(imgBuffer, { fit: [200, 80] });
+      } catch (e) {
+        doc.fontSize(9).fillColor(MUTED).text('(signature image could not be rendered)');
+      }
+    } else {
+      doc.fontSize(9).fillColor(MUTED).text('No signature captured.');
+    }
+
+    doc.moveDown(1.2);
+    doc.fontSize(8).fillColor('#999999').text(
+      `Generated ${new Date().toLocaleString('en-AU')} — School Guard`,
+      { align: 'center' }
+    );
+
+    doc.end();
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.post('/cara/:id/submit', async (req, res, next) => {
   try {
+    const { teacher_signature } = req.body;
+    const isValidSignature = typeof teacher_signature === 'string'
+      && teacher_signature.length < 500000
+      && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(teacher_signature);
+
+    if (!isValidSignature) {
+      return res.status(400).send('A teacher signature is required before this CARA can be submitted for approval. Please go back and sign.');
+    }
+
     await pool.query(
-      "UPDATE cara_records SET status = 'Pending approval', updated_at = now() WHERE id = $1",
-      [req.params.id]
+      `UPDATE cara_records
+       SET status = 'Pending approval', teacher_signature = $1, signed_at = now(), updated_at = now()
+       WHERE id = $2`,
+      [teacher_signature, req.params.id]
     );
     res.redirect(`/cara/${req.params.id}`);
   } catch (err) {
