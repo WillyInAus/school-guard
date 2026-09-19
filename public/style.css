@@ -45,6 +45,14 @@ a { color: inherit; }
   padding: 0 12px;
 }
 
+.sidebar-nav-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 12px;
+  margin-top: auto;
+}
+
 .sidebar-footer {
   margin-top: auto;
   padding: 16px 24px 0 24px;
