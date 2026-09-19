@@ -60,6 +60,19 @@ function approvalRequirement(riskLevel) {
   return 'Low risk activities do not require additional approval beyond the supervising teacher.';
 }
 
+function caraApprovalRequirement(riskLevel) {
+  if (riskLevel === 'Extreme') {
+    return 'Extreme risk: consider an alternative or modified activity. This CARA must be completed and approved by the principal before proceeding, and parent/carer consent is required.';
+  }
+  if (riskLevel === 'High') {
+    return 'High risk: complete this CARA and obtain approval from the principal or a school leader (DP/HOD/HOSES) before proceeding. Parent/carer consent is highly recommended.';
+  }
+  if (riskLevel === 'Medium') {
+    return 'Medium risk: a CARA record is recommended to document the activity, hazards and control measures.';
+  }
+  return 'Low risk: document risks and controls as part of your normal unit/lesson planning.';
+}
+
 function formatDate(d) {
   if (!d) return '—';
   const date = new Date(d);
@@ -74,6 +87,10 @@ app.get('/', async (req, res, next) => {
     const pendingResult = await pool.query(
       "SELECT COUNT(*)::int AS count FROM risk_assessments WHERE status = 'Pending approval'"
     );
+    const caraTotalResult = await pool.query('SELECT COUNT(*)::int AS count FROM cara_records');
+    const caraPendingResult = await pool.query(
+      "SELECT COUNT(*)::int AS count FROM cara_records WHERE status = 'Pending approval'"
+    );
 
     const body = `
       <div class="page-header">
@@ -82,21 +99,29 @@ app.get('/', async (req, res, next) => {
           <p class="page-subtitle">Faith Lutheran College — Plainland</p>
         </div>
       </div>
-      <div class="stat-grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+      <div class="stat-grid">
         <div class="stat-tile">
-          <div class="stat-label">Risk assessments on record</div>
+          <div class="stat-label">Tool risk assessments</div>
           <div class="stat-value">${totalResult.rows[0].count}</div>
         </div>
         <div class="stat-tile">
-          <div class="stat-label">Pending approval</div>
+          <div class="stat-label">Tool RAs pending approval</div>
           <div class="stat-value">${pendingResult.rows[0].count}</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-label">CARA records</div>
+          <div class="stat-value">${caraTotalResult.rows[0].count}</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-label">CARAs pending approval</div>
+          <div class="stat-value">${caraPendingResult.rows[0].count}</div>
         </div>
       </div>
       <div class="card" style="padding: 24px;">
         <p style="margin:0;font-size:14px;color:#6B6659;">
-          This dashboard will grow as more of School Guard is built out — equipment register, inductions and the
-          policy library are next. For now, head to <a href="/risk-assessments" style="color:#1B5E52;font-weight:600;">Risk Assessments</a>
-          to add and manage records.
+          <a href="/risk-assessments" style="color:#1B5E52;font-weight:600;">Risk Assessments</a> holds the equipment/tool
+          risk assessment library. <a href="/cara" style="color:#1B5E52;font-weight:600;">CARA</a> is where teachers put
+          together a Curriculum Activity Risk Assessment for a class or activity, drawing on tools from that library.
         </p>
       </div>
     `;
@@ -169,7 +194,7 @@ app.get('/risk-assessments', async (req, res, next) => {
       <div class="page-header">
         <div>
           <h1 class="page-title">Risk Assessments</h1>
-          <p class="page-subtitle">Curriculum Activity Risk Assessments (CARA) across IDT and VET workshops.</p>
+          <p class="page-subtitle">Tool and equipment risk assessment library across IDT and VET workshops.</p>
         </div>
         <a class="btn btn-primary" href="/risk-assessments/new">+ New risk assessment</a>
       </div>
@@ -416,30 +441,557 @@ app.post('/risk-assessments/:id/reject', async (req, res, next) => {
   }
 });
 
-// ---------- Admin: one-time bulk field update ----------
+// ================================================================
+// CARA (Curriculum Activity Risk Assessments)
+// ================================================================
 
-app.post('/admin/bulk-update', async (req, res, next) => {
+app.get('/cara', async (req, res, next) => {
   try {
-    const { token } = req.body;
-    if (token !== 'schoolguard-admin-2026') {
-      return res.status(403).send('forbidden');
+    const { risk, q } = req.query;
+    const conditions = [];
+    const params = [];
+
+    if (risk && RISK_LEVELS.includes(risk)) {
+      params.push(risk);
+      conditions.push(`risk_level = $${params.length}`);
+    }
+    if (q) {
+      params.push(`%${q}%`);
+      conditions.push(`activity_name ILIKE $${params.length}`);
     }
 
-    const approverResult = await pool.query(
-      `UPDATE risk_assessments SET approver = $1, updated_at = now()`,
-      ['Workplace Health and Safety Officer']
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const result = await pool.query(
+      `SELECT * FROM cara_records ${where} ORDER BY created_at DESC`,
+      params
     );
 
-    const submittedResult = await pool.query(
-      `UPDATE risk_assessments SET submitted_by = $1, updated_at = now()
-       WHERE class_unit LIKE 'IDT%' OR class_unit = 'Yr 11 Metalwork'`,
-      ['Sean Willmott']
+    const chips = ['All', ...RISK_LEVELS].map((level) => {
+      const isActive = level === 'All' ? !risk : risk === level;
+      const href = level === 'All' ? '/cara' : `/cara?risk=${encodeURIComponent(level)}`;
+      return `<a class="chip${isActive ? ' active' : ''}" href="${href}">${level}</a>`;
+    }).join('');
+
+    let rowsHtml;
+    if (result.rows.length === 0) {
+      rowsHtml = `<div class="empty-state">No CARA records yet. Click "New CARA" to add the first one.</div>`;
+    } else {
+      const rows = result.rows.map((r) => `
+        <tr class="row-link" onclick="window.location='/cara/${r.id}'">
+          <td>${escapeHtml(r.activity_name)}</td>
+          <td>${escapeHtml(r.class_unit || '—')}</td>
+          <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
+          <td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
+          <td>${escapeHtml(r.submitted_by || '—')}</td>
+          <td>${formatDate(r.next_review_date)}</td>
+        </tr>
+      `).join('');
+      rowsHtml = `
+        <table>
+          <thead>
+            <tr>
+              <th>Activity / Class</th>
+              <th>Class / unit</th>
+              <th>Risk</th>
+              <th>Status</th>
+              <th>Teacher</th>
+              <th>Next review</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    const body = `
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">CARA Records</h1>
+          <p class="page-subtitle">Curriculum Activity Risk Assessments for classes and activities.</p>
+        </div>
+        <a class="btn btn-primary" href="/cara/new">+ New CARA</a>
+      </div>
+      <div class="filter-row">
+        <form method="get" action="/cara">
+          ${risk ? `<input type="hidden" name="risk" value="${escapeHtml(risk)}">` : ''}
+          <input class="search-input" type="search" name="q" placeholder="Search activities..." value="${escapeHtml(q || '')}">
+        </form>
+        <div class="chip-row">${chips}</div>
+      </div>
+      <div class="card">${rowsHtml}</div>
+    `;
+
+    res.send(page({ title: 'CARA Records', active: 'cara', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/cara/new', async (req, res, next) => {
+  try {
+    const toolsResult = await pool.query(
+      `SELECT id, activity_name, class_unit, risk_level FROM risk_assessments
+       WHERE status = 'Approved' ORDER BY class_unit NULLS LAST, activity_name`
     );
 
-    res.status(200).json({
-      approverUpdated: approverResult.rowCount,
-      submittedByUpdated: submittedResult.rowCount,
-    });
+    const groups = new Map();
+    for (const t of toolsResult.rows) {
+      const key = t.class_unit || 'Other';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(t);
+    }
+
+    let toolListHtml = '';
+    for (const [group, tools] of groups) {
+      toolListHtml += `<div class="tool-picker-group-label">${escapeHtml(group)}</div>`;
+      toolListHtml += tools.map((t) => `
+        <div class="tool-picker-item" data-search="${escapeHtml(t.activity_name.toLowerCase())}">
+          <input type="checkbox" id="tool_${t.id}" name="tool_ids" value="${t.id}">
+          <label for="tool_${t.id}">${escapeHtml(t.activity_name)}</label>
+          <span class="badge ${riskBadgeClass(t.risk_level)}">${escapeHtml(t.risk_level)}</span>
+        </div>
+      `).join('');
+    }
+    if (!toolsResult.rows.length) {
+      toolListHtml = '<div class="tool-picker-item">No approved tool risk assessments yet.</div>';
+    }
+
+    const riskOptions = RISK_LEVELS.map((l) => `<option value="${l}">${l}</option>`).join('');
+
+    const body = `
+      <a class="back-link" href="/cara">← Back to CARA Records</a>
+      <h1 class="page-title">New CARA</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">Curriculum Activity Risk Assessment for a class or activity. Saved as a Draft until submitted for approval.</p>
+      <form class="form-card" method="post" action="/cara" style="max-width:760px;">
+
+        <div class="form-section-title">Activity scope</div>
+        <p class="form-section-hint">Describe the activity as it applies to your unit/lesson planning.</p>
+        <div class="form-row">
+          <label for="activity_name">Activity name</label>
+          <input type="text" id="activity_name" name="activity_name" required placeholder="e.g. Yr 10 Metalwork — Wood turning unit">
+        </div>
+        <div class="form-row">
+          <label for="class_unit">Class / unit</label>
+          <input type="text" id="class_unit" name="class_unit" placeholder="e.g. Yr 10 Metalwork">
+        </div>
+        <div class="form-row">
+          <label for="activity_scope">Activity scope</label>
+          <textarea id="activity_scope" name="activity_scope" placeholder="What will students be doing, over what period, and where does it sit in the unit plan?"></textarea>
+        </div>
+
+        <div class="form-section-title">Inherent risk level</div>
+        <p class="form-section-hint">Based on the highest-risk hazard or tool involved. Low = document only. Medium = CARA recommended. High = CARA + principal/DP approval, consent recommended. Extreme = CARA + principal approval, consent required.</p>
+        <div class="form-row">
+          <label for="risk_level">Risk level</label>
+          <select id="risk_level" name="risk_level" required>${riskOptions}</select>
+        </div>
+
+        <div class="form-section-title">Tool risk assessments used</div>
+        <p class="form-section-hint">Select any equipment already covered by an approved tool risk assessment. If something you need isn't listed, ask your WHS Coordinator to add it first.</p>
+        <div class="tool-picker">
+          <div class="tool-picker-search">
+            <input type="text" id="tool_search" placeholder="Search tools..." oninput="filterTools(this.value)">
+          </div>
+          <div class="tool-picker-list" id="tool_picker_list">
+            ${toolListHtml}
+          </div>
+        </div>
+
+        <div class="form-section-title">Students</div>
+        <p class="form-section-hint">Age/maturity/skill considerations, individual student needs, health plans, sun safety.</p>
+        <div class="form-row">
+          <textarea id="students_notes" name="students_notes" placeholder="Any student-specific considerations for this activity..."></textarea>
+        </div>
+
+        <div class="form-section-title">Emergency and first aid</div>
+        <div class="form-row">
+          <textarea id="emergency_first_aid" name="emergency_first_aid" placeholder="Emergency plans, first aid access, communication arrangements..."></textarea>
+        </div>
+
+        <div class="form-section-title">Induction and instruction</div>
+        <div class="form-row">
+          <textarea id="induction_instruction" name="induction_instruction" placeholder="How will supervisors and students be inducted/instructed on safety procedures?"></textarea>
+        </div>
+
+        <div class="form-section-title">Consent</div>
+        <div class="form-row checkbox-row">
+          <input type="checkbox" id="consent_required" name="consent_required" value="true">
+          <label for="consent_required">Parent consent required (required for Extreme risk, recommended for High)</label>
+        </div>
+
+        <div class="form-section-title">Supervision</div>
+        <div class="form-row">
+          <textarea id="supervision_notes" name="supervision_notes" placeholder="Number of supervisors, ratios, roles during the activity..."></textarea>
+        </div>
+
+        <div class="form-section-title">Supervisor qualification</div>
+        <div class="form-row">
+          <textarea id="supervisor_qualification" name="supervisor_qualification" placeholder="Qualifications/competencies required of supervisors for this risk level..."></textarea>
+        </div>
+
+        <div class="form-section-title">Facilities and equipment</div>
+        <div class="form-row">
+          <textarea id="facilities_equipment" name="facilities_equipment" placeholder="Location suitability, PPE, equipment sizing/maintenance requirements..."></textarea>
+        </div>
+
+        <div class="form-section-title">Hazards and control measures</div>
+        <p class="form-section-hint">Considering environmental hazards</p>
+        <div class="form-row">
+          <label for="environmental_hazards">Hazards</label>
+          <textarea id="environmental_hazards" name="environmental_hazards" placeholder="e.g. weather, insects/wildlife, sun exposure"></textarea>
+        </div>
+        <div class="form-row">
+          <label for="environmental_controls">Control measures</label>
+          <textarea id="environmental_controls" name="environmental_controls"></textarea>
+        </div>
+
+        <p class="form-section-hint">Considering facilities and equipment hazards</p>
+        <div class="form-row">
+          <label for="facilities_hazards">Hazards</label>
+          <textarea id="facilities_hazards" name="facilities_hazards" placeholder="e.g. surface conditions, room layout, anything beyond the tools listed above"></textarea>
+        </div>
+        <div class="form-row">
+          <label for="facilities_controls">Control measures</label>
+          <textarea id="facilities_controls" name="facilities_controls"></textarea>
+        </div>
+
+        <p class="form-section-hint">Considering students</p>
+        <div class="form-row">
+          <label for="student_hazards">Hazards</label>
+          <textarea id="student_hazards" name="student_hazards" placeholder="e.g. fatigue, inexperience, personal items/jewellery"></textarea>
+        </div>
+        <div class="form-row">
+          <label for="student_controls">Control measures</label>
+          <textarea id="student_controls" name="student_controls"></textarea>
+        </div>
+
+        <div class="form-section-title">Submitted by</div>
+        <div class="form-row">
+          <input type="text" id="submitted_by" name="submitted_by" placeholder="Your name">
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save as draft</button>
+          <a class="btn btn-secondary" href="/cara">Cancel</a>
+        </div>
+      </form>
+      <script>
+        function filterTools(query) {
+          const q = query.toLowerCase();
+          document.querySelectorAll('.tool-picker-item[data-search]').forEach((item) => {
+            item.style.display = item.dataset.search.includes(q) ? '' : 'none';
+          });
+        }
+      </script>
+    `;
+
+    res.send(page({ title: 'New CARA', active: 'cara', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/cara', async (req, res, next) => {
+  try {
+    const {
+      activity_name, class_unit, activity_scope, risk_level,
+      students_notes, emergency_first_aid, induction_instruction, consent_required,
+      supervision_notes, supervisor_qualification, facilities_equipment,
+      environmental_hazards, environmental_controls,
+      facilities_hazards, facilities_controls,
+      student_hazards, student_controls,
+      submitted_by,
+    } = req.body;
+
+    if (!activity_name || !RISK_LEVELS.includes(risk_level)) {
+      return res.status(400).send('Activity name and a valid risk level are required.');
+    }
+
+    const result = await pool.query(
+      `INSERT INTO cara_records
+        (activity_name, class_unit, activity_scope, risk_level,
+         students_notes, emergency_first_aid, induction_instruction, consent_required,
+         supervision_notes, supervisor_qualification, facilities_equipment,
+         environmental_hazards, environmental_controls,
+         facilities_hazards, facilities_controls,
+         student_hazards, student_controls,
+         submitted_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+       RETURNING id`,
+      [
+        activity_name, class_unit || null, activity_scope || null, risk_level,
+        students_notes || null, emergency_first_aid || null, induction_instruction || null, consent_required === 'true',
+        supervision_notes || null, supervisor_qualification || null, facilities_equipment || null,
+        environmental_hazards || null, environmental_controls || null,
+        facilities_hazards || null, facilities_controls || null,
+        student_hazards || null, student_controls || null,
+        submitted_by || null,
+      ]
+    );
+
+    const caraId = result.rows[0].id;
+
+    const toolIds = [].concat(req.body.tool_ids || []).filter(Boolean);
+    if (toolIds.length) {
+      const values = toolIds.map((_, i) => `($1, $${i + 2})`).join(',');
+      await pool.query(
+        `INSERT INTO cara_tool_links (cara_id, risk_assessment_id) VALUES ${values} ON CONFLICT DO NOTHING`,
+        [caraId, ...toolIds]
+      );
+    }
+
+    res.redirect(`/cara/${caraId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/cara/:id', async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM cara_records WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).send('CARA record not found.');
+    }
+    const r = result.rows[0];
+
+    const toolsResult = await pool.query(
+      `SELECT ra.id, ra.activity_name, ra.risk_level
+       FROM cara_tool_links l
+       JOIN risk_assessments ra ON ra.id = l.risk_assessment_id
+       WHERE l.cara_id = $1
+       ORDER BY ra.activity_name`,
+      [req.params.id]
+    );
+
+    const toolChips = toolsResult.rows.length
+      ? `<div class="tool-chip-list">${toolsResult.rows.map((t) => `
+          <a class="tool-chip" href="/risk-assessments/${t.id}">
+            <span class="badge ${riskBadgeClass(t.risk_level)}">${escapeHtml(t.risk_level)}</span>
+            ${escapeHtml(t.activity_name)}
+          </a>
+        `).join('')}</div>`
+      : `<div class="detail-value">No tool risk assessments linked.</div>`;
+
+    let actionsHtml = '';
+    if (r.status === 'Draft') {
+      actionsHtml = `
+        <form method="post" action="/cara/${r.id}/submit">
+          <button type="submit" class="btn btn-primary" style="width:100%;">Submit for approval</button>
+        </form>
+      `;
+    } else if (r.status === 'Pending approval' || r.status === 'Changes requested') {
+      actionsHtml = `
+        <form method="post" action="/cara/${r.id}/approve" style="margin-bottom:10px;">
+          <div class="form-row">
+            <label for="approver">Approved by</label>
+            <input type="text" id="approver" name="approver" placeholder="Principal / school leader name" required>
+          </div>
+          <button type="submit" class="btn btn-primary" style="width:100%;">Approve</button>
+        </form>
+        <form method="post" action="/cara/${r.id}/reject">
+          <div class="form-row">
+            <label for="review_notes">Notes for changes requested</label>
+            <textarea id="review_notes" name="review_notes" placeholder="What needs to change?"></textarea>
+          </div>
+          <button type="submit" class="btn btn-secondary" style="width:100%;">Request changes</button>
+        </form>
+      `;
+    } else if (r.status === 'Approved') {
+      actionsHtml = `
+        <div class="detail-section">
+          <div class="detail-label">Approved by</div>
+          <div class="detail-value">${escapeHtml(r.approver || '—')} on ${formatDate(r.approved_at)}</div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">Next review due</div>
+          <div class="detail-value">${formatDate(r.next_review_date)}</div>
+        </div>
+      `;
+    }
+
+    const reviewSection = r.status === 'Approved' ? `
+      <div class="card" style="padding:22px;margin-top:20px;">
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Post-activity monitoring &amp; review</div>
+        <form method="post" action="/cara/${r.id}/review">
+          <div class="monitoring-row">
+            <div class="monitoring-question">Have additional hazards been identified?</div>
+            <label><input type="radio" name="monitoring_new_hazards" value="true" ${r.monitoring_new_hazards === true ? 'checked' : ''}> Yes</label>
+            <label><input type="radio" name="monitoring_new_hazards" value="false" ${r.monitoring_new_hazards === false ? 'checked' : ''}> No</label>
+          </div>
+          <div class="monitoring-row">
+            <div class="monitoring-question">Were the control measures effective?</div>
+            <label><input type="radio" name="monitoring_controls_effective" value="true" ${r.monitoring_controls_effective === true ? 'checked' : ''}> Yes</label>
+            <label><input type="radio" name="monitoring_controls_effective" value="false" ${r.monitoring_controls_effective === false ? 'checked' : ''}> No</label>
+          </div>
+          <div class="monitoring-row">
+            <div class="monitoring-question">Are further or different actions required?</div>
+            <label><input type="radio" name="monitoring_further_action" value="true" ${r.monitoring_further_action === true ? 'checked' : ''}> Yes</label>
+            <label><input type="radio" name="monitoring_further_action" value="false" ${r.monitoring_further_action === false ? 'checked' : ''}> No</label>
+          </div>
+          <div class="form-row" style="margin-top:14px;">
+            <label for="monitoring_details">Details</label>
+            <textarea id="monitoring_details" name="monitoring_details">${escapeHtml(r.monitoring_details || '')}</textarea>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save review</button>
+          </div>
+        </form>
+        ${r.reviewed_at ? `<p class="form-section-hint" style="margin-top:12px;">Last reviewed ${formatDate(r.reviewed_at)}.</p>` : ''}
+      </div>
+    ` : '';
+
+    const body = `
+      <a class="back-link" href="/cara">← Back to CARA Records</a>
+      <div class="page-header">
+        <div>
+          <span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)} risk</span>
+          <h1 class="page-title" style="margin-top:10px;">${escapeHtml(r.activity_name)}</h1>
+          <p class="page-subtitle">${escapeHtml(r.class_unit || 'Class/unit not set')} · Submitted by ${escapeHtml(r.submitted_by || 'unknown')}</p>
+        </div>
+        <span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
+      </div>
+      <div class="detail-grid">
+        <div>
+          <div class="detail-section">
+            <div class="detail-label">Activity scope</div>
+            <div class="detail-value">${escapeHtml(r.activity_scope || '—')}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Tool risk assessments used</div>
+            ${toolChips}
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Students</div>
+            <div class="detail-value">${escapeHtml(r.students_notes || '—')}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Emergency and first aid</div>
+            <div class="detail-value">${escapeHtml(r.emergency_first_aid || '—')}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Induction and instruction</div>
+            <div class="detail-value">${escapeHtml(r.induction_instruction || '—')}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Parent consent required</div>
+            <div class="detail-value">${r.consent_required ? 'Yes' : 'No'}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Supervision</div>
+            <div class="detail-value">${escapeHtml(r.supervision_notes || '—')}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Supervisor qualification</div>
+            <div class="detail-value">${escapeHtml(r.supervisor_qualification || '—')}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Facilities and equipment</div>
+            <div class="detail-value">${escapeHtml(r.facilities_equipment || '—')}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Environmental hazards</div>
+            <div class="detail-value">${escapeHtml(r.environmental_hazards || '—')}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Environmental control measures</div>
+            <div class="detail-value">${escapeHtml(r.environmental_controls || '—')}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Facilities and equipment hazards</div>
+            <div class="detail-value">${escapeHtml(r.facilities_hazards || '—')}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Facilities and equipment control measures</div>
+            <div class="detail-value">${escapeHtml(r.facilities_controls || '—')}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Student hazards</div>
+            <div class="detail-value">${escapeHtml(r.student_hazards || '—')}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Student control measures</div>
+            <div class="detail-value">${escapeHtml(r.student_controls || '—')}</div>
+          </div>
+          ${r.review_notes ? `
+          <div class="detail-section">
+            <div class="detail-label">Last review notes</div>
+            <div class="detail-value">${escapeHtml(r.review_notes)}</div>
+          </div>` : ''}
+          ${reviewSection}
+        </div>
+        <div class="card" style="padding:22px;">
+          <div class="note-box">${caraApprovalRequirement(r.risk_level)}</div>
+          ${actionsHtml}
+        </div>
+      </div>
+    `;
+
+    res.send(page({ title: r.activity_name, active: 'cara', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/cara/:id/submit', async (req, res, next) => {
+  try {
+    await pool.query(
+      "UPDATE cara_records SET status = 'Pending approval', updated_at = now() WHERE id = $1",
+      [req.params.id]
+    );
+    res.redirect(`/cara/${req.params.id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/cara/:id/approve', async (req, res, next) => {
+  try {
+    const { approver } = req.body;
+    await pool.query(
+      `UPDATE cara_records
+       SET status = 'Approved', approver = $1, approved_at = now(),
+           next_review_date = (now() + interval '1 year')::date, updated_at = now()
+       WHERE id = $2`,
+      [approver || null, req.params.id]
+    );
+    res.redirect(`/cara/${req.params.id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/cara/:id/reject', async (req, res, next) => {
+  try {
+    const { review_notes } = req.body;
+    await pool.query(
+      `UPDATE cara_records
+       SET status = 'Changes requested', review_notes = $1, updated_at = now()
+       WHERE id = $2`,
+      [review_notes || null, req.params.id]
+    );
+    res.redirect(`/cara/${req.params.id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/cara/:id/review', async (req, res, next) => {
+  try {
+    const { monitoring_new_hazards, monitoring_controls_effective, monitoring_further_action, monitoring_details } = req.body;
+    const toBool = (v) => (v === 'true' ? true : v === 'false' ? false : null);
+    await pool.query(
+      `UPDATE cara_records SET
+         monitoring_new_hazards = $1, monitoring_controls_effective = $2,
+         monitoring_further_action = $3, monitoring_details = $4,
+         reviewed_at = now(), updated_at = now()
+       WHERE id = $5`,
+      [
+        toBool(monitoring_new_hazards), toBool(monitoring_controls_effective),
+        toBool(monitoring_further_action), monitoring_details || null,
+        req.params.id,
+      ]
+    );
+    res.redirect(`/cara/${req.params.id}`);
   } catch (err) {
     next(err);
   }
