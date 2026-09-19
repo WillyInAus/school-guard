@@ -143,7 +143,6 @@ app.get('/risk-assessments', async (req, res, next) => {
       const rows = result.rows.map((r) => `
         <tr class="row-link" onclick="window.location='/risk-assessments/${r.id}'">
           <td>${escapeHtml(r.activity_name)}</td>
-          <td>${escapeHtml(r.location || '—')}</td>
           <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
           <td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
           <td>${escapeHtml(r.approver || '—')}</td>
@@ -155,7 +154,6 @@ app.get('/risk-assessments', async (req, res, next) => {
           <thead>
             <tr>
               <th>Activity / Unit</th>
-              <th>Location</th>
               <th>Risk</th>
               <th>Status</th>
               <th>Approver</th>
@@ -210,10 +208,6 @@ app.get('/risk-assessments/new', (req, res) => {
         <input type="text" id="class_unit" name="class_unit" placeholder="e.g. Yr 11 Metalwork, or UEE22020 Cert II Electrotechnology">
       </div>
       <div class="form-row">
-        <label for="location">Location</label>
-        <input type="text" id="location" name="location" placeholder="e.g. Workshop 2, or off-site">
-      </div>
-      <div class="form-row">
         <label for="risk_level">Risk level</label>
         <select id="risk_level" name="risk_level" required>${riskOptions}</select>
       </div>
@@ -252,7 +246,7 @@ app.get('/risk-assessments/new', (req, res) => {
 app.post('/risk-assessments', async (req, res, next) => {
   try {
     const {
-      activity_name, class_unit, location, risk_level,
+      activity_name, class_unit, risk_level,
       hazards, control_measures, required_supervision,
       consent_required, submitted_by,
     } = req.body;
@@ -263,11 +257,11 @@ app.post('/risk-assessments', async (req, res, next) => {
 
     const result = await pool.query(
       `INSERT INTO risk_assessments
-        (activity_name, class_unit, location, risk_level, hazards, control_measures, required_supervision, consent_required, submitted_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        (activity_name, class_unit, risk_level, hazards, control_measures, required_supervision, consent_required, submitted_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        RETURNING id`,
       [
-        activity_name, class_unit || null, location || null, risk_level,
+        activity_name, class_unit || null, risk_level,
         hazards || null, control_measures || null, required_supervision || null,
         consent_required === 'true', submitted_by || null,
       ]
@@ -332,7 +326,7 @@ app.get('/risk-assessments/:id', async (req, res, next) => {
         <div>
           <span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)} risk</span>
           <h1 class="page-title" style="margin-top:10px;">${escapeHtml(r.activity_name)}</h1>
-          <p class="page-subtitle">${escapeHtml(r.location || 'Location not set')} · Submitted by ${escapeHtml(r.submitted_by || 'unknown')}</p>
+          <p class="page-subtitle">Submitted by ${escapeHtml(r.submitted_by || 'unknown')}</p>
         </div>
         <span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
       </div>
@@ -567,10 +561,6 @@ app.get('/admin/risk-assessments/:id/edit', requireAdmin, async (req, res, next)
           <input type="text" id="class_unit" name="class_unit" value="${escapeHtml(r.class_unit || '')}">
         </div>
         <div class="form-row">
-          <label for="location">Location</label>
-          <input type="text" id="location" name="location" value="${escapeHtml(r.location || '')}">
-        </div>
-        <div class="form-row">
           <label for="risk_level">Risk level</label>
           <select id="risk_level" name="risk_level" required>${riskOptions}</select>
         </div>
@@ -621,7 +611,7 @@ app.get('/admin/risk-assessments/:id/edit', requireAdmin, async (req, res, next)
 app.post('/admin/risk-assessments/:id', requireAdmin, async (req, res, next) => {
   try {
     const {
-      activity_name, class_unit, location, risk_level, status,
+      activity_name, class_unit, risk_level, status,
       hazards, control_measures, required_supervision,
       consent_required, submitted_by, approver,
     } = req.body;
@@ -632,12 +622,12 @@ app.post('/admin/risk-assessments/:id', requireAdmin, async (req, res, next) => 
 
     await pool.query(
       `UPDATE risk_assessments SET
-         activity_name = $1, class_unit = $2, location = $3, risk_level = $4, status = $5,
-         hazards = $6, control_measures = $7, required_supervision = $8, consent_required = $9,
-         submitted_by = $10, approver = $11, updated_at = now()
-       WHERE id = $12`,
+         activity_name = $1, class_unit = $2, risk_level = $3, status = $4,
+         hazards = $5, control_measures = $6, required_supervision = $7, consent_required = $8,
+         submitted_by = $9, approver = $10, updated_at = now()
+       WHERE id = $11`,
       [
-        activity_name, class_unit || null, location || null, risk_level, status,
+        activity_name, class_unit || null, risk_level, status,
         hazards || null, control_measures || null, required_supervision || null,
         consent_required === 'true', submitted_by || null, approver || null,
         req.params.id,
