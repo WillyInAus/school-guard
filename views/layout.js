@@ -45,7 +45,7 @@ function page({ title, active, body }) {
     </div>
     <nav class="sidebar-nav">
       ${navLink('/', 'Dashboard', ICONS.dashboard, active === 'dashboard')}
-      ${navLink('/risk-assessments', 'Risk Assessments', ICONS.risk, active === 'risk-assessments')}
+      ${navLink('/pera', 'PERA', ICONS.risk, active === 'pera')}
       ${navLink('/cara', 'CARA', ICONS.cara, active === 'cara')}
     </nav>
     <nav class="sidebar-nav-bottom">
