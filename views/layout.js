@@ -19,6 +19,15 @@ function navLink(href, label, iconSvg, active) {
     </a>`;
 }
 
+function bottomNavLink(href, label, iconSvg, active) {
+  const color = active ? '#FFFFFF' : '#8FB3AA';
+  return `
+    <a href="${href}" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;flex:1;padding:6px 4px;color:${color};text-decoration:none;font-size:10px;font-weight:600;">
+      ${iconSvg}
+      <span>${label}</span>
+    </a>`;
+}
+
 const ICONS = {
   dashboard: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="6.5" height="6.5" rx="1.3"/><rect x="11" y="2.5" width="6.5" height="6.5" rx="1.3"/><rect x="2.5" y="11" width="6.5" height="6.5" rx="1.3"/><rect x="11" y="11" width="6.5" height="6.5" rx="1.3"/></svg>',
   risk: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="12" height="14" rx="2"/><path d="M7.5 3.5h5v1.6a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1V3.5Z"/><path d="M7.3 11.2l1.8 1.8 3.6-4"/></svg>',
@@ -67,6 +76,12 @@ function page({ title, active, body }) {
       ${body}
     </div>
   </div>
+  <nav class="bottom-nav">
+    ${bottomNavLink('/', 'Home', ICONS.dashboard, active === 'dashboard')}
+    ${bottomNavLink('/pera', 'PERA', ICONS.risk, active === 'pera')}
+    ${bottomNavLink('/cara', 'CARA', ICONS.cara, active === 'cara')}
+    ${bottomNavLink('/admin', 'Admin', ICONS.admin, active === 'admin')}
+  </nav>
 </div>
 </body>
 </html>`;
