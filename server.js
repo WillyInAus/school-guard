@@ -1044,6 +1044,7 @@ app.post('/admin/logout', (req, res) => {
 app.get('/admin', requireAdmin, async (req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM risk_assessments ORDER BY id');
+    const caraResult = await pool.query('SELECT * FROM cara_records ORDER BY id');
 
     const rows = result.rows.map((r) => `
       <tr class="row-link" onclick="window.location='/admin/risk-assessments/${r.id}/edit'">
@@ -1052,6 +1053,16 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
         <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
         <td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
         <td>${escapeHtml(r.approver || '—')}</td>
+      </tr>
+    `).join('');
+
+    const caraRows = caraResult.rows.map((r) => `
+      <tr class="row-link" onclick="window.location='/admin/cara/${r.id}/edit'">
+        <td>${escapeHtml(r.activity_name)}</td>
+        <td>${escapeHtml(r.class_unit || '—')}</td>
+        <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
+        <td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
+        <td>${escapeHtml(r.submitted_by || '—')}</td>
       </tr>
     `).join('');
 
@@ -1065,6 +1076,7 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
           <button type="submit" class="btn btn-secondary">Sign out</button>
         </form>
       </div>
+      <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Tool risk assessments</div>
       <div class="card">
         <table>
           <thead>
@@ -1077,6 +1089,21 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
             </tr>
           </thead>
           <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="form-section-title">CARA records</div>
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Activity</th>
+              <th>Class / unit</th>
+              <th>Risk</th>
+              <th>Status</th>
+              <th>Teacher</th>
+            </tr>
+          </thead>
+          <tbody>${caraRows || '<tr><td colspan="5" style="text-align:center;color:#6B6659;padding:24px;">No CARA records yet.</td></tr>'}</tbody>
         </table>
       </div>
     `;
@@ -1195,6 +1222,172 @@ app.post('/admin/risk-assessments/:id', requireAdmin, async (req, res, next) => 
 app.post('/admin/risk-assessments/:id/delete', requireAdmin, async (req, res, next) => {
   try {
     await pool.query('DELETE FROM risk_assessments WHERE id = $1', [req.params.id]);
+    res.redirect('/admin');
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Admin: edit a CARA record ----------
+
+app.get('/admin/cara/:id/edit', requireAdmin, async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM cara_records WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).send('CARA record not found.');
+    }
+    const r = result.rows[0];
+
+    const riskOptions = RISK_LEVELS.map((l) => `<option value="${l}" ${l === r.risk_level ? 'selected' : ''}>${l}</option>`).join('');
+    const statusOptions = STATUSES.map((s) => `<option value="${s}" ${s === r.status ? 'selected' : ''}>${s}</option>`).join('');
+
+    const body = `
+      <a class="back-link" href="/admin">← Back to Admin</a>
+      <h1 class="page-title" style="margin-bottom:24px;">Edit CARA: ${escapeHtml(r.activity_name)}</h1>
+      <form class="form-card" method="post" action="/admin/cara/${r.id}" style="max-width:760px;">
+        <div class="form-row">
+          <label for="activity_name">Activity name</label>
+          <input type="text" id="activity_name" name="activity_name" value="${escapeHtml(r.activity_name)}" required>
+        </div>
+        <div class="form-row">
+          <label for="class_unit">Class / unit</label>
+          <input type="text" id="class_unit" name="class_unit" value="${escapeHtml(r.class_unit || '')}">
+        </div>
+        <div class="form-row">
+          <label for="activity_scope">Activity scope</label>
+          <textarea id="activity_scope" name="activity_scope">${escapeHtml(r.activity_scope || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="risk_level">Risk level</label>
+          <select id="risk_level" name="risk_level" required>${riskOptions}</select>
+        </div>
+        <div class="form-row">
+          <label for="status">Status</label>
+          <select id="status" name="status" required>${statusOptions}</select>
+        </div>
+        <div class="form-row">
+          <label for="students_notes">Students</label>
+          <textarea id="students_notes" name="students_notes">${escapeHtml(r.students_notes || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="emergency_first_aid">Emergency and first aid</label>
+          <textarea id="emergency_first_aid" name="emergency_first_aid">${escapeHtml(r.emergency_first_aid || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="induction_instruction">Induction and instruction</label>
+          <textarea id="induction_instruction" name="induction_instruction">${escapeHtml(r.induction_instruction || '')}</textarea>
+        </div>
+        <div class="form-row checkbox-row">
+          <input type="checkbox" id="consent_required" name="consent_required" value="true" ${r.consent_required ? 'checked' : ''}>
+          <label for="consent_required">Parent consent required</label>
+        </div>
+        <div class="form-row">
+          <label for="supervision_notes">Supervision</label>
+          <textarea id="supervision_notes" name="supervision_notes">${escapeHtml(r.supervision_notes || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="supervisor_qualification">Supervisor qualification</label>
+          <textarea id="supervisor_qualification" name="supervisor_qualification">${escapeHtml(r.supervisor_qualification || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="facilities_equipment">Facilities and equipment</label>
+          <textarea id="facilities_equipment" name="facilities_equipment">${escapeHtml(r.facilities_equipment || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="environmental_hazards">Environmental hazards</label>
+          <textarea id="environmental_hazards" name="environmental_hazards">${escapeHtml(r.environmental_hazards || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="environmental_controls">Environmental control measures</label>
+          <textarea id="environmental_controls" name="environmental_controls">${escapeHtml(r.environmental_controls || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="facilities_hazards">Facilities and equipment hazards</label>
+          <textarea id="facilities_hazards" name="facilities_hazards">${escapeHtml(r.facilities_hazards || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="facilities_controls">Facilities and equipment control measures</label>
+          <textarea id="facilities_controls" name="facilities_controls">${escapeHtml(r.facilities_controls || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="student_hazards">Student hazards</label>
+          <textarea id="student_hazards" name="student_hazards">${escapeHtml(r.student_hazards || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="student_controls">Student control measures</label>
+          <textarea id="student_controls" name="student_controls">${escapeHtml(r.student_controls || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="submitted_by">Submitted by</label>
+          <input type="text" id="submitted_by" name="submitted_by" value="${escapeHtml(r.submitted_by || '')}">
+        </div>
+        <div class="form-row">
+          <label for="approver">Approver</label>
+          <input type="text" id="approver" name="approver" value="${escapeHtml(r.approver || '')}">
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save changes</button>
+          <a class="btn btn-secondary" href="/admin">Cancel</a>
+        </div>
+      </form>
+      <form method="post" action="/admin/cara/${r.id}/delete" style="margin-top:16px;" onsubmit="return confirm('Delete this CARA record permanently? This cannot be undone.');">
+        <button type="submit" class="btn btn-secondary" style="color:#B3261E;border-color:#B3261E;">Delete this record</button>
+      </form>
+    `;
+
+    res.send(page({ title: `Edit — ${r.activity_name}`, active: 'admin', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/cara/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const {
+      activity_name, class_unit, activity_scope, risk_level, status,
+      students_notes, emergency_first_aid, induction_instruction, consent_required,
+      supervision_notes, supervisor_qualification, facilities_equipment,
+      environmental_hazards, environmental_controls,
+      facilities_hazards, facilities_controls,
+      student_hazards, student_controls,
+      submitted_by, approver,
+    } = req.body;
+
+    if (!activity_name || !RISK_LEVELS.includes(risk_level) || !STATUSES.includes(status)) {
+      return res.status(400).send('Activity name, a valid risk level and a valid status are required.');
+    }
+
+    await pool.query(
+      `UPDATE cara_records SET
+         activity_name = $1, class_unit = $2, activity_scope = $3, risk_level = $4, status = $5,
+         students_notes = $6, emergency_first_aid = $7, induction_instruction = $8, consent_required = $9,
+         supervision_notes = $10, supervisor_qualification = $11, facilities_equipment = $12,
+         environmental_hazards = $13, environmental_controls = $14,
+         facilities_hazards = $15, facilities_controls = $16,
+         student_hazards = $17, student_controls = $18,
+         submitted_by = $19, approver = $20, updated_at = now()
+       WHERE id = $21`,
+      [
+        activity_name, class_unit || null, activity_scope || null, risk_level, status,
+        students_notes || null, emergency_first_aid || null, induction_instruction || null, consent_required === 'true',
+        supervision_notes || null, supervisor_qualification || null, facilities_equipment || null,
+        environmental_hazards || null, environmental_controls || null,
+        facilities_hazards || null, facilities_controls || null,
+        student_hazards || null, student_controls || null,
+        submitted_by || null, approver || null,
+        req.params.id,
+      ]
+    );
+
+    res.redirect(`/admin/cara/${req.params.id}/edit`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/cara/:id/delete', requireAdmin, async (req, res, next) => {
+  try {
+    await pool.query('DELETE FROM cara_records WHERE id = $1', [req.params.id]);
     res.redirect('/admin');
   } catch (err) {
     next(err);
