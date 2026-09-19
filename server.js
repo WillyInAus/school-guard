@@ -604,8 +604,9 @@ app.get('/cara/new', async (req, res, next) => {
         </div>
 
         <div class="form-section-title">Emergency and first aid</div>
+        <p class="form-section-hint">Pre-filled with standard procedure — edit if this activity needs anything extra (e.g. off-site, remote location, higher-risk equipment).</p>
         <div class="form-row">
-          <textarea id="emergency_first_aid" name="emergency_first_aid" placeholder="Emergency plans, first aid access, communication arrangements..."></textarea>
+          <textarea id="emergency_first_aid" name="emergency_first_aid">If an injury occurs, assess severity and apply first aid. If the injury is reportable, the school's sick bay/nurse station is to be notified immediately. First aid kit is located in the workshop. Supervising teacher holds current first aid/CPR.</textarea>
         </div>
 
         <div class="form-section-title">Induction and instruction</div>
@@ -642,7 +643,7 @@ app.get('/cara/new', async (req, res, next) => {
         </div>
         <div class="form-row">
           <label for="environmental_controls">Control measures</label>
-          <textarea id="environmental_controls" name="environmental_controls"></textarea>
+          <textarea id="environmental_controls" name="environmental_controls" placeholder="e.g. reschedule outdoor tasks in extreme heat, insect repellent available, sun-safe hats/shade required"></textarea>
         </div>
 
         <p class="form-section-hint">Considering facilities and equipment hazards</p>
@@ -652,7 +653,7 @@ app.get('/cara/new', async (req, res, next) => {
         </div>
         <div class="form-row">
           <label for="facilities_controls">Control measures</label>
-          <textarea id="facilities_controls" name="facilities_controls"></textarea>
+          <textarea id="facilities_controls" name="facilities_controls" placeholder="e.g. clear walkways, adequate lighting/ventilation, tools stored securely when not in use"></textarea>
         </div>
 
         <p class="form-section-hint">Considering students</p>
@@ -662,7 +663,7 @@ app.get('/cara/new', async (req, res, next) => {
         </div>
         <div class="form-row">
           <label for="student_controls">Control measures</label>
-          <textarea id="student_controls" name="student_controls"></textarea>
+          <textarea id="student_controls" name="student_controls" placeholder="e.g. no loose clothing/jewellery, scheduled breaks, closer supervision for less experienced students"></textarea>
         </div>
 
         <div class="form-section-title">Submitted by</div>
