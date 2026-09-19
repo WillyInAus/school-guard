@@ -22,6 +22,7 @@ function navLink(href, label, iconSvg, active) {
 const ICONS = {
   dashboard: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="6.5" height="6.5" rx="1.3"/><rect x="11" y="2.5" width="6.5" height="6.5" rx="1.3"/><rect x="2.5" y="11" width="6.5" height="6.5" rx="1.3"/><rect x="11" y="11" width="6.5" height="6.5" rx="1.3"/></svg>',
   risk: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="12" height="14" rx="2"/><path d="M7.5 3.5h5v1.6a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1V3.5Z"/><path d="M7.3 11.2l1.8 1.8 3.6-4"/></svg>',
+  admin: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5l6 2.2v4.3c0 4.3-2.6 6.9-6 8.5-3.4-1.6-6-4.2-6-8.5V4.7l6-2.2Z"/><circle cx="10" cy="9" r="2"/><path d="M10 11v3"/></svg>',
 };
 
 function page({ title, active, body }) {
@@ -44,6 +45,7 @@ function page({ title, active, body }) {
     <nav class="sidebar-nav">
       ${navLink('/', 'Dashboard', ICONS.dashboard, active === 'dashboard')}
       ${navLink('/risk-assessments', 'Risk Assessments', ICONS.risk, active === 'risk-assessments')}
+      ${navLink('/admin', 'Admin', ICONS.admin, active === 'admin')}
     </nav>
     <div class="sidebar-footer">
       <div class="sidebar-footer-label">Signed in as</div>
