@@ -85,6 +85,9 @@ async function migrate() {
       PRIMARY KEY (cara_id, risk_assessment_id)
     );
   `);
+
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS teacher_signature TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS signed_at TIMESTAMPTZ;`);
 }
 
 module.exports = { pool, migrate };
