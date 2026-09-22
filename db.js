@@ -133,6 +133,22 @@ async function migrate() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+
+  // Admin-managed list of workshop/area names for the Equipment Register's
+  // Location dropdown, so Sean can add/rename/remove areas from Admin instead
+  // of areas being hardcoded or free-typed.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_locations (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`
+    INSERT INTO equipment_locations (name)
+    VALUES ('Metalwork workshop'), ('Woodwork workshop'), ('Electrotechnology workshop'), ('Storage/store room')
+    ON CONFLICT (name) DO NOTHING;
+  `);
 }
 
 module.exports = { pool, migrate };

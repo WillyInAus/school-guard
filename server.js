@@ -1565,6 +1565,8 @@ app.get('/admin/equipment/new', requireAdmin, async (req, res, next) => {
   try {
     const peraResult = await pool.query('SELECT id, activity_name FROM pera_records ORDER BY activity_name ASC');
     const peraOptions = peraResult.rows.map((p) => `<option value="${p.id}">${escapeHtml(p.activity_name)}</option>`).join('');
+    const locationsResult = await pool.query('SELECT name FROM equipment_locations ORDER BY name ASC');
+    const locationOptions = locationsResult.rows.map((l) => `<option value="${escapeHtml(l.name)}">${escapeHtml(l.name)}</option>`).join('');
     const { categoryOptions, statusOptions } = equipmentFormFields();
 
     const body = `
@@ -1589,7 +1591,11 @@ app.get('/admin/equipment/new', requireAdmin, async (req, res, next) => {
         </div>
         <div class="form-row">
           <label for="location">Location</label>
-          <input type="text" id="location" name="location" placeholder="e.g. Metalwork workshop">
+          <select id="location" name="location">
+            <option value="">— None —</option>
+            ${locationOptions}
+          </select>
+          <p class="form-section-hint"><a href="/admin/locations" style="color:#1B5E52;">Manage locations →</a></p>
         </div>
         <div class="form-row">
           <label for="manufacturer">Manufacturer</label>
@@ -1697,6 +1703,12 @@ app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
     const peraOptions = peraResult.rows.map(
       (p) => `<option value="${p.id}" ${r.pera_id === p.id ? 'selected' : ''}>${escapeHtml(p.activity_name)}</option>`
     ).join('');
+    const locationsResult = await pool.query('SELECT name FROM equipment_locations ORDER BY name ASC');
+    const knownLocations = locationsResult.rows.map((l) => l.name);
+    if (r.location && !knownLocations.includes(r.location)) knownLocations.push(r.location);
+    const locationOptions = knownLocations.map(
+      (name) => `<option value="${escapeHtml(name)}" ${r.location === name ? 'selected' : ''}>${escapeHtml(name)}</option>`
+    ).join('');
     const { categoryOptions, statusOptions } = equipmentFormFields(r);
     const dateVal = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
 
@@ -1722,7 +1734,11 @@ app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
         </div>
         <div class="form-row">
           <label for="location">Location</label>
-          <input type="text" id="location" name="location" value="${escapeHtml(r.location || '')}">
+          <select id="location" name="location">
+            <option value="">— None —</option>
+            ${locationOptions}
+          </select>
+          <p class="form-section-hint"><a href="/admin/locations" style="color:#1B5E52;">Manage locations →</a></p>
         </div>
         <div class="form-row">
           <label for="manufacturer">Manufacturer</label>
@@ -1846,6 +1862,84 @@ app.post('/admin/equipment/:id/delete', requireAdmin, async (req, res, next) => 
   try {
     await pool.query('DELETE FROM equipment_records WHERE id = $1', [req.params.id]);
     res.redirect('/equipment');
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Equipment Register: manage locations ----------
+// The list of workshop/area names offered in the Equipment Location dropdown
+// is admin-managed here, rather than hardcoded or free-typed on each item.
+
+app.get('/admin/locations', requireAdmin, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT l.*, (SELECT COUNT(*)::int FROM equipment_records e WHERE e.location = l.name) AS in_use
+       FROM equipment_locations l ORDER BY l.name ASC`
+    );
+
+    const rows = result.rows.map((l) => `
+      <tr>
+        <td>${escapeHtml(l.name)}</td>
+        <td>${l.in_use} item${l.in_use === 1 ? '' : 's'}</td>
+        <td style="text-align:right;">
+          <form method="post" action="/admin/locations/${l.id}/delete" style="display:inline;" onsubmit="return confirm('Remove &quot;${escapeHtml(l.name).replace(/"/g, '&quot;')}&quot; from the location list? Equipment already using it will keep showing it, but it won\\'t be selectable for new items.');">
+            <button type="submit" class="btn btn-secondary" style="padding:4px 12px;font-size:13px;color:#B3261E;border-color:#B3261E;">Remove</button>
+          </form>
+        </td>
+      </tr>
+    `).join('');
+
+    const body = `
+      <a class="back-link" href="/admin">← Back to Admin</a>
+      <h1 class="page-title" style="margin-bottom:8px;">Manage locations</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">These are the workshop/area names offered in the Equipment Register's Location dropdown.</p>
+      <form class="form-card" method="post" action="/admin/locations" style="margin-bottom:24px;">
+        <div class="form-row">
+          <label for="name">New location name</label>
+          <input type="text" id="name" name="name" required placeholder="e.g. Design studio">
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Add location</button>
+        </div>
+      </form>
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Location</th>
+              <th>In use</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="3" style="text-align:center;color:#6B6659;padding:24px;">No locations yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    `;
+
+    res.send(page({ title: 'Manage locations', active: 'admin', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/locations', requireAdmin, async (req, res, next) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).send('A location name is required.');
+    }
+    await pool.query('INSERT INTO equipment_locations (name) VALUES ($1) ON CONFLICT (name) DO NOTHING', [name.trim()]);
+    res.redirect('/admin/locations');
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/locations/:id/delete', requireAdmin, async (req, res, next) => {
+  try {
+    await pool.query('DELETE FROM equipment_locations WHERE id = $1', [req.params.id]);
+    res.redirect('/admin/locations');
   } catch (err) {
     next(err);
   }
@@ -1975,7 +2069,10 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
       </div>
       <div class="form-section-title" style="display:flex;align-items:center;justify-content:space-between;">
         <span>Equipment register</span>
-        <a class="btn btn-secondary" href="/admin/equipment/new" style="padding:6px 14px;font-size:13px;">+ Add equipment</a>
+        <span>
+          <a class="btn btn-secondary" href="/admin/locations" style="padding:6px 14px;font-size:13px;">Manage locations</a>
+          <a class="btn btn-secondary" href="/admin/equipment/new" style="padding:6px 14px;font-size:13px;">+ Add equipment</a>
+        </span>
       </div>
       <div class="card">
         <table>
