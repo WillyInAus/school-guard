@@ -14,13 +14,18 @@ const RISK_LEVELS = ['Low', 'Medium', 'High', 'Extreme'];
 const STATUSES = ['Draft', 'Pending approval', 'Approved', 'Changes requested'];
 const EQUIPMENT_CATEGORIES = ['Power tool', 'Hand tool', 'Fixed machinery', 'Electrical test equipment', 'PPE', 'Mobile plant/vehicle', 'Other'];
 const EQUIPMENT_STATUSES = ['In service', 'Under repair', 'Out of service', 'Awaiting disposal'];
-const MAINTENANCE_CHECK_ITEMS = [
-  { key: 'equipment_working', label: 'Equipment in working order' },
-  { key: 'guards_in_place', label: 'Guards in place' },
-  { key: 'estop_isolation_ok', label: 'Emergency stop and isolation switches in good working condition' },
-  { key: 'test_tag_in_date', label: 'Test & tagged in date' },
-  { key: 'area_clean_tidy', label: 'Area clean and tidy' },
-  { key: 'sop_available_updated', label: 'SOP available and updated' },
+// Starter checklist items every newly-created piece of equipment is seeded
+// with (see POST /admin/equipment below). From there, each item's own
+// checklist is fully editable per-tool from its Edit page — add/rename/
+// remove items as needed (e.g. a disk sander gets "Sanding disc condition"
+// and "Vibration" added; a hand tool might have most of these removed).
+const DEFAULT_CHECK_ITEMS = [
+  'Equipment in working order',
+  'Guards in place',
+  'Emergency stop and isolation switches in good working condition',
+  'Test & tagged in date',
+  'Area clean and tidy',
+  'SOP available and updated',
 ];
 
 // ---------- Admin auth (shared password) ----------
@@ -1519,8 +1524,25 @@ app.get('/equipment/:id', async (req, res, next) => {
     );
     const latestCheck = checksResult.rows[0];
 
+    // Results are stored per-check (each row snapshotting the checklist item's
+    // label + pass/fail at the time), so pull them all in one query and group
+    // by check_id rather than re-querying per row.
+    const checkIds = checksResult.rows.map((c) => c.id);
+    const resultsByCheck = {};
+    if (checkIds.length) {
+      const resultsResult = await pool.query(
+        'SELECT * FROM equipment_check_results WHERE check_id = ANY($1) ORDER BY sort_order ASC, id ASC',
+        [checkIds]
+      );
+      resultsResult.rows.forEach((row) => {
+        (resultsByCheck[row.check_id] = resultsByCheck[row.check_id] || []).push(row);
+      });
+    }
+    const latestCheckItems = latestCheck ? (resultsByCheck[latestCheck.id] || []) : [];
+
     const checkHistoryRows = checksResult.rows.map((c) => {
-      const failCount = MAINTENANCE_CHECK_ITEMS.filter((item) => !c[item.key]).length;
+      const items = resultsByCheck[c.id] || [];
+      const failCount = items.filter((item) => !item.ok).length;
       return `
         <tr>
           <td>${formatDate(c.checked_at)}</td>
@@ -1571,8 +1593,8 @@ app.get('/equipment/:id', async (req, res, next) => {
         <div class="card" style="padding:24px;margin-bottom:16px;">
           <p style="margin:0 0 12px;font-size:13px;color:#6B6659;">Last checked ${formatDate(latestCheck.checked_at)}${latestCheck.checked_by ? ` by ${escapeHtml(latestCheck.checked_by)}` : ''}.</p>
           <div class="detail-grid">
-            ${MAINTENANCE_CHECK_ITEMS.map((item) => `
-              <div><div class="detail-label">${escapeHtml(item.label)}</div><div><span class="badge ${latestCheck[item.key] ? 'badge-approved' : 'badge-changes'}">${latestCheck[item.key] ? 'OK' : 'Not OK'}</span></div></div>
+            ${latestCheckItems.map((item) => `
+              <div><div class="detail-label">${escapeHtml(item.label)}</div><div><span class="badge ${item.ok ? 'badge-approved' : 'badge-changes'}">${item.ok ? 'OK' : 'Not OK'}</span></div></div>
             `).join('')}
           </div>
           ${latestCheck.notes ? `<div style="margin-top:16px;"><div class="detail-label">Notes</div><p style="margin:6px 0 0;white-space:pre-wrap;">${escapeHtml(latestCheck.notes)}</p></div>` : ''}
@@ -1609,10 +1631,24 @@ app.get('/equipment/:id/check', async (req, res, next) => {
     }
     const r = result.rows[0];
 
-    const itemsHtml = MAINTENANCE_CHECK_ITEMS.map((item) => `
+    const itemsResult = await pool.query(
+      'SELECT * FROM equipment_check_items WHERE equipment_id = $1 ORDER BY sort_order ASC, id ASC',
+      [req.params.id]
+    );
+
+    if (itemsResult.rows.length === 0) {
+      const body = `
+        <a class="back-link" href="/equipment/${r.id}">← Back to ${escapeHtml(r.name)}</a>
+        <h1 class="page-title" style="margin-bottom:8px;">Maintenance check: ${escapeHtml(r.name)}</h1>
+        <div class="empty-state">This item doesn't have any checklist items set up yet. <a href="/admin/equipment/${r.id}/edit" style="color:#1B5E52;">Add some from the Edit page →</a></div>
+      `;
+      return res.send(page({ title: `Maintenance check — ${r.name}`, active: 'equipment', body }));
+    }
+
+    const itemsHtml = itemsResult.rows.map((item) => `
       <div class="form-row checkbox-row">
-        <input type="checkbox" id="${item.key}" name="${item.key}" value="true">
-        <label for="${item.key}">${escapeHtml(item.label)}</label>
+        <input type="checkbox" id="item_${item.id}" name="item_${item.id}" value="true">
+        <label for="item_${item.id}">${escapeHtml(item.label)}</label>
       </div>
     `).join('');
 
@@ -1651,14 +1687,36 @@ app.post('/equipment/:id/check', async (req, res, next) => {
     }
     const equipment = equipmentResult.rows[0];
 
-    const values = MAINTENANCE_CHECK_ITEMS.map((item) => req.body[item.key] === 'true');
-    const allOk = values.every(Boolean);
+    const itemsResult = await pool.query(
+      'SELECT * FROM equipment_check_items WHERE equipment_id = $1 ORDER BY sort_order ASC, id ASC',
+      [req.params.id]
+    );
+    if (itemsResult.rows.length === 0) {
+      return res.status(400).send('This item has no checklist items set up — add some from its Edit page first.');
+    }
 
+    const checkedItems = itemsResult.rows.map((item) => ({
+      label: item.label,
+      sort_order: item.sort_order,
+      ok: req.body[`item_${item.id}`] === 'true',
+    }));
+    const allOk = checkedItems.every((item) => item.ok);
+
+    const checkResult = await pool.query(
+      `INSERT INTO equipment_checks (equipment_id, checked_by, notes) VALUES ($1,$2,$3) RETURNING id`,
+      [req.params.id, req.body.checked_by || null, req.body.notes || null]
+    );
+    const checkId = checkResult.rows[0].id;
+
+    const values = [];
+    const placeholders = checkedItems.map((item, i) => {
+      const base = i * 4;
+      values.push(checkId, item.label, item.ok, item.sort_order);
+      return `($${base + 1},$${base + 2},$${base + 3},$${base + 4})`;
+    }).join(',');
     await pool.query(
-      `INSERT INTO equipment_checks
-        (equipment_id, checked_by, equipment_working, guards_in_place, estop_isolation_ok, test_tag_in_date, area_clean_tidy, sop_available_updated, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [req.params.id, req.body.checked_by || null, ...values, req.body.notes || null]
+      `INSERT INTO equipment_check_results (check_id, label, ok, sort_order) VALUES ${placeholders}`,
+      values
     );
 
     const today = new Date().toISOString().slice(0, 10);
@@ -1818,7 +1876,19 @@ app.post('/admin/equipment', requireAdmin, async (req, res, next) => {
       ]
     );
 
-    res.redirect(`/equipment/${result.rows[0].id}`);
+    const newEquipmentId = result.rows[0].id;
+    const seedValues = [];
+    const seedPlaceholders = DEFAULT_CHECK_ITEMS.map((label, i) => {
+      const base = i * 3;
+      seedValues.push(newEquipmentId, label, i + 1);
+      return `($${base + 1},$${base + 2},$${base + 3})`;
+    }).join(',');
+    await pool.query(
+      `INSERT INTO equipment_check_items (equipment_id, label, sort_order) VALUES ${seedPlaceholders}`,
+      seedValues
+    );
+
+    res.redirect(`/equipment/${newEquipmentId}`);
   } catch (err) {
     next(err);
   }
@@ -1843,6 +1913,26 @@ app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
     ).join('');
     const { categoryOptions, statusOptions } = equipmentFormFields(r);
     const dateVal = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
+
+    const checkItemsResult = await pool.query(
+      'SELECT * FROM equipment_check_items WHERE equipment_id = $1 ORDER BY sort_order ASC, id ASC',
+      [req.params.id]
+    );
+    const checkItemRows = checkItemsResult.rows.map((item) => `
+      <tr>
+        <td>
+          <form method="post" action="/admin/equipment/${r.id}/check-items/${item.id}" style="display:flex;gap:8px;align-items:center;">
+            <input type="text" name="label" value="${escapeHtml(item.label)}" style="max-width:320px;">
+            <button type="submit" class="btn btn-secondary" style="padding:4px 12px;font-size:13px;">Save</button>
+          </form>
+        </td>
+        <td style="text-align:right;">
+          <form method="post" action="/admin/equipment/${r.id}/check-items/${item.id}/delete" style="display:inline;" onsubmit="return confirm('Remove this checklist item?');">
+            <button type="submit" class="btn btn-secondary" style="padding:4px 12px;font-size:13px;color:#B3261E;border-color:#B3261E;">Remove</button>
+          </form>
+        </td>
+      </tr>
+    `).join('');
 
     const body = `
       <a class="back-link" href="/equipment/${r.id}">← Back to ${escapeHtml(r.name)}</a>
@@ -1920,6 +2010,23 @@ app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
           <a class="btn btn-secondary" href="/equipment/${r.id}">Cancel</a>
         </div>
       </form>
+      <div class="form-section-title" style="margin-top:32px;">Maintenance checklist</div>
+      <p class="page-subtitle" style="margin-bottom:16px;">These are the items shown on this item's own maintenance check screen. Different equipment needs different checks — e.g. a disk sander might need "Sanding disc condition" and "Vibration" added here.</p>
+      <div class="card" style="margin-bottom:16px;">
+        <table>
+          <thead><tr><th>Checklist item</th><th></th></tr></thead>
+          <tbody>${checkItemRows || '<tr><td colspan="2" style="text-align:center;color:#6B6659;padding:24px;">No checklist items yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+      <form class="form-card" method="post" action="/admin/equipment/${r.id}/check-items" style="margin-bottom:32px;">
+        <div class="form-row">
+          <label for="new_item_label">Add checklist item</label>
+          <input type="text" id="new_item_label" name="label" required placeholder="e.g. Sanding disc condition">
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Add item</button>
+        </div>
+      </form>
       <form method="post" action="/admin/equipment/${r.id}/${r.archived ? 'unarchive' : 'archive'}" style="margin-top:16px;">
         <button type="submit" class="btn btn-secondary">${r.archived ? 'Unarchive this item' : 'Archive this item'}</button>
       </form>
@@ -1994,6 +2101,61 @@ app.post('/admin/equipment/:id/delete', requireAdmin, async (req, res, next) => 
   try {
     await pool.query('DELETE FROM equipment_records WHERE id = $1', [req.params.id]);
     res.redirect('/equipment');
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Equipment Register: per-item maintenance checklist ----------
+// Each piece of equipment has its own editable list of checklist items (see
+// equipment_check_items in db.js) — e.g. a disk sander needs "Sanding disc
+// condition" and "Vibration" added on top of the shared defaults, while a
+// simple hand tool might have most of the defaults removed.
+
+app.post('/admin/equipment/:id/check-items', requireAdmin, async (req, res, next) => {
+  try {
+    const { label } = req.body;
+    if (!label || !label.trim()) {
+      return res.status(400).send('A checklist item name is required.');
+    }
+    const maxOrderResult = await pool.query(
+      'SELECT COALESCE(MAX(sort_order), 0) AS max_order FROM equipment_check_items WHERE equipment_id = $1',
+      [req.params.id]
+    );
+    const nextOrder = maxOrderResult.rows[0].max_order + 1;
+    await pool.query(
+      'INSERT INTO equipment_check_items (equipment_id, label, sort_order) VALUES ($1,$2,$3) ON CONFLICT (equipment_id, label) DO NOTHING',
+      [req.params.id, label.trim(), nextOrder]
+    );
+    res.redirect(`/admin/equipment/${req.params.id}/edit`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/equipment/:id/check-items/:itemId', requireAdmin, async (req, res, next) => {
+  try {
+    const { label } = req.body;
+    if (!label || !label.trim()) {
+      return res.status(400).send('A checklist item name is required.');
+    }
+    await pool.query(
+      'UPDATE equipment_check_items SET label = $1 WHERE id = $2 AND equipment_id = $3',
+      [label.trim(), req.params.itemId, req.params.id]
+    );
+    res.redirect(`/admin/equipment/${req.params.id}/edit`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/equipment/:id/check-items/:itemId/delete', requireAdmin, async (req, res, next) => {
+  try {
+    await pool.query(
+      'DELETE FROM equipment_check_items WHERE id = $1 AND equipment_id = $2',
+      [req.params.itemId, req.params.id]
+    );
+    res.redirect(`/admin/equipment/${req.params.id}/edit`);
   } catch (err) {
     next(err);
   }

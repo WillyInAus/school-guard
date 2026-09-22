@@ -150,7 +150,7 @@ async function migrate() {
     ON CONFLICT (name) DO NOTHING;
   `);
 
-  // Maintenance checklist log — a maintenance person works through this
+  // Maintenance checklist log — a maintenance person works through a
   // checklist for a piece of equipment; each submission is kept as a
   // history record and also updates the equipment's inspection dates/status.
   await pool.query(`
@@ -158,15 +158,69 @@ async function migrate() {
       id SERIAL PRIMARY KEY,
       equipment_id INTEGER NOT NULL REFERENCES equipment_records(id) ON DELETE CASCADE,
       checked_by TEXT,
-      equipment_working BOOLEAN NOT NULL DEFAULT false,
-      guards_in_place BOOLEAN NOT NULL DEFAULT false,
-      estop_isolation_ok BOOLEAN NOT NULL DEFAULT false,
-      test_tag_in_date BOOLEAN NOT NULL DEFAULT false,
-      area_clean_tidy BOOLEAN NOT NULL DEFAULT false,
-      sop_available_updated BOOLEAN NOT NULL DEFAULT false,
       notes TEXT,
       checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+  `);
+  // Older deploys had the checklist as six fixed boolean columns on
+  // equipment_checks. Different tools need different checklists (a disk
+  // sander needs "sanding disk condition"/"vibration", a drop saw doesn't),
+  // so the checklist is now per-equipment and dynamic — drop those columns;
+  // there's no real check history yet to preserve.
+  await pool.query(`ALTER TABLE equipment_checks DROP COLUMN IF EXISTS equipment_working;`);
+  await pool.query(`ALTER TABLE equipment_checks DROP COLUMN IF EXISTS guards_in_place;`);
+  await pool.query(`ALTER TABLE equipment_checks DROP COLUMN IF EXISTS estop_isolation_ok;`);
+  await pool.query(`ALTER TABLE equipment_checks DROP COLUMN IF EXISTS test_tag_in_date;`);
+  await pool.query(`ALTER TABLE equipment_checks DROP COLUMN IF EXISTS area_clean_tidy;`);
+  await pool.query(`ALTER TABLE equipment_checks DROP COLUMN IF EXISTS sop_available_updated;`);
+
+  // The checklist items themselves — an editable, ordered list per piece of
+  // equipment, managed from that item's Edit screen in Admin.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_check_items (
+      id SERIAL PRIMARY KEY,
+      equipment_id INTEGER NOT NULL REFERENCES equipment_records(id) ON DELETE CASCADE,
+      label TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (equipment_id, label)
+    );
+  `);
+
+  // What was actually ticked for a given submitted check, snapshotting the
+  // item's label at the time (so history still reads correctly even if the
+  // item is later renamed or removed from the equipment's checklist).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_check_results (
+      id SERIAL PRIMARY KEY,
+      check_id INTEGER NOT NULL REFERENCES equipment_checks(id) ON DELETE CASCADE,
+      label TEXT NOT NULL,
+      ok BOOLEAN NOT NULL DEFAULT false,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+
+  // Give any equipment that doesn't yet have a checklist (created before
+  // per-tool checklists existed) the same six starter items Sean's original
+  // checklist had. New equipment is seeded the same way at creation time in
+  // the app; equipment that already has items (customised or not) is
+  // untouched.
+  await pool.query(`
+    INSERT INTO equipment_check_items (equipment_id, label, sort_order)
+    SELECT e.id, item.label, item.sort_order
+    FROM equipment_records e
+    CROSS JOIN (VALUES
+      ('Equipment in working order', 1),
+      ('Guards in place', 2),
+      ('Emergency stop and isolation switches in good working condition', 3),
+      ('Test & tagged in date', 4),
+      ('Area clean and tidy', 5),
+      ('SOP available and updated', 6)
+    ) AS item(label, sort_order)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM equipment_check_items ci WHERE ci.equipment_id = e.id
+    )
+    ON CONFLICT (equipment_id, label) DO NOTHING;
   `);
 }
 
