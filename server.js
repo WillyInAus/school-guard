@@ -14,7 +14,7 @@ const RISK_LEVELS = ['Low', 'Medium', 'High', 'Extreme'];
 const STATUSES = ['Draft', 'Pending approval', 'Approved', 'Changes requested'];
 const EQUIPMENT_CATEGORIES = ['Power tool', 'Hand tool', 'Fixed machinery', 'Electrical test equipment', 'PPE', 'Mobile plant/vehicle', 'Other'];
 const EQUIPMENT_STATUSES = ['In service', 'Under repair', 'Out of service', 'Awaiting disposal'];
-const INSPECTION_FREQUENCIES = ['Week', 'Term', 'Semester', 'Yearly'];
+const INSPECTION_FREQUENCIES = ['Daily', 'Week', 'Term', 'Semester', 'Yearly'];
 // Starter checklist items every newly-created piece of equipment is seeded
 // with (see POST /admin/equipment below). From there, each item's own
 // checklist is fully editable per-tool from its Edit page — add/rename/
@@ -128,6 +128,9 @@ function addInspectionInterval(dateStr, frequency) {
   // the server's local timezone) so a daylight-saving transition falling
   // inside the interval can't shift the result by a day.
   switch (frequency) {
+    case 'Daily':
+      d.setUTCDate(d.getUTCDate() + 1);
+      break;
     case 'Week':
       d.setUTCDate(d.getUTCDate() + 7);
       break;

@@ -201,9 +201,14 @@ async function migrate() {
   `);
 
   // Inspection frequency is now chosen from a fixed set of school-calendar
-  // intervals (Week/Term/Semester/Yearly) rather than typed in as a number
-  // of months — easier for Sean to set consistently across the register.
-  await pool.query(`ALTER TABLE equipment_records ADD COLUMN IF NOT EXISTS inspection_frequency TEXT CHECK (inspection_frequency IN ('Week','Term','Semester','Yearly'));`);
+  // intervals (Daily/Week/Term/Semester/Yearly) rather than typed in as a
+  // number of months — easier for Sean to set consistently across the
+  // register. The CHECK is re-applied every migration (drop + re-add) so
+  // adding a new option later (like Daily) takes effect on an existing
+  // column, not just a freshly created one.
+  await pool.query(`ALTER TABLE equipment_records ADD COLUMN IF NOT EXISTS inspection_frequency TEXT;`);
+  await pool.query(`ALTER TABLE equipment_records DROP CONSTRAINT IF EXISTS equipment_records_inspection_frequency_check;`);
+  await pool.query(`ALTER TABLE equipment_records ADD CONSTRAINT equipment_records_inspection_frequency_check CHECK (inspection_frequency IN ('Daily','Week','Term','Semester','Yearly'));`);
   await pool.query(`
     DO $$
     BEGIN
