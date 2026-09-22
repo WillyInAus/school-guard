@@ -14,6 +14,14 @@ const RISK_LEVELS = ['Low', 'Medium', 'High', 'Extreme'];
 const STATUSES = ['Draft', 'Pending approval', 'Approved', 'Changes requested'];
 const EQUIPMENT_CATEGORIES = ['Power tool', 'Hand tool', 'Fixed machinery', 'Electrical test equipment', 'PPE', 'Mobile plant/vehicle', 'Other'];
 const EQUIPMENT_STATUSES = ['In service', 'Under repair', 'Out of service', 'Awaiting disposal'];
+const MAINTENANCE_CHECK_ITEMS = [
+  { key: 'equipment_working', label: 'Equipment in working order' },
+  { key: 'guards_in_place', label: 'Guards in place' },
+  { key: 'estop_isolation_ok', label: 'Emergency stop and isolation switches in good working condition' },
+  { key: 'test_tag_in_date', label: 'Test & tagged in date' },
+  { key: 'area_clean_tidy', label: 'Area clean and tidy' },
+  { key: 'sop_available_updated', label: 'SOP available and updated' },
+];
 
 // ---------- Admin auth (shared password) ----------
 
@@ -1505,6 +1513,23 @@ app.get('/equipment/:id', async (req, res, next) => {
     const r = result.rows[0];
     const insp = inspectionBadge(r.next_inspection_due);
 
+    const checksResult = await pool.query(
+      'SELECT * FROM equipment_checks WHERE equipment_id = $1 ORDER BY checked_at DESC LIMIT 10',
+      [req.params.id]
+    );
+    const latestCheck = checksResult.rows[0];
+
+    const checkHistoryRows = checksResult.rows.map((c) => {
+      const failCount = MAINTENANCE_CHECK_ITEMS.filter((item) => !c[item.key]).length;
+      return `
+        <tr>
+          <td>${formatDate(c.checked_at)}</td>
+          <td>${escapeHtml(c.checked_by || '—')}</td>
+          <td><span class="badge ${failCount === 0 ? 'badge-approved' : 'badge-changes'}">${failCount === 0 ? 'All clear' : `${failCount} issue${failCount === 1 ? '' : 's'}`}</span></td>
+        </tr>
+      `;
+    }).join('');
+
     const body = `
       <a class="back-link" href="/equipment">← Back to Equipment Register</a>
       <div class="page-header">
@@ -1512,7 +1537,10 @@ app.get('/equipment/:id', async (req, res, next) => {
           <h1 class="page-title">${escapeHtml(r.name)}</h1>
           <p class="page-subtitle">${escapeHtml(r.category)}${r.asset_tag ? ` · Asset tag ${escapeHtml(r.asset_tag)}` : ''}</p>
         </div>
-        <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit">Edit</a>
+        <span>
+          <a class="btn btn-primary" href="/equipment/${r.id}/check">Log maintenance check</a>
+          <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit">Edit</a>
+        </span>
       </div>
       <div class="stat-grid">
         <div class="stat-tile">
@@ -1538,9 +1566,113 @@ app.get('/equipment/:id', async (req, res, next) => {
         </div>
         ${r.condition_notes ? `<div style="margin-top:20px;"><div class="detail-label">Condition notes</div><p style="margin:6px 0 0;white-space:pre-wrap;">${escapeHtml(r.condition_notes)}</p></div>` : ''}
       </div>
+      <div class="form-section-title">Maintenance checks</div>
+      ${latestCheck ? `
+        <div class="card" style="padding:24px;margin-bottom:16px;">
+          <p style="margin:0 0 12px;font-size:13px;color:#6B6659;">Last checked ${formatDate(latestCheck.checked_at)}${latestCheck.checked_by ? ` by ${escapeHtml(latestCheck.checked_by)}` : ''}.</p>
+          <div class="detail-grid">
+            ${MAINTENANCE_CHECK_ITEMS.map((item) => `
+              <div><div class="detail-label">${escapeHtml(item.label)}</div><div><span class="badge ${latestCheck[item.key] ? 'badge-approved' : 'badge-changes'}">${latestCheck[item.key] ? 'OK' : 'Not OK'}</span></div></div>
+            `).join('')}
+          </div>
+          ${latestCheck.notes ? `<div style="margin-top:16px;"><div class="detail-label">Notes</div><p style="margin:6px 0 0;white-space:pre-wrap;">${escapeHtml(latestCheck.notes)}</p></div>` : ''}
+        </div>
+      ` : `<div class="card" style="padding:24px;margin-bottom:16px;"><p style="margin:0;font-size:14px;color:#6B6659;">No maintenance checks logged yet.</p></div>`}
+      ${checksResult.rows.length ? `
+        <div class="card">
+          <table>
+            <thead><tr><th>Date</th><th>Checked by</th><th>Result</th></tr></thead>
+            <tbody>${checkHistoryRows}</tbody>
+          </table>
+        </div>
+      ` : ''}
     `;
 
     res.send(page({ title: r.name, active: 'equipment', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Equipment Register: maintenance check ----------
+// Open to any staff member (like PERA/CARA submission, unlike editing the
+// equipment record itself) so a maintenance person can log a check without
+// needing the admin password. Submitting updates the item's last/next
+// inspection dates and flips status to Under repair if anything failed, or
+// In service if everything checked out.
+
+app.get('/equipment/:id/check', async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM equipment_records WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).send('Equipment record not found.');
+    }
+    const r = result.rows[0];
+
+    const itemsHtml = MAINTENANCE_CHECK_ITEMS.map((item) => `
+      <div class="form-row checkbox-row">
+        <input type="checkbox" id="${item.key}" name="${item.key}" value="true">
+        <label for="${item.key}">${escapeHtml(item.label)}</label>
+      </div>
+    `).join('');
+
+    const body = `
+      <a class="back-link" href="/equipment/${r.id}">← Back to ${escapeHtml(r.name)}</a>
+      <h1 class="page-title" style="margin-bottom:8px;">Maintenance check: ${escapeHtml(r.name)}</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">Tick off each item once you've confirmed it. Leave anything unticked that isn't OK — the item will be marked as needing attention.</p>
+      <form class="form-card" method="post" action="/equipment/${r.id}/check">
+        ${itemsHtml}
+        <div class="form-row">
+          <label for="notes">Notes</label>
+          <textarea id="notes" name="notes" placeholder="Any issues found, parts needed, follow-up required..."></textarea>
+        </div>
+        <div class="form-row">
+          <label for="checked_by">Checked by</label>
+          <input type="text" id="checked_by" name="checked_by" placeholder="Your name" required>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Submit check</button>
+          <a class="btn btn-secondary" href="/equipment/${r.id}">Cancel</a>
+        </div>
+      </form>
+    `;
+
+    res.send(page({ title: `Maintenance check — ${r.name}`, active: 'equipment', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/equipment/:id/check', async (req, res, next) => {
+  try {
+    const equipmentResult = await pool.query('SELECT * FROM equipment_records WHERE id = $1', [req.params.id]);
+    if (equipmentResult.rows.length === 0) {
+      return res.status(404).send('Equipment record not found.');
+    }
+    const equipment = equipmentResult.rows[0];
+
+    const values = MAINTENANCE_CHECK_ITEMS.map((item) => req.body[item.key] === 'true');
+    const allOk = values.every(Boolean);
+
+    await pool.query(
+      `INSERT INTO equipment_checks
+        (equipment_id, checked_by, equipment_working, guards_in_place, estop_isolation_ok, test_tag_in_date, area_clean_tidy, sop_available_updated, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [req.params.id, req.body.checked_by || null, ...values, req.body.notes || null]
+    );
+
+    const today = new Date().toISOString().slice(0, 10);
+    const nextDue = addMonths(today, equipment.inspection_frequency_months) || equipment.next_inspection_due;
+    const newStatus = allOk ? 'In service' : 'Under repair';
+
+    await pool.query(
+      `UPDATE equipment_records
+       SET last_inspection_date = $1, next_inspection_due = $2, status = $3, updated_at = now()
+       WHERE id = $4`,
+      [today, nextDue, newStatus, req.params.id]
+    );
+
+    res.redirect(`/equipment/${req.params.id}`);
   } catch (err) {
     next(err);
   }
@@ -1880,7 +2012,12 @@ app.get('/admin/locations', requireAdmin, async (req, res, next) => {
 
     const rows = result.rows.map((l) => `
       <tr>
-        <td>${escapeHtml(l.name)}</td>
+        <td>
+          <form method="post" action="/admin/locations/${l.id}" style="display:flex;gap:8px;align-items:center;">
+            <input type="text" name="name" value="${escapeHtml(l.name)}" style="max-width:240px;">
+            <button type="submit" class="btn btn-secondary" style="padding:4px 12px;font-size:13px;">Save</button>
+          </form>
+        </td>
         <td>${l.in_use} item${l.in_use === 1 ? '' : 's'}</td>
         <td style="text-align:right;">
           <form method="post" action="/admin/locations/${l.id}/delete" style="display:inline;" onsubmit="return confirm('Remove &quot;${escapeHtml(l.name).replace(/"/g, '&quot;')}&quot; from the location list? Equipment already using it will keep showing it, but it won\\'t be selectable for new items.');">
@@ -1930,6 +2067,29 @@ app.post('/admin/locations', requireAdmin, async (req, res, next) => {
       return res.status(400).send('A location name is required.');
     }
     await pool.query('INSERT INTO equipment_locations (name) VALUES ($1) ON CONFLICT (name) DO NOTHING', [name.trim()]);
+    res.redirect('/admin/locations');
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/locations/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).send('A location name is required.');
+    }
+    const trimmed = name.trim();
+    const existing = await pool.query('SELECT name FROM equipment_locations WHERE id = $1', [req.params.id]);
+    if (existing.rows.length === 0) {
+      return res.status(404).send('Location not found.');
+    }
+    const oldName = existing.rows[0].name;
+    await pool.query('UPDATE equipment_locations SET name = $1 WHERE id = $2', [trimmed, req.params.id]);
+    if (oldName !== trimmed) {
+      // Keep equipment already using the old name pointed at the renamed location.
+      await pool.query('UPDATE equipment_records SET location = $1 WHERE location = $2', [trimmed, oldName]);
+    }
     res.redirect('/admin/locations');
   } catch (err) {
     next(err);

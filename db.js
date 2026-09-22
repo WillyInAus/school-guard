@@ -149,6 +149,25 @@ async function migrate() {
     VALUES ('Metalwork workshop'), ('Woodwork workshop'), ('Electrotechnology workshop'), ('Storage/store room')
     ON CONFLICT (name) DO NOTHING;
   `);
+
+  // Maintenance checklist log — a maintenance person works through this
+  // checklist for a piece of equipment; each submission is kept as a
+  // history record and also updates the equipment's inspection dates/status.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_checks (
+      id SERIAL PRIMARY KEY,
+      equipment_id INTEGER NOT NULL REFERENCES equipment_records(id) ON DELETE CASCADE,
+      checked_by TEXT,
+      equipment_working BOOLEAN NOT NULL DEFAULT false,
+      guards_in_place BOOLEAN NOT NULL DEFAULT false,
+      estop_isolation_ok BOOLEAN NOT NULL DEFAULT false,
+      test_tag_in_date BOOLEAN NOT NULL DEFAULT false,
+      area_clean_tidy BOOLEAN NOT NULL DEFAULT false,
+      sop_available_updated BOOLEAN NOT NULL DEFAULT false,
+      notes TEXT,
+      checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
 }
 
 module.exports = { pool, migrate };
