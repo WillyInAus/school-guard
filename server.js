@@ -1516,12 +1516,126 @@ app.get('/equipment', async (req, res, next) => {
       </div>
       <p style="margin:-10px 0 18px;">
         <a href="/equipment?overdue=1${showArchived ? '&archived=1' : ''}" style="font-size:13px;color:#B3261E;text-decoration:underline;">Show overdue inspections only →</a>
+        &nbsp;·&nbsp; <a href="/equipment/by-room" style="font-size:13px;color:#1B5E52;text-decoration:underline;">View by room →</a>
         ${!showArchived ? ` &nbsp;·&nbsp; <a href="/equipment?archived=1" style="font-size:13px;color:#6B6659;text-decoration:underline;">View archived equipment →</a>` : ''}
       </p>
       <div class="card">${rowsHtml}</div>
     `;
 
     res.send(page({ title: showArchived ? 'Archived Equipment' : 'Equipment Register', active: 'equipment', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Equipment Register: by room ----------
+// Groups active equipment by Location so a maintenance person can walk into
+// a room and see everything there that needs checking, without hunting
+// through the full register. Registered before /equipment/:id so "by-room"
+// isn't swallowed as an :id.
+
+app.get('/equipment/by-room', async (req, res, next) => {
+  try {
+    const onlyDue = req.query.due === '1';
+    const result = await pool.query(
+      `SELECT * FROM equipment_records WHERE archived = false ORDER BY name ASC`
+    );
+
+    const urgencyRank = (r) => {
+      const cls = inspectionBadge(r.next_inspection_due).cls;
+      if (cls === 'badge-changes') return 0; // Overdue
+      if (cls === 'badge-pending') return 1; // Due soon
+      if (cls === 'badge-draft') return 2; // Not scheduled
+      return 3; // Ok
+    };
+
+    const groups = new Map();
+    result.rows.forEach((r) => {
+      const loc = r.location || 'No location assigned';
+      if (!groups.has(loc)) groups.set(loc, []);
+      groups.get(loc).push(r);
+    });
+
+    const roomNames = [...groups.keys()].sort((a, b) => {
+      if (a === 'No location assigned') return 1;
+      if (b === 'No location assigned') return -1;
+      return a.localeCompare(b);
+    });
+
+    let totalOverdue = 0;
+    let totalDueSoon = 0;
+    result.rows.forEach((r) => {
+      const cls = inspectionBadge(r.next_inspection_due).cls;
+      if (cls === 'badge-changes') totalOverdue += 1;
+      if (cls === 'badge-pending') totalDueSoon += 1;
+    });
+
+    const roomSections = roomNames.map((roomName) => {
+      let items = groups.get(roomName).slice().sort((a, b) => {
+        const rankDiff = urgencyRank(a) - urgencyRank(b);
+        return rankDiff !== 0 ? rankDiff : a.name.localeCompare(b.name);
+      });
+      const roomOverdue = items.filter((r) => urgencyRank(r) === 0).length;
+      const roomDueSoon = items.filter((r) => urgencyRank(r) === 1).length;
+      if (onlyDue) items = items.filter((r) => urgencyRank(r) <= 1);
+      if (items.length === 0) return '';
+
+      const rows = items.map((r) => {
+        const insp = inspectionBadge(r.next_inspection_due);
+        return `
+          <tr class="row-link" onclick="window.location='/equipment/${r.id}'">
+            <td>${escapeHtml(r.name)}${r.asset_tag ? ` <span style="color:#8B8578;">(${escapeHtml(r.asset_tag)})</span>` : ''}</td>
+            <td>${escapeHtml(r.category)}</td>
+            <td><span class="badge ${equipmentStatusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
+            <td><span class="badge ${insp.cls}">${insp.label}</span></td>
+            <td onclick="event.stopPropagation();"><a class="btn btn-secondary" href="/equipment/${r.id}/check" style="padding:4px 12px;font-size:13px;">Log check</a></td>
+          </tr>
+        `;
+      }).join('');
+
+      return `
+        <div class="page-header" style="margin-top:28px;margin-bottom:8px;">
+          <h2 style="margin:0;font-size:18px;">${escapeHtml(roomName)}</h2>
+          <span style="font-size:13px;color:#6B6659;">
+            ${roomOverdue ? `<span style="color:#B3261E;font-weight:600;">${roomOverdue} overdue</span>` : ''}
+            ${roomOverdue && roomDueSoon ? ' · ' : ''}
+            ${roomDueSoon ? `${roomDueSoon} due soon` : ''}
+            ${!roomOverdue && !roomDueSoon ? 'All clear' : ''}
+          </span>
+        </div>
+        <div class="card">
+          <table>
+            <thead>
+              <tr><th>Item</th><th>Category</th><th>Status</th><th>Inspection</th><th></th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }).filter(Boolean).join('');
+
+    const body = `
+      <a class="back-link" href="/equipment">← Back to Equipment Register</a>
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Equipment by Room</h1>
+          <p class="page-subtitle">What needs checking, grouped by workshop/area — for walking a room and clearing its maintenance checks.</p>
+        </div>
+      </div>
+      <p style="margin:-10px 0 18px;font-size:13px;">
+        ${totalOverdue ? `<span style="color:#B3261E;font-weight:600;">${totalOverdue} overdue</span>` : ''}
+        ${totalOverdue && totalDueSoon ? ' · ' : ''}
+        ${totalDueSoon ? `<span style="color:#8A6D00;font-weight:600;">${totalDueSoon} due soon</span>` : ''}
+        ${!totalOverdue && !totalDueSoon ? '<span style="color:#1B5E52;">Nothing overdue or due soon.</span>' : ''}
+        &nbsp;·&nbsp;
+        ${onlyDue
+          ? `<a href="/equipment/by-room" style="color:#6B6659;text-decoration:underline;">Show all equipment →</a>`
+          : `<a href="/equipment/by-room?due=1" style="color:#6B6659;text-decoration:underline;">Show only overdue/due soon →</a>`}
+      </p>
+      ${roomSections || `<div class="empty-state">${onlyDue ? 'Nothing overdue or due soon.' : 'No equipment recorded yet.'}</div>`}
+    `;
+
+    res.send(page({ title: 'Equipment by Room', active: 'equipment', body }));
   } catch (err) {
     next(err);
   }
