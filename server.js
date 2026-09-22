@@ -14,6 +14,7 @@ const RISK_LEVELS = ['Low', 'Medium', 'High', 'Extreme'];
 const STATUSES = ['Draft', 'Pending approval', 'Approved', 'Changes requested'];
 const EQUIPMENT_CATEGORIES = ['Power tool', 'Hand tool', 'Fixed machinery', 'Electrical test equipment', 'PPE', 'Mobile plant/vehicle', 'Other'];
 const EQUIPMENT_STATUSES = ['In service', 'Under repair', 'Out of service', 'Awaiting disposal'];
+const INSPECTION_FREQUENCIES = ['Week', 'Term', 'Semester', 'Yearly'];
 // Starter checklist items every newly-created piece of equipment is seeded
 // with (see POST /admin/equipment below). From there, each item's own
 // checklist is fully editable per-tool from its Edit page — add/rename/
@@ -116,10 +117,32 @@ function inspectionBadge(nextDue) {
   return { cls: 'badge-approved', label: formatDate(nextDue) };
 }
 
-function addMonths(dateStr, months) {
-  if (!dateStr || !months) return null;
+// Inspection due dates are calculated from a school-calendar interval
+// rather than a raw number of months. "Term" is approximated as a quarter
+// of the year (a school term runs roughly 10 weeks) since terms don't line
+// up with calendar months.
+function addInspectionInterval(dateStr, frequency) {
+  if (!dateStr || !frequency) return null;
   const d = new Date(dateStr);
-  d.setMonth(d.getMonth() + Number(months));
+  // Use the UTC setters (not setMonth/setDate/setFullYear, which operate in
+  // the server's local timezone) so a daylight-saving transition falling
+  // inside the interval can't shift the result by a day.
+  switch (frequency) {
+    case 'Week':
+      d.setUTCDate(d.getUTCDate() + 7);
+      break;
+    case 'Term':
+      d.setUTCMonth(d.getUTCMonth() + 3);
+      break;
+    case 'Semester':
+      d.setUTCMonth(d.getUTCMonth() + 6);
+      break;
+    case 'Yearly':
+      d.setUTCFullYear(d.getUTCFullYear() + 1);
+      break;
+    default:
+      return null;
+  }
   return d.toISOString().slice(0, 10);
 }
 
@@ -1582,7 +1605,7 @@ app.get('/equipment/:id', async (req, res, next) => {
           <div><div class="detail-label">Test/tag number</div><div>${escapeHtml(r.test_tag_number || '—')}</div></div>
           <div><div class="detail-label">Responsible person</div><div>${escapeHtml(r.responsible_person || '—')}</div></div>
           <div><div class="detail-label">Purchase date</div><div>${formatDate(r.purchase_date)}</div></div>
-          <div><div class="detail-label">Inspection frequency</div><div>${r.inspection_frequency_months ? `${r.inspection_frequency_months} months` : '—'}</div></div>
+          <div><div class="detail-label">Inspection frequency</div><div>${escapeHtml(r.inspection_frequency || '—')}</div></div>
           <div><div class="detail-label">Last inspection</div><div>${formatDate(r.last_inspection_date)}</div></div>
           <div><div class="detail-label">Linked PERA</div><div>${r.pera_id ? `<a href="/pera/${r.pera_id}" style="color:#1B5E52;font-weight:600;">${escapeHtml(r.pera_name)} →</a>` : '—'}</div></div>
         </div>
@@ -1720,7 +1743,7 @@ app.post('/equipment/:id/check', async (req, res, next) => {
     );
 
     const today = new Date().toISOString().slice(0, 10);
-    const nextDue = addMonths(today, equipment.inspection_frequency_months) || equipment.next_inspection_due;
+    const nextDue = addInspectionInterval(today, equipment.inspection_frequency) || equipment.next_inspection_due;
     const newStatus = allOk ? 'In service' : 'Under repair';
 
     await pool.query(
@@ -1748,7 +1771,10 @@ function equipmentFormFields(r = {}) {
   const statusOptions = EQUIPMENT_STATUSES.map(
     (s) => `<option value="${s}" ${(r.status || 'In service') === s ? 'selected' : ''}>${s}</option>`
   ).join('');
-  return { categoryOptions, statusOptions };
+  const frequencyOptions = `<option value="">— None —</option>` + INSPECTION_FREQUENCIES.map(
+    (f) => `<option value="${f}" ${r.inspection_frequency === f ? 'selected' : ''}>${f}</option>`
+  ).join('');
+  return { categoryOptions, statusOptions, frequencyOptions };
 }
 
 app.get('/admin/equipment/new', requireAdmin, async (req, res, next) => {
@@ -1757,7 +1783,7 @@ app.get('/admin/equipment/new', requireAdmin, async (req, res, next) => {
     const peraOptions = peraResult.rows.map((p) => `<option value="${p.id}">${escapeHtml(p.activity_name)}</option>`).join('');
     const locationsResult = await pool.query('SELECT name FROM equipment_locations ORDER BY name ASC');
     const locationOptions = locationsResult.rows.map((l) => `<option value="${escapeHtml(l.name)}">${escapeHtml(l.name)}</option>`).join('');
-    const { categoryOptions, statusOptions } = equipmentFormFields();
+    const { categoryOptions, statusOptions, frequencyOptions } = equipmentFormFields();
 
     const body = `
       <a class="back-link" href="/equipment">← Back to Equipment Register</a>
@@ -1808,8 +1834,8 @@ app.get('/admin/equipment/new', requireAdmin, async (req, res, next) => {
           <input type="date" id="purchase_date" name="purchase_date">
         </div>
         <div class="form-row">
-          <label for="inspection_frequency_months">Inspection frequency (months)</label>
-          <input type="number" id="inspection_frequency_months" name="inspection_frequency_months" min="1" placeholder="e.g. 12">
+          <label for="inspection_frequency">Inspection frequency</label>
+          <select id="inspection_frequency" name="inspection_frequency">${frequencyOptions}</select>
         </div>
         <div class="form-row">
           <label for="last_inspection_date">Last inspection date</label>
@@ -1848,7 +1874,7 @@ app.post('/admin/equipment', requireAdmin, async (req, res, next) => {
     const {
       name, asset_tag, category, status, location, manufacturer, serial_number,
       test_tag_number, responsible_person, purchase_date,
-      inspection_frequency_months, last_inspection_date, next_inspection_due,
+      inspection_frequency, last_inspection_date, next_inspection_due,
       pera_id, condition_notes,
     } = req.body;
 
@@ -1856,14 +1882,15 @@ app.post('/admin/equipment', requireAdmin, async (req, res, next) => {
       return res.status(400).send('Item name and a valid category are required.');
     }
 
+    const validFrequency = INSPECTION_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
     const computedNextDue = next_inspection_due
-      || addMonths(last_inspection_date, inspection_frequency_months);
+      || addInspectionInterval(last_inspection_date, validFrequency);
 
     const result = await pool.query(
       `INSERT INTO equipment_records
         (name, asset_tag, category, status, location, manufacturer, serial_number,
          test_tag_number, responsible_person, purchase_date,
-         inspection_frequency_months, last_inspection_date, next_inspection_due,
+         inspection_frequency, last_inspection_date, next_inspection_due,
          pera_id, condition_notes)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING id`,
@@ -1871,7 +1898,7 @@ app.post('/admin/equipment', requireAdmin, async (req, res, next) => {
         name, asset_tag || null, category, EQUIPMENT_STATUSES.includes(status) ? status : 'In service',
         location || null, manufacturer || null, serial_number || null,
         test_tag_number || null, responsible_person || null, purchase_date || null,
-        inspection_frequency_months || null, last_inspection_date || null, computedNextDue || null,
+        validFrequency, last_inspection_date || null, computedNextDue || null,
         pera_id || null, condition_notes || null,
       ]
     );
@@ -1911,7 +1938,7 @@ app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
     const locationOptions = knownLocations.map(
       (name) => `<option value="${escapeHtml(name)}" ${r.location === name ? 'selected' : ''}>${escapeHtml(name)}</option>`
     ).join('');
-    const { categoryOptions, statusOptions } = equipmentFormFields(r);
+    const { categoryOptions, statusOptions, frequencyOptions } = equipmentFormFields(r);
     const dateVal = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
 
     const checkItemsResult = await pool.query(
@@ -1983,8 +2010,8 @@ app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
           <input type="date" id="purchase_date" name="purchase_date" value="${dateVal(r.purchase_date)}">
         </div>
         <div class="form-row">
-          <label for="inspection_frequency_months">Inspection frequency (months)</label>
-          <input type="number" id="inspection_frequency_months" name="inspection_frequency_months" min="1" value="${r.inspection_frequency_months || ''}">
+          <label for="inspection_frequency">Inspection frequency</label>
+          <select id="inspection_frequency" name="inspection_frequency">${frequencyOptions}</select>
         </div>
         <div class="form-row">
           <label for="last_inspection_date">Last inspection date</label>
@@ -2046,7 +2073,7 @@ app.post('/admin/equipment/:id', requireAdmin, async (req, res, next) => {
     const {
       name, asset_tag, category, status, location, manufacturer, serial_number,
       test_tag_number, responsible_person, purchase_date,
-      inspection_frequency_months, last_inspection_date, next_inspection_due,
+      inspection_frequency, last_inspection_date, next_inspection_due,
       pera_id, condition_notes,
     } = req.body;
 
@@ -2054,14 +2081,15 @@ app.post('/admin/equipment/:id', requireAdmin, async (req, res, next) => {
       return res.status(400).send('Item name and a valid category are required.');
     }
 
+    const validFrequency = INSPECTION_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
     const computedNextDue = next_inspection_due
-      || addMonths(last_inspection_date, inspection_frequency_months);
+      || addInspectionInterval(last_inspection_date, validFrequency);
 
     await pool.query(
       `UPDATE equipment_records SET
         name = $1, asset_tag = $2, category = $3, status = $4, location = $5,
         manufacturer = $6, serial_number = $7, test_tag_number = $8,
-        responsible_person = $9, purchase_date = $10, inspection_frequency_months = $11,
+        responsible_person = $9, purchase_date = $10, inspection_frequency = $11,
         last_inspection_date = $12, next_inspection_due = $13, pera_id = $14,
         condition_notes = $15, updated_at = now()
        WHERE id = $16`,
@@ -2069,7 +2097,7 @@ app.post('/admin/equipment/:id', requireAdmin, async (req, res, next) => {
         name, asset_tag || null, category, EQUIPMENT_STATUSES.includes(status) ? status : 'In service',
         location || null, manufacturer || null, serial_number || null,
         test_tag_number || null, responsible_person || null, purchase_date || null,
-        inspection_frequency_months || null, last_inspection_date || null, computedNextDue || null,
+        validFrequency, last_inspection_date || null, computedNextDue || null,
         pera_id || null, condition_notes || null, req.params.id,
       ]
     );

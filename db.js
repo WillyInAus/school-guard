@@ -200,6 +200,30 @@ async function migrate() {
     );
   `);
 
+  // Inspection frequency is now chosen from a fixed set of school-calendar
+  // intervals (Week/Term/Semester/Yearly) rather than typed in as a number
+  // of months — easier for Sean to set consistently across the register.
+  await pool.query(`ALTER TABLE equipment_records ADD COLUMN IF NOT EXISTS inspection_frequency TEXT CHECK (inspection_frequency IN ('Week','Term','Semester','Yearly'));`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'equipment_records' AND column_name = 'inspection_frequency_months'
+      ) THEN
+        UPDATE equipment_records SET inspection_frequency = CASE
+          WHEN inspection_frequency_months IS NULL THEN NULL
+          WHEN inspection_frequency_months <= 1 THEN 'Week'
+          WHEN inspection_frequency_months <= 4 THEN 'Term'
+          WHEN inspection_frequency_months <= 8 THEN 'Semester'
+          ELSE 'Yearly'
+        END
+        WHERE inspection_frequency IS NULL;
+        ALTER TABLE equipment_records DROP COLUMN inspection_frequency_months;
+      END IF;
+    END $$;
+  `);
+
   // Give any equipment that doesn't yet have a checklist (created before
   // per-tool checklists existed) the same six starter items Sean's original
   // checklist had. New equipment is seeded the same way at creation time in
