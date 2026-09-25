@@ -12,22 +12,6 @@ app.use(express.static('public'));
 
 const RISK_LEVELS = ['Low', 'Medium', 'High', 'Extreme'];
 const STATUSES = ['Draft', 'Pending approval', 'Approved', 'Changes requested'];
-const EQUIPMENT_CATEGORIES = ['Power tool', 'Hand tool', 'Fixed machinery', 'Electrical test equipment', 'PPE', 'Mobile plant/vehicle', 'Other'];
-const EQUIPMENT_STATUSES = ['In service', 'Under repair', 'Out of service', 'Awaiting disposal'];
-const INSPECTION_FREQUENCIES = ['Daily', 'Week', 'Term', 'Semester', 'Yearly'];
-// Starter checklist items every newly-created piece of equipment is seeded
-// with (see POST /admin/equipment below). From there, each item's own
-// checklist is fully editable per-tool from its Edit page — add/rename/
-// remove items as needed (e.g. a disk sander gets "Sanding disc condition"
-// and "Vibration" added; a hand tool might have most of these removed).
-const DEFAULT_CHECK_ITEMS = [
-  'Equipment in working order',
-  'Guards in place',
-  'Emergency stop and isolation switches in good working condition',
-  'Test & tagged in date',
-  'Area clean and tidy',
-  'SOP available and updated',
-];
 
 // ---------- Admin auth (shared password) ----------
 
@@ -96,59 +80,6 @@ function formatDate(d) {
   return date.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-function equipmentStatusBadgeClass(status) {
-  return {
-    'In service': 'badge-approved',
-    'Under repair': 'badge-pending',
-    'Out of service': 'badge-changes',
-    'Awaiting disposal': 'badge-draft',
-  }[status] || 'badge-draft';
-}
-
-function inspectionBadge(nextDue) {
-  if (!nextDue) return { cls: 'badge-draft', label: 'Not scheduled' };
-  const due = new Date(nextDue);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const msPerDay = 24 * 60 * 60 * 1000;
-  const daysUntil = Math.round((due - today) / msPerDay);
-  if (daysUntil < 0) return { cls: 'badge-changes', label: `Overdue — ${formatDate(nextDue)}` };
-  if (daysUntil <= 30) return { cls: 'badge-pending', label: `Due soon — ${formatDate(nextDue)}` };
-  return { cls: 'badge-approved', label: formatDate(nextDue) };
-}
-
-// Inspection due dates are calculated from a school-calendar interval
-// rather than a raw number of months. "Term" is approximated as a quarter
-// of the year (a school term runs roughly 10 weeks) since terms don't line
-// up with calendar months.
-function addInspectionInterval(dateStr, frequency) {
-  if (!dateStr || !frequency) return null;
-  const d = new Date(dateStr);
-  // Use the UTC setters (not setMonth/setDate/setFullYear, which operate in
-  // the server's local timezone) so a daylight-saving transition falling
-  // inside the interval can't shift the result by a day.
-  switch (frequency) {
-    case 'Daily':
-      d.setUTCDate(d.getUTCDate() + 1);
-      break;
-    case 'Week':
-      d.setUTCDate(d.getUTCDate() + 7);
-      break;
-    case 'Term':
-      d.setUTCMonth(d.getUTCMonth() + 3);
-      break;
-    case 'Semester':
-      d.setUTCMonth(d.getUTCMonth() + 6);
-      break;
-    case 'Yearly':
-      d.setUTCFullYear(d.getUTCFullYear() + 1);
-      break;
-    default:
-      return null;
-  }
-  return d.toISOString().slice(0, 10);
-}
-
 // ---------- Dashboard ----------
 
 app.get('/', async (req, res, next) => {
@@ -160,10 +91,6 @@ app.get('/', async (req, res, next) => {
     const caraTotalResult = await pool.query('SELECT COUNT(*)::int AS count FROM cara_records WHERE archived = false');
     const caraPendingResult = await pool.query(
       "SELECT COUNT(*)::int AS count FROM cara_records WHERE status = 'Pending approval' AND archived = false"
-    );
-    const equipmentTotalResult = await pool.query('SELECT COUNT(*)::int AS count FROM equipment_records WHERE archived = false');
-    const equipmentOverdueResult = await pool.query(
-      "SELECT COUNT(*)::int AS count FROM equipment_records WHERE archived = false AND next_inspection_due IS NOT NULL AND next_inspection_due < CURRENT_DATE"
     );
 
     const body = `
@@ -190,22 +117,12 @@ app.get('/', async (req, res, next) => {
           <div class="stat-label">CARAs pending approval</div>
           <div class="stat-value">${caraPendingResult.rows[0].count}</div>
         </div>
-        <div class="stat-tile">
-          <div class="stat-label">Equipment items</div>
-          <div class="stat-value">${equipmentTotalResult.rows[0].count}</div>
-        </div>
-        <div class="stat-tile">
-          <div class="stat-label">Inspections overdue</div>
-          <div class="stat-value">${equipmentOverdueResult.rows[0].count}</div>
-        </div>
       </div>
       <div class="card" style="padding: 24px;">
         <p style="margin:0;font-size:14px;color:#6B6659;">
           <a href="/pera" style="color:#1B5E52;font-weight:600;">PERA</a> holds the equipment/tool
           risk assessment library (Plant &amp; Equipment Risk Assessments). <a href="/cara" style="color:#1B5E52;font-weight:600;">CARA</a> is where teachers put
           together a Curriculum Activity Risk Assessment for a class or activity, drawing on tools from that library.
-          <a href="/equipment" style="color:#1B5E52;font-weight:600;">Equipment</a> is the physical asset register — inventory,
-          location, condition and inspection/test-and-tag due dates.
         </p>
       </div>
     `;
@@ -859,6 +776,329 @@ app.post('/cara', async (req, res, next) => {
   }
 });
 
+// ---------- CARA: edit ----------
+// Lets a teacher correct or update an existing CARA's content. Any edit that
+// actually changes something resets the CARA to Draft and clears its
+// signature/approval (the old sign-off no longer reflects the new content),
+// and records a field-by-field old -> new summary in cara_change_log, shown
+// at the bottom of the CARA detail page.
+
+app.get('/cara/:id/edit', async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM cara_records WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).send('CARA record not found.');
+    }
+    const r = result.rows[0];
+
+    const linkedResult = await pool.query('SELECT pera_id FROM cara_tool_links WHERE cara_id = $1', [req.params.id]);
+    const linkedIds = new Set(linkedResult.rows.map((row) => String(row.pera_id)));
+
+    const toolsResult = await pool.query(
+      `SELECT DISTINCT pr.id, pr.activity_name, pr.class_unit, pr.risk_level FROM pera_records pr
+       WHERE pr.status = 'Approved' OR pr.id IN (SELECT pera_id FROM cara_tool_links WHERE cara_id = $1)
+       ORDER BY pr.class_unit NULLS LAST, pr.activity_name`,
+      [req.params.id]
+    );
+
+    const groups = new Map();
+    for (const t of toolsResult.rows) {
+      const key = t.class_unit || 'Other';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(t);
+    }
+
+    let toolListHtml = '';
+    for (const [group, tools] of groups) {
+      toolListHtml += `<div class="tool-picker-group-label">${escapeHtml(group)}</div>`;
+      toolListHtml += tools.map((t) => `
+        <div class="tool-picker-item" data-search="${escapeHtml(t.activity_name.toLowerCase())}">
+          <input type="checkbox" id="tool_${t.id}" name="tool_ids" value="${t.id}" ${linkedIds.has(String(t.id)) ? 'checked' : ''}>
+          <label for="tool_${t.id}">${escapeHtml(t.activity_name)}</label>
+          <span class="badge ${riskBadgeClass(t.risk_level)}">${escapeHtml(t.risk_level)}</span>
+        </div>
+      `).join('');
+    }
+    if (!toolsResult.rows.length) {
+      toolListHtml = '<div class="tool-picker-item">No approved PERA records yet.</div>';
+    }
+
+    const riskOptions = RISK_LEVELS.map((l) => `<option value="${l}" ${l === r.risk_level ? 'selected' : ''}>${l}</option>`).join('');
+
+    const resetWarning = r.status !== 'Draft'
+      ? `<div class="note-box" style="margin-bottom:20px;">Saving changes will reset this CARA to <strong>Draft</strong> and clear its current signature/approval — it will need to be re-signed and re-approved.</div>`
+      : '';
+
+    const body = `
+      <a class="back-link" href="/cara/${r.id}">← Back to CARA</a>
+      <h1 class="page-title">Edit CARA</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">Changes are recorded in the change history at the bottom of this CARA.</p>
+      ${resetWarning}
+      <form class="form-card" method="post" action="/cara/${r.id}/edit" style="max-width:760px;">
+
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Activity scope</div>
+        <div class="form-row">
+          <label for="activity_name">Activity name</label>
+          <input type="text" id="activity_name" name="activity_name" required value="${escapeHtml(r.activity_name)}">
+        </div>
+        <div class="form-row">
+          <label for="class_unit">Class / unit</label>
+          <input type="text" id="class_unit" name="class_unit" value="${escapeHtml(r.class_unit || '')}">
+        </div>
+        <div class="form-row">
+          <label for="activity_scope">Activity scope</label>
+          <textarea id="activity_scope" name="activity_scope">${escapeHtml(r.activity_scope || '')}</textarea>
+        </div>
+
+        <div class="form-section-title">Inherent risk level</div>
+        <div class="form-row">
+          <label for="risk_level">Risk level</label>
+          <select id="risk_level" name="risk_level" required>${riskOptions}</select>
+        </div>
+
+        <div class="form-section-title">PERA used</div>
+        <p class="form-section-hint">Select any equipment already covered by an approved PERA (Plant &amp; Equipment Risk Assessment). If something you need isn't listed, ask your WHS Coordinator to add it first.</p>
+        <div class="tool-picker">
+          <div class="tool-picker-search">
+            <input type="text" id="tool_search" placeholder="Search tools..." oninput="filterTools(this.value)">
+          </div>
+          <div class="tool-picker-list" id="tool_picker_list">
+            ${toolListHtml}
+          </div>
+        </div>
+
+        <div class="form-section-title">Students</div>
+        <div class="form-row">
+          <textarea id="students_notes" name="students_notes">${escapeHtml(r.students_notes || '')}</textarea>
+        </div>
+
+        <div class="form-section-title">Emergency and first aid</div>
+        <div class="form-row">
+          <textarea id="emergency_first_aid" name="emergency_first_aid">${escapeHtml(r.emergency_first_aid || '')}</textarea>
+        </div>
+
+        <div class="form-section-title">Induction and instruction</div>
+        <div class="form-row">
+          <textarea id="induction_instruction" name="induction_instruction">${escapeHtml(r.induction_instruction || '')}</textarea>
+        </div>
+
+        <div class="form-section-title">Consent</div>
+        <div class="form-row checkbox-row">
+          <input type="checkbox" id="consent_required" name="consent_required" value="true" ${r.consent_required ? 'checked' : ''}>
+          <label for="consent_required">Parent consent required (required for Extreme risk, recommended for High)</label>
+        </div>
+
+        <div class="form-section-title">Supervision</div>
+        <div class="form-row">
+          <textarea id="supervision_notes" name="supervision_notes">${escapeHtml(r.supervision_notes || '')}</textarea>
+        </div>
+
+        <div class="form-section-title">Supervisor qualification</div>
+        <div class="form-row">
+          <textarea id="supervisor_qualification" name="supervisor_qualification">${escapeHtml(r.supervisor_qualification || '')}</textarea>
+        </div>
+
+        <div class="form-section-title">Facilities and equipment</div>
+        <div class="form-row">
+          <textarea id="facilities_equipment" name="facilities_equipment">${escapeHtml(r.facilities_equipment || '')}</textarea>
+        </div>
+
+        <div class="form-section-title">Hazards and control measures</div>
+        <p class="form-section-hint">Considering environmental hazards</p>
+        <div class="form-row">
+          <label for="environmental_hazards">Hazards</label>
+          <textarea id="environmental_hazards" name="environmental_hazards">${escapeHtml(r.environmental_hazards || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="environmental_controls">Control measures</label>
+          <textarea id="environmental_controls" name="environmental_controls">${escapeHtml(r.environmental_controls || '')}</textarea>
+        </div>
+
+        <p class="form-section-hint">Considering facilities and equipment hazards</p>
+        <div class="form-row">
+          <label for="facilities_hazards">Hazards</label>
+          <textarea id="facilities_hazards" name="facilities_hazards">${escapeHtml(r.facilities_hazards || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="facilities_controls">Control measures</label>
+          <textarea id="facilities_controls" name="facilities_controls">${escapeHtml(r.facilities_controls || '')}</textarea>
+        </div>
+
+        <p class="form-section-hint">Considering students</p>
+        <div class="form-row">
+          <label for="student_hazards">Hazards</label>
+          <textarea id="student_hazards" name="student_hazards">${escapeHtml(r.student_hazards || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="student_controls">Control measures</label>
+          <textarea id="student_controls" name="student_controls">${escapeHtml(r.student_controls || '')}</textarea>
+        </div>
+
+        <div class="form-section-title">Submitted by</div>
+        <div class="form-row">
+          <input type="text" id="submitted_by" name="submitted_by" value="${escapeHtml(r.submitted_by || '')}">
+        </div>
+
+        <div class="form-section-title">Change record</div>
+        <p class="form-section-hint">Your name will be recorded against this edit in the change history below.</p>
+        <div class="form-row">
+          <label for="edited_by">Your name</label>
+          <input type="text" id="edited_by" name="edited_by" required placeholder="Your name">
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save changes</button>
+          <a class="btn btn-secondary" href="/cara/${r.id}">Cancel</a>
+        </div>
+      </form>
+      <script>
+        function filterTools(query) {
+          const q = query.toLowerCase();
+          document.querySelectorAll('.tool-picker-item[data-search]').forEach((item) => {
+            item.style.display = item.dataset.search.includes(q) ? '' : 'none';
+          });
+        }
+      </script>
+    `;
+
+    res.send(page({ title: `Edit — ${r.activity_name}`, active: 'cara', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/cara/:id/edit', async (req, res, next) => {
+  try {
+    const {
+      activity_name, class_unit, activity_scope, risk_level,
+      students_notes, emergency_first_aid, induction_instruction, consent_required,
+      supervision_notes, supervisor_qualification, facilities_equipment,
+      environmental_hazards, environmental_controls,
+      facilities_hazards, facilities_controls,
+      student_hazards, student_controls,
+      submitted_by, edited_by,
+    } = req.body;
+
+    if (!activity_name || !RISK_LEVELS.includes(risk_level)) {
+      return res.status(400).send('Activity name and a valid risk level are required.');
+    }
+    if (!edited_by || !edited_by.trim()) {
+      return res.status(400).send('Your name is required to save an edit.');
+    }
+
+    const existingResult = await pool.query('SELECT * FROM cara_records WHERE id = $1', [req.params.id]);
+    if (existingResult.rows.length === 0) {
+      return res.status(404).send('CARA record not found.');
+    }
+    const before = existingResult.rows[0];
+
+    const linkedResult = await pool.query('SELECT pera_id FROM cara_tool_links WHERE cara_id = $1', [req.params.id]);
+    const beforeToolIds = linkedResult.rows.map((row) => String(row.pera_id));
+    const afterToolIds = [].concat(req.body.tool_ids || []).filter(Boolean).map(String);
+
+    const newConsentRequired = consent_required === 'true';
+
+    const fields = [
+      ['activity_name', 'Activity name', activity_name],
+      ['class_unit', 'Class / unit', class_unit || null],
+      ['activity_scope', 'Activity scope', activity_scope || null],
+      ['risk_level', 'Risk level', risk_level],
+      ['students_notes', 'Students', students_notes || null],
+      ['emergency_first_aid', 'Emergency and first aid', emergency_first_aid || null],
+      ['induction_instruction', 'Induction and instruction', induction_instruction || null],
+      ['supervision_notes', 'Supervision', supervision_notes || null],
+      ['supervisor_qualification', 'Supervisor qualification', supervisor_qualification || null],
+      ['facilities_equipment', 'Facilities and equipment', facilities_equipment || null],
+      ['environmental_hazards', 'Environmental hazards', environmental_hazards || null],
+      ['environmental_controls', 'Environmental control measures', environmental_controls || null],
+      ['facilities_hazards', 'Facilities and equipment hazards', facilities_hazards || null],
+      ['facilities_controls', 'Facilities and equipment control measures', facilities_controls || null],
+      ['student_hazards', 'Student hazards', student_hazards || null],
+      ['student_controls', 'Student control measures', student_controls || null],
+      ['submitted_by', 'Submitted by', submitted_by || null],
+    ];
+
+    const displayValue = (v) => ((v === null || v === undefined || String(v).trim() === '') ? '(empty)' : String(v));
+
+    const changeLines = [];
+    for (const [key, label, newValue] of fields) {
+      const oldValue = before[key];
+      const oldStr = (oldValue === null || oldValue === undefined) ? '' : String(oldValue);
+      const newStr = (newValue === null || newValue === undefined) ? '' : String(newValue);
+      if (oldStr.trim() !== newStr.trim()) {
+        changeLines.push(`${label}: ${displayValue(oldValue)} → ${displayValue(newValue)}`);
+      }
+    }
+
+    if (before.consent_required !== newConsentRequired) {
+      changeLines.push(`Parent consent required: ${before.consent_required ? 'Yes' : 'No'} → ${newConsentRequired ? 'Yes' : 'No'}`);
+    }
+
+    const beforeToolSet = new Set(beforeToolIds);
+    const afterToolSet = new Set(afterToolIds);
+    const addedToolIds = afterToolIds.filter((id) => !beforeToolSet.has(id));
+    const removedToolIds = beforeToolIds.filter((id) => !afterToolSet.has(id));
+    if (addedToolIds.length || removedToolIds.length) {
+      const allIds = [...new Set([...addedToolIds, ...removedToolIds])];
+      const namesResult = allIds.length
+        ? await pool.query('SELECT id, activity_name FROM pera_records WHERE id = ANY($1::int[])', [allIds])
+        : { rows: [] };
+      const nameById = new Map(namesResult.rows.map((row) => [String(row.id), row.activity_name]));
+      const parts = [];
+      if (addedToolIds.length) parts.push(`added ${addedToolIds.map((id) => nameById.get(id) || `#${id}`).join(', ')}`);
+      if (removedToolIds.length) parts.push(`removed ${removedToolIds.map((id) => nameById.get(id) || `#${id}`).join(', ')}`);
+      changeLines.push(`PERA used: ${parts.join('; ')}`);
+    }
+
+    if (changeLines.length === 0) {
+      return res.redirect(`/cara/${req.params.id}`);
+    }
+
+    await pool.query(
+      `UPDATE cara_records SET
+         activity_name = $1, class_unit = $2, activity_scope = $3, risk_level = $4,
+         students_notes = $5, emergency_first_aid = $6, induction_instruction = $7, consent_required = $8,
+         supervision_notes = $9, supervisor_qualification = $10, facilities_equipment = $11,
+         environmental_hazards = $12, environmental_controls = $13,
+         facilities_hazards = $14, facilities_controls = $15,
+         student_hazards = $16, student_controls = $17,
+         submitted_by = $18,
+         status = 'Draft', teacher_signature = NULL, signed_at = NULL,
+         approver = NULL, approved_at = NULL, next_review_date = NULL, review_notes = NULL,
+         updated_at = now()
+       WHERE id = $19`,
+      [
+        activity_name, class_unit || null, activity_scope || null, risk_level,
+        students_notes || null, emergency_first_aid || null, induction_instruction || null, newConsentRequired,
+        supervision_notes || null, supervisor_qualification || null, facilities_equipment || null,
+        environmental_hazards || null, environmental_controls || null,
+        facilities_hazards || null, facilities_controls || null,
+        student_hazards || null, student_controls || null,
+        submitted_by || null,
+        req.params.id,
+      ]
+    );
+
+    await pool.query('DELETE FROM cara_tool_links WHERE cara_id = $1', [req.params.id]);
+    if (afterToolIds.length) {
+      const values = afterToolIds.map((_, i) => `($1, $${i + 2})`).join(',');
+      await pool.query(
+        `INSERT INTO cara_tool_links (cara_id, pera_id) VALUES ${values} ON CONFLICT DO NOTHING`,
+        [req.params.id, ...afterToolIds]
+      );
+    }
+
+    await pool.query(
+      'INSERT INTO cara_change_log (cara_id, changed_by, summary) VALUES ($1, $2, $3)',
+      [req.params.id, edited_by.trim(), changeLines.join('\n')]
+    );
+
+    res.redirect(`/cara/${req.params.id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.get('/cara/:id', async (req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM cara_records WHERE id = $1', [req.params.id]);
@@ -875,6 +1115,20 @@ app.get('/cara/:id', async (req, res, next) => {
        ORDER BY ra.activity_name`,
       [req.params.id]
     );
+
+    const changeLogResult = await pool.query(
+      'SELECT * FROM cara_change_log WHERE cara_id = $1 ORDER BY changed_at DESC',
+      [req.params.id]
+    );
+
+    const changeLogHtml = changeLogResult.rows.length
+      ? changeLogResult.rows.map((c) => `
+          <div class="detail-section">
+            <div class="detail-label">${escapeHtml(c.changed_by || 'Unknown')} — ${formatDate(c.changed_at)}</div>
+            <div class="detail-value">${escapeHtml(c.summary)}</div>
+          </div>
+        `).join('')
+      : `<div class="detail-value">No edits recorded yet.</div>`;
 
     const toolChips = toolsResult.rows.length
       ? `<div class="tool-chip-list">${toolsResult.rows.map((t) => `
@@ -1113,6 +1367,7 @@ app.get('/cara/:id', async (req, res, next) => {
         </div>
         <div class="card" style="padding:22px;">
           <a class="btn btn-secondary" href="/cara/${r.id}/pdf" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-bottom:14px;">Download PDF</a>
+          <a class="btn btn-secondary" href="/cara/${r.id}/edit" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-bottom:10px;">Edit this CARA</a>
           <form method="post" action="/cara/${r.id}/duplicate" style="margin-bottom:10px;">
             <button type="submit" class="btn btn-secondary" style="width:100%;">Duplicate as new CARA</button>
           </form>
@@ -1123,6 +1378,10 @@ app.get('/cara/:id', async (req, res, next) => {
           <div class="note-box">${caraApprovalRequirement(r.risk_level)}</div>
           ${actionsHtml}
         </div>
+      </div>
+      <div class="card" style="padding:22px;margin-top:20px;">
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Change history</div>
+        ${changeLogHtml}
       </div>
     `;
 
@@ -1395,1018 +1654,11 @@ app.post('/cara/:id/archive', async (req, res, next) => {
     next(err);
   }
 });
+
 app.post('/cara/:id/unarchive', async (req, res, next) => {
   try {
     await pool.query('UPDATE cara_records SET archived = false, updated_at = now() WHERE id = $1', [req.params.id]);
     res.redirect(`/cara/${req.params.id}`);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ---------- Equipment Register: list ----------
-// Physical asset inventory for tools/machinery/PPE — separate from PERA (which
-// documents the risk assessment for a piece of plant/equipment). An equipment
-// item can optionally link to the PERA record that covers it. Viewing is open
-// to all staff; adding/editing/deleting is admin-only (see /admin/equipment/*).
-
-app.get('/equipment', async (req, res, next) => {
-  try {
-    const { category, status, q, overdue } = req.query;
-    const showArchived = req.query.archived === '1';
-    const conditions = [];
-    const params = [];
-
-    params.push(showArchived);
-    conditions.push(`e.archived = $${params.length}`);
-
-    if (category && EQUIPMENT_CATEGORIES.includes(category)) {
-      params.push(category);
-      conditions.push(`e.category = $${params.length}`);
-    }
-    if (status && EQUIPMENT_STATUSES.includes(status)) {
-      params.push(status);
-      conditions.push(`e.status = $${params.length}`);
-    }
-    if (q) {
-      params.push(`%${q}%`);
-      conditions.push(`(e.name ILIKE $${params.length} OR e.asset_tag ILIKE $${params.length} OR e.serial_number ILIKE $${params.length})`);
-    }
-    if (overdue === '1') {
-      conditions.push(`e.next_inspection_due IS NOT NULL AND e.next_inspection_due < CURRENT_DATE`);
-    }
-
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const result = await pool.query(
-      `SELECT e.*, p.activity_name AS pera_name
-       FROM equipment_records e
-       LEFT JOIN pera_records p ON p.id = e.pera_id
-       ${where} ORDER BY e.name ASC`,
-      params
-    );
-
-    const catChips = ['All', ...EQUIPMENT_CATEGORIES].map((cat) => {
-      const isActive = cat === 'All' ? !category : category === cat;
-      const chipParams = new URLSearchParams();
-      if (cat !== 'All') chipParams.set('category', cat);
-      if (status) chipParams.set('status', status);
-      if (showArchived) chipParams.set('archived', '1');
-      const qs = chipParams.toString();
-      return `<a class="chip${isActive ? ' active' : ''}" href="/equipment${qs ? `?${qs}` : ''}">${cat}</a>`;
-    }).join('');
-
-    const statusOptions = ['All', ...EQUIPMENT_STATUSES].map(
-      (s) => `<option value="${s === 'All' ? '' : s}" ${(!status && s === 'All') || status === s ? 'selected' : ''}>${s}</option>`
-    ).join('');
-
-    let rowsHtml;
-    if (result.rows.length === 0) {
-      rowsHtml = showArchived
-        ? `<div class="empty-state">No archived equipment records.</div>`
-        : `<div class="empty-state">No equipment recorded yet.</div>`;
-    } else {
-      const rows = result.rows.map((r) => {
-        const insp = inspectionBadge(r.next_inspection_due);
-        return `
-        <tr class="row-link" onclick="window.location='/equipment/${r.id}'">
-          <td>${escapeHtml(r.name)}${r.asset_tag ? ` <span style="color:#8B8578;">(${escapeHtml(r.asset_tag)})</span>` : ''}</td>
-          <td>${escapeHtml(r.category)}</td>
-          <td>${escapeHtml(r.location || '—')}</td>
-          <td><span class="badge ${equipmentStatusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
-          <td><span class="badge ${insp.cls}">${insp.label}</span></td>
-        </tr>
-      `;
-      }).join('');
-      rowsHtml = `
-        <table>
-          <thead>
-            <tr>
-              <th>Item</th>
-              <th>Category</th>
-              <th>Location</th>
-              <th>Status</th>
-              <th>Inspection</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      `;
-    }
-
-    const body = `
-      <div class="page-header">
-        <div>
-          <h1 class="page-title">${showArchived ? 'Archived Equipment' : 'Equipment Register'}</h1>
-          <p class="page-subtitle">${showArchived
-            ? 'Equipment records that have been archived and are hidden from the main register.'
-            : 'Tools, machinery and PPE inventory across IDT and VET workshops, with inspection/test-and-tag due dates.'}</p>
-        </div>
-        ${showArchived
-          ? `<a class="btn btn-secondary" href="/equipment">← Back to active</a>`
-          : `<a class="btn btn-primary" href="/admin/equipment/new">+ Add equipment</a>`}
-      </div>
-      <div class="filter-row">
-        <form method="get" action="/equipment">
-          ${category ? `<input type="hidden" name="category" value="${escapeHtml(category)}">` : ''}
-          ${showArchived ? `<input type="hidden" name="archived" value="1">` : ''}
-          <input class="search-input" type="search" name="q" placeholder="Search name, asset tag, serial..." value="${escapeHtml(q || '')}">
-          <select name="status" onchange="this.form.submit()">${statusOptions}</select>
-        </form>
-        <div class="chip-row">${catChips}</div>
-      </div>
-      <p style="margin:-10px 0 18px;">
-        <a href="/equipment?overdue=1${showArchived ? '&archived=1' : ''}" style="font-size:13px;color:#B3261E;text-decoration:underline;">Show overdue inspections only →</a>
-        &nbsp;·&nbsp; <a href="/equipment/by-room" style="font-size:13px;color:#1B5E52;text-decoration:underline;">View by room →</a>
-        ${!showArchived ? ` &nbsp;·&nbsp; <a href="/equipment?archived=1" style="font-size:13px;color:#6B6659;text-decoration:underline;">View archived equipment →</a>` : ''}
-      </p>
-      <div class="card">${rowsHtml}</div>
-    `;
-
-    res.send(page({ title: showArchived ? 'Archived Equipment' : 'Equipment Register', active: 'equipment', body }));
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ---------- Equipment Register: by room ----------
-// Groups active equipment by Location so a maintenance person can walk into
-// a room and see everything there that needs checking, without hunting
-// through the full register. Registered before /equipment/:id so "by-room"
-// isn't swallowed as an :id.
-
-app.get('/equipment/by-room', async (req, res, next) => {
-  try {
-    const onlyDue = req.query.due === '1';
-    const result = await pool.query(
-      `SELECT * FROM equipment_records WHERE archived = false ORDER BY name ASC`
-    );
-
-    const urgencyRank = (r) => {
-      const cls = inspectionBadge(r.next_inspection_due).cls;
-      if (cls === 'badge-changes') return 0; // Overdue
-      if (cls === 'badge-pending') return 1; // Due soon
-      if (cls === 'badge-draft') return 2; // Not scheduled
-      return 3; // Ok
-    };
-
-    const groups = new Map();
-    result.rows.forEach((r) => {
-      const loc = r.location || 'No location assigned';
-      if (!groups.has(loc)) groups.set(loc, []);
-      groups.get(loc).push(r);
-    });
-
-    const roomNames = [...groups.keys()].sort((a, b) => {
-      if (a === 'No location assigned') return 1;
-      if (b === 'No location assigned') return -1;
-      return a.localeCompare(b);
-    });
-
-    let totalOverdue = 0;
-    let totalDueSoon = 0;
-    result.rows.forEach((r) => {
-      const cls = inspectionBadge(r.next_inspection_due).cls;
-      if (cls === 'badge-changes') totalOverdue += 1;
-      if (cls === 'badge-pending') totalDueSoon += 1;
-    });
-
-    const roomSections = roomNames.map((roomName) => {
-      let items = groups.get(roomName).slice().sort((a, b) => {
-        const rankDiff = urgencyRank(a) - urgencyRank(b);
-        return rankDiff !== 0 ? rankDiff : a.name.localeCompare(b.name);
-      });
-      const roomOverdue = items.filter((r) => urgencyRank(r) === 0).length;
-      const roomDueSoon = items.filter((r) => urgencyRank(r) === 1).length;
-      if (onlyDue) items = items.filter((r) => urgencyRank(r) <= 1);
-      if (items.length === 0) return '';
-
-      const rows = items.map((r) => {
-        const insp = inspectionBadge(r.next_inspection_due);
-        return `
-          <tr class="row-link" onclick="window.location='/equipment/${r.id}'">
-            <td>${escapeHtml(r.name)}${r.asset_tag ? ` <span style="color:#8B8578;">(${escapeHtml(r.asset_tag)})</span>` : ''}</td>
-            <td>${escapeHtml(r.category)}</td>
-            <td><span class="badge ${equipmentStatusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
-            <td><span class="badge ${insp.cls}">${insp.label}</span></td>
-            <td onclick="event.stopPropagation();"><a class="btn btn-secondary" href="/equipment/${r.id}/check" style="padding:4px 12px;font-size:13px;">Log check</a></td>
-          </tr>
-        `;
-      }).join('');
-
-      return `
-        <div class="page-header" style="margin-top:28px;margin-bottom:8px;">
-          <h2 style="margin:0;font-size:18px;">${escapeHtml(roomName)}</h2>
-          <span style="font-size:13px;color:#6B6659;">
-            ${roomOverdue ? `<span style="color:#B3261E;font-weight:600;">${roomOverdue} overdue</span>` : ''}
-            ${roomOverdue && roomDueSoon ? ' · ' : ''}
-            ${roomDueSoon ? `${roomDueSoon} due soon` : ''}
-            ${!roomOverdue && !roomDueSoon ? 'All clear' : ''}
-          </span>
-        </div>
-        <div class="card">
-          <table>
-            <thead>
-              <tr><th>Item</th><th>Category</th><th>Status</th><th>Inspection</th><th></th></tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-      `;
-    }).filter(Boolean).join('');
-
-    const body = `
-      <a class="back-link" href="/equipment">← Back to Equipment Register</a>
-      <div class="page-header">
-        <div>
-          <h1 class="page-title">Equipment by Room</h1>
-          <p class="page-subtitle">What needs checking, grouped by workshop/area — for walking a room and clearing its maintenance checks.</p>
-        </div>
-      </div>
-      <p style="margin:-10px 0 18px;font-size:13px;">
-        ${totalOverdue ? `<span style="color:#B3261E;font-weight:600;">${totalOverdue} overdue</span>` : ''}
-        ${totalOverdue && totalDueSoon ? ' · ' : ''}
-        ${totalDueSoon ? `<span style="color:#8A6D00;font-weight:600;">${totalDueSoon} due soon</span>` : ''}
-        ${!totalOverdue && !totalDueSoon ? '<span style="color:#1B5E52;">Nothing overdue or due soon.</span>' : ''}
-        &nbsp;·&nbsp;
-        ${onlyDue
-          ? `<a href="/equipment/by-room" style="color:#6B6659;text-decoration:underline;">Show all equipment →</a>`
-          : `<a href="/equipment/by-room?due=1" style="color:#6B6659;text-decoration:underline;">Show only overdue/due soon →</a>`}
-      </p>
-      ${roomSections || `<div class="empty-state">${onlyDue ? 'Nothing overdue or due soon.' : 'No equipment recorded yet.'}</div>`}
-    `;
-
-    res.send(page({ title: 'Equipment by Room', active: 'equipment', body }));
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ---------- Equipment Register: detail ----------
-
-app.get('/equipment/:id', async (req, res, next) => {
-  try {
-    const result = await pool.query(
-      `SELECT e.*, p.activity_name AS pera_name
-       FROM equipment_records e
-       LEFT JOIN pera_records p ON p.id = e.pera_id
-       WHERE e.id = $1`,
-      [req.params.id]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).send('Equipment record not found.');
-    }
-    const r = result.rows[0];
-    const insp = inspectionBadge(r.next_inspection_due);
-
-    const checksResult = await pool.query(
-      'SELECT * FROM equipment_checks WHERE equipment_id = $1 ORDER BY checked_at DESC LIMIT 10',
-      [req.params.id]
-    );
-    const latestCheck = checksResult.rows[0];
-
-    // Results are stored per-check (each row snapshotting the checklist item's
-    // label + pass/fail at the time), so pull them all in one query and group
-    // by check_id rather than re-querying per row.
-    const checkIds = checksResult.rows.map((c) => c.id);
-    const resultsByCheck = {};
-    if (checkIds.length) {
-      const resultsResult = await pool.query(
-        'SELECT * FROM equipment_check_results WHERE check_id = ANY($1) ORDER BY sort_order ASC, id ASC',
-        [checkIds]
-      );
-      resultsResult.rows.forEach((row) => {
-        (resultsByCheck[row.check_id] = resultsByCheck[row.check_id] || []).push(row);
-      });
-    }
-    const latestCheckItems = latestCheck ? (resultsByCheck[latestCheck.id] || []) : [];
-
-    const checkHistoryRows = checksResult.rows.map((c) => {
-      const items = resultsByCheck[c.id] || [];
-      const failCount = items.filter((item) => !item.ok).length;
-      return `
-        <tr>
-          <td>${formatDate(c.checked_at)}</td>
-          <td>${escapeHtml(c.checked_by || '—')}</td>
-          <td><span class="badge ${failCount === 0 ? 'badge-approved' : 'badge-changes'}">${failCount === 0 ? 'All clear' : `${failCount} issue${failCount === 1 ? '' : 's'}`}</span></td>
-        </tr>
-      `;
-    }).join('');
-
-    const body = `
-      <a class="back-link" href="/equipment">← Back to Equipment Register</a>
-      <div class="page-header">
-        <div>
-          <h1 class="page-title">${escapeHtml(r.name)}</h1>
-          <p class="page-subtitle">${escapeHtml(r.category)}${r.asset_tag ? ` · Asset tag ${escapeHtml(r.asset_tag)}` : ''}</p>
-        </div>
-        <span>
-          <a class="btn btn-primary" href="/equipment/${r.id}/check">Log maintenance check</a>
-          <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit">Edit</a>
-        </span>
-      </div>
-      <div class="stat-grid">
-        <div class="stat-tile">
-          <div class="stat-label">Status</div>
-          <div class="stat-value" style="font-size:16px;"><span class="badge ${equipmentStatusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></div>
-        </div>
-        <div class="stat-tile">
-          <div class="stat-label">Next inspection</div>
-          <div class="stat-value" style="font-size:16px;"><span class="badge ${insp.cls}">${insp.label}</span></div>
-        </div>
-      </div>
-      <div class="card" style="padding:24px;">
-        <div class="detail-grid">
-          <div><div class="detail-label">Location</div><div>${escapeHtml(r.location || '—')}</div></div>
-          <div><div class="detail-label">Manufacturer</div><div>${escapeHtml(r.manufacturer || '—')}</div></div>
-          <div><div class="detail-label">Serial number</div><div>${escapeHtml(r.serial_number || '—')}</div></div>
-          <div><div class="detail-label">Test/tag number</div><div>${escapeHtml(r.test_tag_number || '—')}</div></div>
-          <div><div class="detail-label">Responsible person</div><div>${escapeHtml(r.responsible_person || '—')}</div></div>
-          <div><div class="detail-label">Purchase date</div><div>${formatDate(r.purchase_date)}</div></div>
-          <div><div class="detail-label">Inspection frequency</div><div>${escapeHtml(r.inspection_frequency || '—')}</div></div>
-          <div><div class="detail-label">Last inspection</div><div>${formatDate(r.last_inspection_date)}</div></div>
-          <div><div class="detail-label">Linked PERA</div><div>${r.pera_id ? `<a href="/pera/${r.pera_id}" style="color:#1B5E52;font-weight:600;">${escapeHtml(r.pera_name)} →</a>` : '—'}</div></div>
-        </div>
-        ${r.condition_notes ? `<div style="margin-top:20px;"><div class="detail-label">Condition notes</div><p style="margin:6px 0 0;white-space:pre-wrap;">${escapeHtml(r.condition_notes)}</p></div>` : ''}
-      </div>
-      <div class="form-section-title">Maintenance checks</div>
-      ${latestCheck ? `
-        <div class="card" style="padding:24px;margin-bottom:16px;">
-          <p style="margin:0 0 12px;font-size:13px;color:#6B6659;">Last checked ${formatDate(latestCheck.checked_at)}${latestCheck.checked_by ? ` by ${escapeHtml(latestCheck.checked_by)}` : ''}.</p>
-          <div class="detail-grid">
-            ${latestCheckItems.map((item) => `
-              <div><div class="detail-label">${escapeHtml(item.label)}</div><div><span class="badge ${item.ok ? 'badge-approved' : 'badge-changes'}">${item.ok ? 'OK' : 'Not OK'}</span></div></div>
-            `).join('')}
-          </div>
-          ${latestCheck.notes ? `<div style="margin-top:16px;"><div class="detail-label">Notes</div><p style="margin:6px 0 0;white-space:pre-wrap;">${escapeHtml(latestCheck.notes)}</p></div>` : ''}
-        </div>
-      ` : `<div class="card" style="padding:24px;margin-bottom:16px;"><p style="margin:0;font-size:14px;color:#6B6659;">No maintenance checks logged yet.</p></div>`}
-      ${checksResult.rows.length ? `
-        <div class="card">
-          <table>
-            <thead><tr><th>Date</th><th>Checked by</th><th>Result</th></tr></thead>
-            <tbody>${checkHistoryRows}</tbody>
-          </table>
-        </div>
-      ` : ''}
-    `;
-
-    res.send(page({ title: r.name, active: 'equipment', body }));
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ---------- Equipment Register: maintenance check ----------
-// Open to any staff member (like PERA/CARA submission, unlike editing the
-// equipment record itself) so a maintenance person can log a check without
-// needing the admin password. Submitting updates the item's last/next
-// inspection dates and flips status to Under repair if anything failed, or
-// In service if everything checked out.
-
-app.get('/equipment/:id/check', async (req, res, next) => {
-  try {
-    const result = await pool.query('SELECT * FROM equipment_records WHERE id = $1', [req.params.id]);
-    if (result.rows.length === 0) {
-      return res.status(404).send('Equipment record not found.');
-    }
-    const r = result.rows[0];
-
-    const itemsResult = await pool.query(
-      'SELECT * FROM equipment_check_items WHERE equipment_id = $1 ORDER BY sort_order ASC, id ASC',
-      [req.params.id]
-    );
-
-    if (itemsResult.rows.length === 0) {
-      const body = `
-        <a class="back-link" href="/equipment/${r.id}">← Back to ${escapeHtml(r.name)}</a>
-        <h1 class="page-title" style="margin-bottom:8px;">Maintenance check: ${escapeHtml(r.name)}</h1>
-        <div class="empty-state">This item doesn't have any checklist items set up yet. <a href="/admin/equipment/${r.id}/edit" style="color:#1B5E52;">Add some from the Edit page →</a></div>
-      `;
-      return res.send(page({ title: `Maintenance check — ${r.name}`, active: 'equipment', body }));
-    }
-
-    const itemsHtml = itemsResult.rows.map((item) => `
-      <div class="form-row checkbox-row">
-        <input type="checkbox" id="item_${item.id}" name="item_${item.id}" value="true">
-        <label for="item_${item.id}">${escapeHtml(item.label)}</label>
-      </div>
-    `).join('');
-
-    const body = `
-      <a class="back-link" href="/equipment/${r.id}">← Back to ${escapeHtml(r.name)}</a>
-      <h1 class="page-title" style="margin-bottom:8px;">Maintenance check: ${escapeHtml(r.name)}</h1>
-      <p class="page-subtitle" style="margin-bottom:24px;">Tick off each item once you've confirmed it. Leave anything unticked that isn't OK — the item will be marked as needing attention.</p>
-      <form class="form-card" method="post" action="/equipment/${r.id}/check">
-        ${itemsHtml}
-        <div class="form-row">
-          <label for="notes">Notes</label>
-          <textarea id="notes" name="notes" placeholder="Any issues found, parts needed, follow-up required..."></textarea>
-        </div>
-        <div class="form-row">
-          <label for="checked_by">Checked by</label>
-          <input type="text" id="checked_by" name="checked_by" placeholder="Your name" required>
-        </div>
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary">Submit check</button>
-          <a class="btn btn-secondary" href="/equipment/${r.id}">Cancel</a>
-        </div>
-      </form>
-    `;
-
-    res.send(page({ title: `Maintenance check — ${r.name}`, active: 'equipment', body }));
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/equipment/:id/check', async (req, res, next) => {
-  try {
-    const equipmentResult = await pool.query('SELECT * FROM equipment_records WHERE id = $1', [req.params.id]);
-    if (equipmentResult.rows.length === 0) {
-      return res.status(404).send('Equipment record not found.');
-    }
-    const equipment = equipmentResult.rows[0];
-
-    const itemsResult = await pool.query(
-      'SELECT * FROM equipment_check_items WHERE equipment_id = $1 ORDER BY sort_order ASC, id ASC',
-      [req.params.id]
-    );
-    if (itemsResult.rows.length === 0) {
-      return res.status(400).send('This item has no checklist items set up — add some from its Edit page first.');
-    }
-
-    const checkedItems = itemsResult.rows.map((item) => ({
-      label: item.label,
-      sort_order: item.sort_order,
-      ok: req.body[`item_${item.id}`] === 'true',
-    }));
-    const allOk = checkedItems.every((item) => item.ok);
-
-    const checkResult = await pool.query(
-      `INSERT INTO equipment_checks (equipment_id, checked_by, notes) VALUES ($1,$2,$3) RETURNING id`,
-      [req.params.id, req.body.checked_by || null, req.body.notes || null]
-    );
-    const checkId = checkResult.rows[0].id;
-
-    const values = [];
-    const placeholders = checkedItems.map((item, i) => {
-      const base = i * 4;
-      values.push(checkId, item.label, item.ok, item.sort_order);
-      return `($${base + 1},$${base + 2},$${base + 3},$${base + 4})`;
-    }).join(',');
-    await pool.query(
-      `INSERT INTO equipment_check_results (check_id, label, ok, sort_order) VALUES ${placeholders}`,
-      values
-    );
-
-    const today = new Date().toISOString().slice(0, 10);
-    const nextDue = addInspectionInterval(today, equipment.inspection_frequency) || equipment.next_inspection_due;
-    const newStatus = allOk ? 'In service' : 'Under repair';
-
-    await pool.query(
-      `UPDATE equipment_records
-       SET last_inspection_date = $1, next_inspection_due = $2, status = $3, updated_at = now()
-       WHERE id = $4`,
-      [today, nextDue, newStatus, req.params.id]
-    );
-
-    res.redirect(`/equipment/${req.params.id}`);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ---------- Equipment Register: admin add/edit/delete ----------
-// Adding and editing equipment is admin-only (unlike PERA/CARA, which any
-// staff member can submit) — the register is a managed asset list, not a
-// document teachers author.
-
-function equipmentFormFields(r = {}) {
-  const categoryOptions = EQUIPMENT_CATEGORIES.map(
-    (c) => `<option value="${c}" ${r.category === c ? 'selected' : ''}>${c}</option>`
-  ).join('');
-  const statusOptions = EQUIPMENT_STATUSES.map(
-    (s) => `<option value="${s}" ${(r.status || 'In service') === s ? 'selected' : ''}>${s}</option>`
-  ).join('');
-  const frequencyOptions = `<option value="">— None —</option>` + INSPECTION_FREQUENCIES.map(
-    (f) => `<option value="${f}" ${r.inspection_frequency === f ? 'selected' : ''}>${f}</option>`
-  ).join('');
-  return { categoryOptions, statusOptions, frequencyOptions };
-}
-
-app.get('/admin/equipment/new', requireAdmin, async (req, res, next) => {
-  try {
-    const peraResult = await pool.query('SELECT id, activity_name FROM pera_records ORDER BY activity_name ASC');
-    const peraOptions = peraResult.rows.map((p) => `<option value="${p.id}">${escapeHtml(p.activity_name)}</option>`).join('');
-    const locationsResult = await pool.query('SELECT name FROM equipment_locations ORDER BY name ASC');
-    const locationOptions = locationsResult.rows.map((l) => `<option value="${escapeHtml(l.name)}">${escapeHtml(l.name)}</option>`).join('');
-    const { categoryOptions, statusOptions, frequencyOptions } = equipmentFormFields();
-
-    const body = `
-      <a class="back-link" href="/equipment">← Back to Equipment Register</a>
-      <h1 class="page-title" style="margin-bottom:24px;">Add equipment</h1>
-      <form class="form-card" method="post" action="/admin/equipment">
-        <div class="form-row">
-          <label for="name">Item name</label>
-          <input type="text" id="name" name="name" required placeholder="e.g. Makita LS1019L drop saw">
-        </div>
-        <div class="form-row">
-          <label for="asset_tag">Asset tag</label>
-          <input type="text" id="asset_tag" name="asset_tag" placeholder="e.g. IDT-014">
-        </div>
-        <div class="form-row">
-          <label for="category">Category</label>
-          <select id="category" name="category" required>${categoryOptions}</select>
-        </div>
-        <div class="form-row">
-          <label for="status">Status</label>
-          <select id="status" name="status" required>${statusOptions}</select>
-        </div>
-        <div class="form-row">
-          <label for="location">Location</label>
-          <select id="location" name="location">
-            <option value="">— None —</option>
-            ${locationOptions}
-          </select>
-          <p class="form-section-hint"><a href="/admin/locations" style="color:#1B5E52;">Manage locations →</a></p>
-        </div>
-        <div class="form-row">
-          <label for="manufacturer">Manufacturer</label>
-          <input type="text" id="manufacturer" name="manufacturer">
-        </div>
-        <div class="form-row">
-          <label for="serial_number">Serial number</label>
-          <input type="text" id="serial_number" name="serial_number">
-        </div>
-        <div class="form-row">
-          <label for="test_tag_number">Test/tag number</label>
-          <input type="text" id="test_tag_number" name="test_tag_number" placeholder="Electrical test &amp; tag sticker number, if applicable">
-        </div>
-        <div class="form-row">
-          <label for="responsible_person">Responsible person</label>
-          <input type="text" id="responsible_person" name="responsible_person">
-        </div>
-        <div class="form-row">
-          <label for="purchase_date">Purchase date</label>
-          <input type="date" id="purchase_date" name="purchase_date">
-        </div>
-        <div class="form-row">
-          <label for="inspection_frequency">Inspection frequency</label>
-          <select id="inspection_frequency" name="inspection_frequency">${frequencyOptions}</select>
-        </div>
-        <div class="form-row">
-          <label for="last_inspection_date">Last inspection date</label>
-          <input type="date" id="last_inspection_date" name="last_inspection_date">
-        </div>
-        <div class="form-row">
-          <label for="next_inspection_due">Next inspection due</label>
-          <input type="date" id="next_inspection_due" name="next_inspection_due" placeholder="Leave blank to calculate from last inspection + frequency">
-        </div>
-        <div class="form-row">
-          <label for="pera_id">Linked PERA (optional)</label>
-          <select id="pera_id" name="pera_id">
-            <option value="">— None —</option>
-            ${peraOptions}
-          </select>
-        </div>
-        <div class="form-row">
-          <label for="condition_notes">Condition notes</label>
-          <textarea id="condition_notes" name="condition_notes"></textarea>
-        </div>
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary">Add equipment</button>
-          <a class="btn btn-secondary" href="/equipment">Cancel</a>
-        </div>
-      </form>
-    `;
-
-    res.send(page({ title: 'Add equipment', active: 'equipment', body }));
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/admin/equipment', requireAdmin, async (req, res, next) => {
-  try {
-    const {
-      name, asset_tag, category, status, location, manufacturer, serial_number,
-      test_tag_number, responsible_person, purchase_date,
-      inspection_frequency, last_inspection_date, next_inspection_due,
-      pera_id, condition_notes,
-    } = req.body;
-
-    if (!name || !EQUIPMENT_CATEGORIES.includes(category)) {
-      return res.status(400).send('Item name and a valid category are required.');
-    }
-
-    const validFrequency = INSPECTION_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
-    const computedNextDue = next_inspection_due
-      || addInspectionInterval(last_inspection_date, validFrequency);
-
-    const result = await pool.query(
-      `INSERT INTO equipment_records
-        (name, asset_tag, category, status, location, manufacturer, serial_number,
-         test_tag_number, responsible_person, purchase_date,
-         inspection_frequency, last_inspection_date, next_inspection_due,
-         pera_id, condition_notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-       RETURNING id`,
-      [
-        name, asset_tag || null, category, EQUIPMENT_STATUSES.includes(status) ? status : 'In service',
-        location || null, manufacturer || null, serial_number || null,
-        test_tag_number || null, responsible_person || null, purchase_date || null,
-        validFrequency, last_inspection_date || null, computedNextDue || null,
-        pera_id || null, condition_notes || null,
-      ]
-    );
-
-    const newEquipmentId = result.rows[0].id;
-    const seedValues = [];
-    const seedPlaceholders = DEFAULT_CHECK_ITEMS.map((label, i) => {
-      const base = i * 3;
-      seedValues.push(newEquipmentId, label, i + 1);
-      return `($${base + 1},$${base + 2},$${base + 3})`;
-    }).join(',');
-    await pool.query(
-      `INSERT INTO equipment_check_items (equipment_id, label, sort_order) VALUES ${seedPlaceholders}`,
-      seedValues
-    );
-
-    res.redirect(`/equipment/${newEquipmentId}`);
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
-  try {
-    const result = await pool.query('SELECT * FROM equipment_records WHERE id = $1', [req.params.id]);
-    if (result.rows.length === 0) {
-      return res.status(404).send('Equipment record not found.');
-    }
-    const r = result.rows[0];
-    const peraResult = await pool.query('SELECT id, activity_name FROM pera_records ORDER BY activity_name ASC');
-    const peraOptions = peraResult.rows.map(
-      (p) => `<option value="${p.id}" ${r.pera_id === p.id ? 'selected' : ''}>${escapeHtml(p.activity_name)}</option>`
-    ).join('');
-    const locationsResult = await pool.query('SELECT name FROM equipment_locations ORDER BY name ASC');
-    const knownLocations = locationsResult.rows.map((l) => l.name);
-    if (r.location && !knownLocations.includes(r.location)) knownLocations.push(r.location);
-    const locationOptions = knownLocations.map(
-      (name) => `<option value="${escapeHtml(name)}" ${r.location === name ? 'selected' : ''}>${escapeHtml(name)}</option>`
-    ).join('');
-    const { categoryOptions, statusOptions, frequencyOptions } = equipmentFormFields(r);
-    const dateVal = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
-
-    const checkItemsResult = await pool.query(
-      'SELECT * FROM equipment_check_items WHERE equipment_id = $1 ORDER BY sort_order ASC, id ASC',
-      [req.params.id]
-    );
-    const checkItemRows = checkItemsResult.rows.map((item) => `
-      <tr>
-        <td>
-          <form method="post" action="/admin/equipment/${r.id}/check-items/${item.id}" style="display:flex;gap:8px;align-items:center;">
-            <input type="text" name="label" value="${escapeHtml(item.label)}" style="max-width:320px;">
-            <button type="submit" class="btn btn-secondary" style="padding:4px 12px;font-size:13px;">Save</button>
-          </form>
-        </td>
-        <td style="text-align:right;">
-          <form method="post" action="/admin/equipment/${r.id}/check-items/${item.id}/delete" style="display:inline;" onsubmit="return confirm('Remove this checklist item?');">
-            <button type="submit" class="btn btn-secondary" style="padding:4px 12px;font-size:13px;color:#B3261E;border-color:#B3261E;">Remove</button>
-          </form>
-        </td>
-      </tr>
-    `).join('');
-
-    const body = `
-      <a class="back-link" href="/equipment/${r.id}">← Back to ${escapeHtml(r.name)}</a>
-      <h1 class="page-title" style="margin-bottom:24px;">Edit: ${escapeHtml(r.name)}</h1>
-      <form class="form-card" method="post" action="/admin/equipment/${r.id}">
-        <div class="form-row">
-          <label for="name">Item name</label>
-          <input type="text" id="name" name="name" value="${escapeHtml(r.name)}" required>
-        </div>
-        <div class="form-row">
-          <label for="asset_tag">Asset tag</label>
-          <input type="text" id="asset_tag" name="asset_tag" value="${escapeHtml(r.asset_tag || '')}">
-        </div>
-        <div class="form-row">
-          <label for="category">Category</label>
-          <select id="category" name="category" required>${categoryOptions}</select>
-        </div>
-        <div class="form-row">
-          <label for="status">Status</label>
-          <select id="status" name="status" required>${statusOptions}</select>
-        </div>
-        <div class="form-row">
-          <label for="location">Location</label>
-          <select id="location" name="location">
-            <option value="">— None —</option>
-            ${locationOptions}
-          </select>
-          <p class="form-section-hint"><a href="/admin/locations" style="color:#1B5E52;">Manage locations →</a></p>
-        </div>
-        <div class="form-row">
-          <label for="manufacturer">Manufacturer</label>
-          <input type="text" id="manufacturer" name="manufacturer" value="${escapeHtml(r.manufacturer || '')}">
-        </div>
-        <div class="form-row">
-          <label for="serial_number">Serial number</label>
-          <input type="text" id="serial_number" name="serial_number" value="${escapeHtml(r.serial_number || '')}">
-        </div>
-        <div class="form-row">
-          <label for="test_tag_number">Test/tag number</label>
-          <input type="text" id="test_tag_number" name="test_tag_number" value="${escapeHtml(r.test_tag_number || '')}">
-        </div>
-        <div class="form-row">
-          <label for="responsible_person">Responsible person</label>
-          <input type="text" id="responsible_person" name="responsible_person" value="${escapeHtml(r.responsible_person || '')}">
-        </div>
-        <div class="form-row">
-          <label for="purchase_date">Purchase date</label>
-          <input type="date" id="purchase_date" name="purchase_date" value="${dateVal(r.purchase_date)}">
-        </div>
-        <div class="form-row">
-          <label for="inspection_frequency">Inspection frequency</label>
-          <select id="inspection_frequency" name="inspection_frequency">${frequencyOptions}</select>
-        </div>
-        <div class="form-row">
-          <label for="last_inspection_date">Last inspection date</label>
-          <input type="date" id="last_inspection_date" name="last_inspection_date" value="${dateVal(r.last_inspection_date)}">
-        </div>
-        <div class="form-row">
-          <label for="next_inspection_due">Next inspection due</label>
-          <input type="date" id="next_inspection_due" name="next_inspection_due" value="${dateVal(r.next_inspection_due)}">
-        </div>
-        <div class="form-row">
-          <label for="pera_id">Linked PERA (optional)</label>
-          <select id="pera_id" name="pera_id">
-            <option value="">— None —</option>
-            ${peraOptions}
-          </select>
-        </div>
-        <div class="form-row">
-          <label for="condition_notes">Condition notes</label>
-          <textarea id="condition_notes" name="condition_notes">${escapeHtml(r.condition_notes || '')}</textarea>
-        </div>
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary">Save changes</button>
-          <a class="btn btn-secondary" href="/equipment/${r.id}">Cancel</a>
-        </div>
-      </form>
-      <div class="form-section-title" style="margin-top:32px;">Maintenance checklist</div>
-      <p class="page-subtitle" style="margin-bottom:16px;">These are the items shown on this item's own maintenance check screen. Different equipment needs different checks — e.g. a disk sander might need "Sanding disc condition" and "Vibration" added here.</p>
-      <div class="card" style="margin-bottom:16px;">
-        <table>
-          <thead><tr><th>Checklist item</th><th></th></tr></thead>
-          <tbody>${checkItemRows || '<tr><td colspan="2" style="text-align:center;color:#6B6659;padding:24px;">No checklist items yet.</td></tr>'}</tbody>
-        </table>
-      </div>
-      <form class="form-card" method="post" action="/admin/equipment/${r.id}/check-items" style="margin-bottom:32px;">
-        <div class="form-row">
-          <label for="new_item_label">Add checklist item</label>
-          <input type="text" id="new_item_label" name="label" required placeholder="e.g. Sanding disc condition">
-        </div>
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary">Add item</button>
-        </div>
-      </form>
-      <form method="post" action="/admin/equipment/${r.id}/${r.archived ? 'unarchive' : 'archive'}" style="margin-top:16px;">
-        <button type="submit" class="btn btn-secondary">${r.archived ? 'Unarchive this item' : 'Archive this item'}</button>
-      </form>
-      <form method="post" action="/admin/equipment/${r.id}/delete" style="margin-top:16px;" onsubmit="return confirm('Delete this equipment record permanently? This cannot be undone.');">
-        <button type="submit" class="btn btn-secondary" style="color:#B3261E;border-color:#B3261E;">Delete this record</button>
-      </form>
-    `;
-
-    res.send(page({ title: `Edit — ${r.name}`, active: 'equipment', body }));
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/admin/equipment/:id', requireAdmin, async (req, res, next) => {
-  try {
-    const {
-      name, asset_tag, category, status, location, manufacturer, serial_number,
-      test_tag_number, responsible_person, purchase_date,
-      inspection_frequency, last_inspection_date, next_inspection_due,
-      pera_id, condition_notes,
-    } = req.body;
-
-    if (!name || !EQUIPMENT_CATEGORIES.includes(category)) {
-      return res.status(400).send('Item name and a valid category are required.');
-    }
-
-    const validFrequency = INSPECTION_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
-    const computedNextDue = next_inspection_due
-      || addInspectionInterval(last_inspection_date, validFrequency);
-
-    await pool.query(
-      `UPDATE equipment_records SET
-        name = $1, asset_tag = $2, category = $3, status = $4, location = $5,
-        manufacturer = $6, serial_number = $7, test_tag_number = $8,
-        responsible_person = $9, purchase_date = $10, inspection_frequency = $11,
-        last_inspection_date = $12, next_inspection_due = $13, pera_id = $14,
-        condition_notes = $15, updated_at = now()
-       WHERE id = $16`,
-      [
-        name, asset_tag || null, category, EQUIPMENT_STATUSES.includes(status) ? status : 'In service',
-        location || null, manufacturer || null, serial_number || null,
-        test_tag_number || null, responsible_person || null, purchase_date || null,
-        validFrequency, last_inspection_date || null, computedNextDue || null,
-        pera_id || null, condition_notes || null, req.params.id,
-      ]
-    );
-
-    res.redirect(`/equipment/${req.params.id}`);
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/admin/equipment/:id/archive', requireAdmin, async (req, res, next) => {
-  try {
-    await pool.query('UPDATE equipment_records SET archived = true, updated_at = now() WHERE id = $1', [req.params.id]);
-    res.redirect('/equipment');
-  } catch (err) {
-    next(err);
-  }
-});
-app.post('/admin/equipment/:id/unarchive', requireAdmin, async (req, res, next) => {
-  try {
-    await pool.query('UPDATE equipment_records SET archived = false, updated_at = now() WHERE id = $1', [req.params.id]);
-    res.redirect(`/equipment/${req.params.id}`);
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/admin/equipment/:id/delete', requireAdmin, async (req, res, next) => {
-  try {
-    await pool.query('DELETE FROM equipment_records WHERE id = $1', [req.params.id]);
-    res.redirect('/equipment');
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ---------- Equipment Register: per-item maintenance checklist ----------
-// Each piece of equipment has its own editable list of checklist items (see
-// equipment_check_items in db.js) — e.g. a disk sander needs "Sanding disc
-// condition" and "Vibration" added on top of the shared defaults, while a
-// simple hand tool might have most of the defaults removed.
-
-app.post('/admin/equipment/:id/check-items', requireAdmin, async (req, res, next) => {
-  try {
-    const { label } = req.body;
-    if (!label || !label.trim()) {
-      return res.status(400).send('A checklist item name is required.');
-    }
-    const maxOrderResult = await pool.query(
-      'SELECT COALESCE(MAX(sort_order), 0) AS max_order FROM equipment_check_items WHERE equipment_id = $1',
-      [req.params.id]
-    );
-    const nextOrder = maxOrderResult.rows[0].max_order + 1;
-    await pool.query(
-      'INSERT INTO equipment_check_items (equipment_id, label, sort_order) VALUES ($1,$2,$3) ON CONFLICT (equipment_id, label) DO NOTHING',
-      [req.params.id, label.trim(), nextOrder]
-    );
-    res.redirect(`/admin/equipment/${req.params.id}/edit`);
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/admin/equipment/:id/check-items/:itemId', requireAdmin, async (req, res, next) => {
-  try {
-    const { label } = req.body;
-    if (!label || !label.trim()) {
-      return res.status(400).send('A checklist item name is required.');
-    }
-    await pool.query(
-      'UPDATE equipment_check_items SET label = $1 WHERE id = $2 AND equipment_id = $3',
-      [label.trim(), req.params.itemId, req.params.id]
-    );
-    res.redirect(`/admin/equipment/${req.params.id}/edit`);
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/admin/equipment/:id/check-items/:itemId/delete', requireAdmin, async (req, res, next) => {
-  try {
-    await pool.query(
-      'DELETE FROM equipment_check_items WHERE id = $1 AND equipment_id = $2',
-      [req.params.itemId, req.params.id]
-    );
-    res.redirect(`/admin/equipment/${req.params.id}/edit`);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ---------- Equipment Register: manage locations ----------
-// The list of workshop/area names offered in the Equipment Location dropdown
-// is admin-managed here, rather than hardcoded or free-typed on each item.
-
-app.get('/admin/locations', requireAdmin, async (req, res, next) => {
-  try {
-    const result = await pool.query(
-      `SELECT l.*, (SELECT COUNT(*)::int FROM equipment_records e WHERE e.location = l.name) AS in_use
-       FROM equipment_locations l ORDER BY l.name ASC`
-    );
-
-    const rows = result.rows.map((l) => `
-      <tr>
-        <td>
-          <form method="post" action="/admin/locations/${l.id}" style="display:flex;gap:8px;align-items:center;">
-            <input type="text" name="name" value="${escapeHtml(l.name)}" style="max-width:240px;">
-            <button type="submit" class="btn btn-secondary" style="padding:4px 12px;font-size:13px;">Save</button>
-          </form>
-        </td>
-        <td>${l.in_use} item${l.in_use === 1 ? '' : 's'}</td>
-        <td style="text-align:right;">
-          <form method="post" action="/admin/locations/${l.id}/delete" style="display:inline;" onsubmit="return confirm('Remove &quot;${escapeHtml(l.name).replace(/"/g, '&quot;')}&quot; from the location list? Equipment already using it will keep showing it, but it won\\'t be selectable for new items.');">
-            <button type="submit" class="btn btn-secondary" style="padding:4px 12px;font-size:13px;color:#B3261E;border-color:#B3261E;">Remove</button>
-          </form>
-        </td>
-      </tr>
-    `).join('');
-
-    const body = `
-      <a class="back-link" href="/admin">← Back to Admin</a>
-      <h1 class="page-title" style="margin-bottom:8px;">Manage locations</h1>
-      <p class="page-subtitle" style="margin-bottom:24px;">These are the workshop/area names offered in the Equipment Register's Location dropdown.</p>
-      <form class="form-card" method="post" action="/admin/locations" style="margin-bottom:24px;">
-        <div class="form-row">
-          <label for="name">New location name</label>
-          <input type="text" id="name" name="name" required placeholder="e.g. Design studio">
-        </div>
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary">Add location</button>
-        </div>
-      </form>
-      <div class="card">
-        <table>
-          <thead>
-            <tr>
-              <th>Location</th>
-              <th>In use</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>${rows || '<tr><td colspan="3" style="text-align:center;color:#6B6659;padding:24px;">No locations yet.</td></tr>'}</tbody>
-        </table>
-      </div>
-    `;
-
-    res.send(page({ title: 'Manage locations', active: 'admin', body }));
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/admin/locations', requireAdmin, async (req, res, next) => {
-  try {
-    const { name } = req.body;
-    if (!name || !name.trim()) {
-      return res.status(400).send('A location name is required.');
-    }
-    await pool.query('INSERT INTO equipment_locations (name) VALUES ($1) ON CONFLICT (name) DO NOTHING', [name.trim()]);
-    res.redirect('/admin/locations');
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/admin/locations/:id', requireAdmin, async (req, res, next) => {
-  try {
-    const { name } = req.body;
-    if (!name || !name.trim()) {
-      return res.status(400).send('A location name is required.');
-    }
-    const trimmed = name.trim();
-    const existing = await pool.query('SELECT name FROM equipment_locations WHERE id = $1', [req.params.id]);
-    if (existing.rows.length === 0) {
-      return res.status(404).send('Location not found.');
-    }
-    const oldName = existing.rows[0].name;
-    await pool.query('UPDATE equipment_locations SET name = $1 WHERE id = $2', [trimmed, req.params.id]);
-    if (oldName !== trimmed) {
-      // Keep equipment already using the old name pointed at the renamed location.
-      await pool.query('UPDATE equipment_records SET location = $1 WHERE location = $2', [trimmed, oldName]);
-    }
-    res.redirect('/admin/locations');
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/admin/locations/:id/delete', requireAdmin, async (req, res, next) => {
-  try {
-    await pool.query('DELETE FROM equipment_locations WHERE id = $1', [req.params.id]);
-    res.redirect('/admin/locations');
   } catch (err) {
     next(err);
   }
@@ -2460,7 +1712,6 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM pera_records ORDER BY id');
     const caraResult = await pool.query('SELECT * FROM cara_records ORDER BY id');
-    const equipmentResult = await pool.query('SELECT * FROM equipment_records WHERE archived = false ORDER BY name ASC');
 
     const rows = result.rows.map((r) => `
       <tr class="row-link" onclick="window.location='/admin/pera/${r.id}/edit'">
@@ -2481,18 +1732,6 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
         <td>${escapeHtml(r.submitted_by || '—')}</td>
       </tr>
     `).join('');
-
-    const equipmentRows = equipmentResult.rows.map((r) => {
-      const insp = inspectionBadge(r.next_inspection_due);
-      return `
-      <tr class="row-link" onclick="window.location='/admin/equipment/${r.id}/edit'">
-        <td>${escapeHtml(r.name)}</td>
-        <td>${escapeHtml(r.category)}</td>
-        <td><span class="badge ${equipmentStatusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
-        <td><span class="badge ${insp.cls}">${insp.label}</span></td>
-      </tr>
-    `;
-    }).join('');
 
     const body = `
       <div class="page-header">
@@ -2532,26 +1771,6 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
             </tr>
           </thead>
           <tbody>${caraRows || '<tr><td colspan="5" style="text-align:center;color:#6B6659;padding:24px;">No CARA records yet.</td></tr>'}</tbody>
-        </table>
-      </div>
-      <div class="form-section-title" style="display:flex;align-items:center;justify-content:space-between;">
-        <span>Equipment register</span>
-        <span>
-          <a class="btn btn-secondary" href="/admin/locations" style="padding:6px 14px;font-size:13px;">Manage locations</a>
-          <a class="btn btn-secondary" href="/admin/equipment/new" style="padding:6px 14px;font-size:13px;">+ Add equipment</a>
-        </span>
-      </div>
-      <div class="card">
-        <table>
-          <thead>
-            <tr>
-              <th>Item</th>
-              <th>Category</th>
-              <th>Status</th>
-              <th>Inspection</th>
-            </tr>
-          </thead>
-          <tbody>${equipmentRows || '<tr><td colspan="4" style="text-align:center;color:#6B6659;padding:24px;">No equipment recorded yet.</td></tr>'}</tbody>
         </table>
       </div>
     `;
