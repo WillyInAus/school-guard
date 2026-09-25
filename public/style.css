@@ -445,18 +445,59 @@ tr.row-link:hover {
 }
 
 .tool-picker-list {
-  max-height: 320px;
+  max-height: 400px;
   overflow-y: auto;
-  padding: 6px 0;
+  padding: 4px 0;
+}
+
+.tool-picker-group {
+  border-bottom: 1px solid #E4DFD3;
+}
+
+.tool-picker-group:last-child {
+  border-bottom: none;
 }
 
 .tool-picker-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11px;
   font-weight: 600;
   color: #6B6659;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  padding: 10px 14px 4px 14px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.tool-picker-group-label::-webkit-details-marker {
+  display: none;
+}
+
+.tool-picker-group-label::before {
+  content: '▸';
+  display: inline-block;
+  font-size: 10px;
+  color: #A8A296;
+  transition: transform 0.15s ease;
+}
+
+.tool-picker-group[open] > .tool-picker-group-label::before {
+  transform: rotate(90deg);
+}
+
+.tool-picker-group-count {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: #A8A296;
+}
+
+.tool-picker-group-items {
+  padding-bottom: 4px;
 }
 
 .tool-picker-item {
