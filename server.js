@@ -195,7 +195,7 @@ app.get('/pera', async (req, res, next) => {
       <div class="page-header">
         <div>
           <h1 class="page-title">PERA Records</h1>
-          <p class="page-subtitle">Plant and equipment risk assessments (PERA) for tools and machinery across IDT and VET workshops.</p>
+          <p class="page-subtitle">Plant and equipment risk assessments (PERA) for tools and machinery used across the school.</p>
         </div>
         <a class="btn btn-primary" href="/pera/new">+ New PERA</a>
       </div>
