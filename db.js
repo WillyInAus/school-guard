@@ -259,6 +259,16 @@ async function migrate() {
       notes TEXT
     );
   `);
+  // Defensive: an equipment_checks table may already exist from an earlier,
+  // differently-shaped attempt at this feature. ADD COLUMN IF NOT EXISTS is
+  // a no-op wherever the column's already there, and safely backfills a
+  // default for any existing rows otherwise, so this can't fail or clobber
+  // data even if the table predates this exact column set.
+  await pool.query(`ALTER TABLE equipment_checks ADD COLUMN IF NOT EXISTS equipment_id INTEGER REFERENCES equipment_items(id) ON DELETE CASCADE;`);
+  await pool.query(`ALTER TABLE equipment_checks ADD COLUMN IF NOT EXISTS checked_at TIMESTAMPTZ NOT NULL DEFAULT now();`);
+  await pool.query(`ALTER TABLE equipment_checks ADD COLUMN IF NOT EXISTS checked_by TEXT;`);
+  await pool.query(`ALTER TABLE equipment_checks ADD COLUMN IF NOT EXISTS completed_items JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+  await pool.query(`ALTER TABLE equipment_checks ADD COLUMN IF NOT EXISTS notes TEXT;`);
 }
 
 module.exports = { pool, migrate };
