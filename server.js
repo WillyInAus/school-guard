@@ -224,7 +224,8 @@ app.get('/pera', async (req, res, next) => {
     const chips = ['All', ...RISK_LEVELS].map((level) => {
       const isActive = level === 'All' ? !risk : risk === level;
       const href = level === 'All' ? '/pera' : `/pera?risk=${encodeURIComponent(level)}`;
-      return `<a class="chip${isActive ? ' active' : ''}" href="${href}">${level}</a>`;
+      const levelClass = level === 'All' ? '' : ` chip-${level.toLowerCase()}`;
+      return `<a class="chip${levelClass}${isActive ? ' active' : ''}" href="${href}">${level}</a>`;
     }).join('');
 
     let rowsHtml;
@@ -555,7 +556,8 @@ app.get('/cara', async (req, res, next) => {
       if (showArchived) chipParams.set('archived', '1');
       const qs = chipParams.toString();
       const href = `/cara${qs ? `?${qs}` : ''}`;
-      return `<a class="chip${isActive ? ' active' : ''}" href="${href}">${level}</a>`;
+      const levelClass = level === 'All' ? '' : ` chip-${level.toLowerCase()}`;
+      return `<a class="chip${levelClass}${isActive ? ' active' : ''}" href="${href}">${level}</a>`;
     }).join('');
 
     let rowsHtml;
