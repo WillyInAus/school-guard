@@ -1532,7 +1532,7 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     if (toolsResult.rows.length) {
       doc.fontSize(10.5).fillColor(GREEN).text('PERA used');
       doc.fontSize(10).fillColor(TEXT).text(
-        toolsResult.rows.map((t) => `${t.activity_name} (${t.risk_level})`).join(', ')
+        toolsResult.rows.map((t) => `• ${t.activity_name} (${t.risk_level})`).join('\n')
       );
       doc.moveDown(0.6);
     } else {
