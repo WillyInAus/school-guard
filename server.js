@@ -157,6 +157,10 @@ app.get('/', async (req, res, next) => {
     const caraPendingResult = await pool.query(
       "SELECT COUNT(*)::int AS count FROM cara_records WHERE status = 'Pending approval' AND archived = false"
     );
+    const equipmentTotalResult = await pool.query('SELECT COUNT(*)::int AS count FROM equipment_items');
+    const equipmentAttentionResult = await pool.query(
+      "SELECT COUNT(*)::int AS count FROM equipment_items WHERE status != 'Operational'"
+    );
 
     const body = `
       <div class="page-header">
@@ -182,12 +186,22 @@ app.get('/', async (req, res, next) => {
           <div class="stat-label">CARAs pending approval</div>
           <div class="stat-value">${caraPendingResult.rows[0].count}</div>
         </div>
+        <div class="stat-tile">
+          <div class="stat-label">Equipment items</div>
+          <div class="stat-value">${equipmentTotalResult.rows[0].count}</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-label">Equipment needing attention</div>
+          <div class="stat-value">${equipmentAttentionResult.rows[0].count}</div>
+        </div>
       </div>
       <div class="card" style="padding: 24px;">
         <p style="margin:0;font-size:14px;color:#6B6659;">
           <a href="/pera" style="color:#1B5E52;font-weight:600;">PERA</a> holds the equipment/tool
           risk assessment library (Plant &amp; Equipment Risk Assessments). <a href="/cara" style="color:#1B5E52;font-weight:600;">CARA</a> is where teachers put
           together a Curriculum Activity Risk Assessment for a class or activity, drawing on tools from that library.
+          <a href="/equipment" style="color:#1B5E52;font-weight:600;">Equipment</a> is the register of the school's
+          actual physical tools and machinery, and can link each item to the PERA that covers it.
         </p>
       </div>
     `;
@@ -1911,6 +1925,272 @@ app.post('/cara/:id/unarchive', async (req, res, next) => {
   }
 });
 
+// ================================================================
+// Equipment (physical asset register)
+// ================================================================
+// A simple register of the school's actual tools and machinery. This is
+// deliberately separate from PERA, which is the risk-assessment paperwork
+// for a *type* of tool/activity: an equipment item is a specific physical
+// thing (e.g. "Guillotine #2, Workshop A") that can optionally link to the
+// PERA covering it, so a physical item can be traced straight to its risk
+// assessment.
+
+const EQUIPMENT_STATUSES = ['Operational', 'Needs repair', 'Out of service'];
+
+function equipmentBadgeClass(status) {
+  return {
+    'Operational': 'badge-operational',
+    'Needs repair': 'badge-needs-repair',
+    'Out of service': 'badge-out-of-service',
+  }[status] || 'badge-draft';
+}
+
+function equipmentChipClass(status) {
+  return {
+    'Operational': 'chip-operational',
+    'Needs repair': 'chip-needs-repair',
+    'Out of service': 'chip-out-of-service',
+  }[status] || '';
+}
+
+function toDateInputValue(d) {
+  if (!d) return '';
+  return new Date(d).toISOString().slice(0, 10);
+}
+
+// ---------- Equipment: list ----------
+
+app.get('/equipment', async (req, res, next) => {
+  try {
+    const { status, q } = req.query;
+    const conditions = [];
+    const params = [];
+
+    if (status && EQUIPMENT_STATUSES.includes(status)) {
+      params.push(status);
+      conditions.push(`e.status = $${params.length}`);
+    }
+    if (q) {
+      params.push(`%${q}%`);
+      conditions.push(`e.name ILIKE $${params.length}`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const result = await pool.query(
+      `SELECT e.*, p.activity_name AS pera_name
+       FROM equipment_items e
+       LEFT JOIN pera_records p ON p.id = e.pera_id
+       ${where}
+       ORDER BY e.name ASC`,
+      params
+    );
+
+    const chips = ['All', ...EQUIPMENT_STATUSES].map((s) => {
+      const isActive = s === 'All' ? !status : status === s;
+      const href = s === 'All' ? '/equipment' : `/equipment?status=${encodeURIComponent(s)}`;
+      const chipClass = s === 'All' ? '' : ` ${equipmentChipClass(s)}`;
+      return `<a class="chip${chipClass}${isActive ? ' active' : ''}" href="${href}">${s}</a>`;
+    }).join('');
+
+    let rowsHtml;
+    if (result.rows.length === 0) {
+      rowsHtml = `<div class="empty-state">No equipment recorded yet. Click "New equipment" to add the first item.</div>`;
+    } else {
+      const rows = result.rows.map((r) => `
+        <tr class="row-link" onclick="window.location='/equipment/${r.id}'">
+          <td>${escapeHtml(r.name)}</td>
+          <td>${escapeHtml(r.category || '—')}</td>
+          <td>${escapeHtml(r.location || '—')}</td>
+          <td><span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
+          <td>${formatDate(r.next_inspection_due)}</td>
+        </tr>
+      `).join('');
+      rowsHtml = `
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Category</th>
+              <th>Location</th>
+              <th>Status</th>
+              <th>Next inspection</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    const body = `
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Equipment</h1>
+          <p class="page-subtitle">The school's register of tools and machinery, and the condition/inspection status of each item.</p>
+        </div>
+        <a class="btn btn-primary" href="/equipment/new">+ New equipment</a>
+      </div>
+      <div class="filter-row">
+        <form method="get" action="/equipment">
+          ${status ? `<input type="hidden" name="status" value="${escapeHtml(status)}">` : ''}
+          <input class="search-input" type="search" name="q" placeholder="Search equipment..." value="${escapeHtml(q || '')}">
+        </form>
+        <div class="chip-row">${chips}</div>
+      </div>
+      <div class="card">${rowsHtml}</div>
+    `;
+
+    res.send(page({ title: 'Equipment', active: 'equipment', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Equipment: new (form) ----------
+
+app.get('/equipment/new', async (req, res, next) => {
+  try {
+    const peraResult = await pool.query('SELECT id, activity_name FROM pera_records ORDER BY activity_name ASC');
+    const statusOptions = EQUIPMENT_STATUSES.map((s) => `<option value="${s}" ${s === 'Operational' ? 'selected' : ''}>${s}</option>`).join('');
+    const peraOptions = [
+      '<option value="">— None —</option>',
+      ...peraResult.rows.map((p) => `<option value="${p.id}">${escapeHtml(p.activity_name)}</option>`),
+    ].join('');
+
+    const body = `
+      <a class="back-link" href="/equipment">← Back to Equipment</a>
+      <h1 class="page-title">New equipment</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">Add a tool or piece of machinery to the equipment register.</p>
+      <form class="form-card" method="post" action="/equipment">
+        <div class="form-row">
+          <label for="name">Name</label>
+          <input type="text" id="name" name="name" required placeholder="e.g. Guillotine — light sheet metal (Workshop A)">
+        </div>
+        <div class="form-row">
+          <label for="category">Category</label>
+          <input type="text" id="category" name="category" placeholder="e.g. Machinery, Power tool, Hand tool">
+        </div>
+        <div class="form-row">
+          <label for="location">Location</label>
+          <input type="text" id="location" name="location" placeholder="e.g. IDT Workshop A">
+        </div>
+        <div class="form-row">
+          <label for="status">Status</label>
+          <select id="status" name="status" required>${statusOptions}</select>
+        </div>
+        <div class="form-row">
+          <label for="pera_id">Linked PERA</label>
+          <select id="pera_id" name="pera_id">${peraOptions}</select>
+        </div>
+        <div class="form-row">
+          <label for="last_inspected">Last inspected</label>
+          <input type="date" id="last_inspected" name="last_inspected">
+        </div>
+        <div class="form-row">
+          <label for="next_inspection_due">Next inspection due</label>
+          <input type="date" id="next_inspection_due" name="next_inspection_due">
+        </div>
+        <div class="form-row">
+          <label for="notes">Notes</label>
+          <textarea id="notes" name="notes" placeholder="Serial number, maintenance history, anything else worth recording..."></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save equipment</button>
+          <a class="btn btn-secondary" href="/equipment">Cancel</a>
+        </div>
+      </form>
+    `;
+
+    res.send(page({ title: 'New equipment', active: 'equipment', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Equipment: create ----------
+
+app.post('/equipment', async (req, res, next) => {
+  try {
+    const { name, category, location, status, pera_id, last_inspected, next_inspection_due, notes } = req.body;
+
+    if (!name || !EQUIPMENT_STATUSES.includes(status)) {
+      return res.status(400).send('Name and a valid status are required.');
+    }
+
+    const result = await pool.query(
+      `INSERT INTO equipment_items
+        (name, category, location, status, pera_id, last_inspected, next_inspection_due, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING id`,
+      [
+        normalizeText(name), normalizeText(category) || null, normalizeText(location) || null, status,
+        pera_id || null, last_inspected || null, next_inspection_due || null, normalizeText(notes) || null,
+      ]
+    );
+
+    res.redirect(`/equipment/${result.rows[0].id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Equipment: detail ----------
+
+app.get('/equipment/:id', async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT e.*, p.activity_name AS pera_name
+       FROM equipment_items e
+       LEFT JOIN pera_records p ON p.id = e.pera_id
+       WHERE e.id = $1`,
+      [req.params.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).send('Equipment item not found.');
+    }
+    const r = result.rows[0];
+
+    const body = `
+      <a class="back-link" href="/equipment">← Back to Equipment</a>
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">${escapeHtml(r.name)}</h1>
+          <p class="page-subtitle">${escapeHtml(r.category || 'Equipment')}${r.location ? ` · ${escapeHtml(r.location)}` : ''}</p>
+        </div>
+        <span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
+      </div>
+      <div class="detail-grid">
+        <div>
+          <div class="detail-section">
+            <div class="detail-label">Linked PERA</div>
+            <div class="detail-value">${r.pera_id ? `<a href="/pera/${r.pera_id}" style="color:#1B5E52;font-weight:600;">${escapeHtml(r.pera_name)}</a>` : 'None'}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Last inspected</div>
+            <div class="detail-value">${formatDate(r.last_inspected)}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Next inspection due</div>
+            <div class="detail-value">${formatDate(r.next_inspection_due)}</div>
+          </div>
+          ${r.notes ? `
+          <div class="detail-section">
+            <div class="detail-label">Notes</div>
+            <div class="detail-value">${escapeHtml(r.notes)}</div>
+          </div>` : ''}
+        </div>
+        <div class="card" style="padding:22px;">
+          <div class="note-box">Keep this record up to date after every inspection or repair — it's what the equipment register relies on to flag what needs attention.</div>
+          <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-top:14px;">Edit this item</a>
+        </div>
+      </div>
+    `;
+
+    res.send(page({ title: r.name, active: 'equipment', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ---------- Admin: login ----------
 
 app.get('/admin/login', (req, res) => {
@@ -1959,6 +2239,7 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM pera_records ORDER BY id');
     const caraResult = await pool.query('SELECT * FROM cara_records ORDER BY id');
+    const equipmentResult = await pool.query('SELECT * FROM equipment_items ORDER BY name ASC');
 
     const rows = result.rows.map((r) => `
       <tr class="row-link" onclick="window.location='/admin/pera/${r.id}/edit'">
@@ -1977,6 +2258,15 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
         <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
         <td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
         <td>${escapeHtml(r.submitted_by || '—')}</td>
+      </tr>
+    `).join('');
+
+    const equipmentRows = equipmentResult.rows.map((r) => `
+      <tr class="row-link" onclick="window.location='/admin/equipment/${r.id}/edit'">
+        <td>${escapeHtml(r.name)}</td>
+        <td>${escapeHtml(r.category || '—')}</td>
+        <td>${escapeHtml(r.location || '—')}</td>
+        <td><span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
       </tr>
     `).join('');
 
@@ -2018,6 +2308,20 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
             </tr>
           </thead>
           <tbody>${caraRows || '<tr><td colspan="5" style="text-align:center;color:#6B6659;padding:24px;">No CARA records yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="form-section-title">Equipment</div>
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Category</th>
+              <th>Location</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>${equipmentRows || '<tr><td colspan="4" style="text-align:center;color:#6B6659;padding:24px;">No equipment recorded yet.</td></tr>'}</tbody>
         </table>
       </div>
     `;
@@ -2302,6 +2606,110 @@ app.post('/admin/cara/:id', requireAdmin, async (req, res, next) => {
 app.post('/admin/cara/:id/delete', requireAdmin, async (req, res, next) => {
   try {
     await pool.query('DELETE FROM cara_records WHERE id = $1', [req.params.id]);
+    res.redirect('/admin');
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Admin: edit an Equipment item ----------
+
+app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM equipment_items WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).send('Equipment item not found.');
+    }
+    const r = result.rows[0];
+
+    const peraResult = await pool.query('SELECT id, activity_name FROM pera_records ORDER BY activity_name ASC');
+    const statusOptions = EQUIPMENT_STATUSES.map((s) => `<option value="${s}" ${s === r.status ? 'selected' : ''}>${s}</option>`).join('');
+    const peraOptions = [
+      '<option value="">— None —</option>',
+      ...peraResult.rows.map((p) => `<option value="${p.id}" ${p.id === r.pera_id ? 'selected' : ''}>${escapeHtml(p.activity_name)}</option>`),
+    ].join('');
+
+    const body = `
+      <a class="back-link" href="/admin">← Back to Admin</a>
+      <h1 class="page-title" style="margin-bottom:24px;">Edit: ${escapeHtml(r.name)}</h1>
+      <form class="form-card" method="post" action="/admin/equipment/${r.id}">
+        <div class="form-row">
+          <label for="name">Name</label>
+          <input type="text" id="name" name="name" value="${escapeHtml(r.name)}" required>
+        </div>
+        <div class="form-row">
+          <label for="category">Category</label>
+          <input type="text" id="category" name="category" value="${escapeHtml(r.category || '')}">
+        </div>
+        <div class="form-row">
+          <label for="location">Location</label>
+          <input type="text" id="location" name="location" value="${escapeHtml(r.location || '')}">
+        </div>
+        <div class="form-row">
+          <label for="status">Status</label>
+          <select id="status" name="status" required>${statusOptions}</select>
+        </div>
+        <div class="form-row">
+          <label for="pera_id">Linked PERA</label>
+          <select id="pera_id" name="pera_id">${peraOptions}</select>
+        </div>
+        <div class="form-row">
+          <label for="last_inspected">Last inspected</label>
+          <input type="date" id="last_inspected" name="last_inspected" value="${toDateInputValue(r.last_inspected)}">
+        </div>
+        <div class="form-row">
+          <label for="next_inspection_due">Next inspection due</label>
+          <input type="date" id="next_inspection_due" name="next_inspection_due" value="${toDateInputValue(r.next_inspection_due)}">
+        </div>
+        <div class="form-row">
+          <label for="notes">Notes</label>
+          <textarea id="notes" name="notes">${escapeHtml(r.notes || '')}</textarea>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save changes</button>
+          <a class="btn btn-secondary" href="/admin">Cancel</a>
+        </div>
+      </form>
+      <form method="post" action="/admin/equipment/${r.id}/delete" style="margin-top:16px;" onsubmit="return confirm('Delete this equipment item permanently? This cannot be undone.');">
+        <button type="submit" class="btn btn-secondary" style="color:#B3261E;border-color:#B3261E;">Delete this item</button>
+      </form>
+    `;
+
+    res.send(page({ title: `Edit — ${r.name}`, active: 'admin', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/equipment/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const { name, category, location, status, pera_id, last_inspected, next_inspection_due, notes } = req.body;
+
+    if (!name || !EQUIPMENT_STATUSES.includes(status)) {
+      return res.status(400).send('Name and a valid status are required.');
+    }
+
+    await pool.query(
+      `UPDATE equipment_items SET
+         name = $1, category = $2, location = $3, status = $4, pera_id = $5,
+         last_inspected = $6, next_inspection_due = $7, notes = $8, updated_at = now()
+       WHERE id = $9`,
+      [
+        normalizeText(name), normalizeText(category) || null, normalizeText(location) || null, status,
+        pera_id || null, last_inspected || null, next_inspection_due || null, normalizeText(notes) || null,
+        req.params.id,
+      ]
+    );
+
+    res.redirect(`/admin/equipment/${req.params.id}/edit`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/equipment/:id/delete', requireAdmin, async (req, res, next) => {
+  try {
+    await pool.query('DELETE FROM equipment_items WHERE id = $1', [req.params.id]);
     res.redirect('/admin');
   } catch (err) {
     next(err);
