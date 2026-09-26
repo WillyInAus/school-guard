@@ -120,6 +120,83 @@ async function migrate() {
       summary TEXT NOT NULL
     );
   `);
+
+  // One-off cleanup: some existing records (older seed data / text pasted
+  // from Word) have Windows-style \r\n line endings saved in their text
+  // fields. Browsers silently normalise \r\n to \n when rendering the HTML
+  // pages, so this was invisible there, but the CARA PDF export uses
+  // PDFKit's built-in fonts directly, which have no glyph for a lone \r and
+  // render it as a stray "Ð" at the end of every line. Strip it from
+  // whatever's already stored (new saves are cleaned in server.js before
+  // they ever reach here). Safe to run every startup: idempotent, and each
+  // UPDATE only touches rows that still contain a \r.
+  await pool.query(`
+    UPDATE pera_records SET
+      activity_name = regexp_replace(activity_name, E'\\r\\n?', E'\\n', 'g'),
+      class_unit = regexp_replace(class_unit, E'\\r\\n?', E'\\n', 'g'),
+      hazards = regexp_replace(hazards, E'\\r\\n?', E'\\n', 'g'),
+      control_measures = regexp_replace(control_measures, E'\\r\\n?', E'\\n', 'g'),
+      required_supervision = regexp_replace(required_supervision, E'\\r\\n?', E'\\n', 'g'),
+      submitted_by = regexp_replace(submitted_by, E'\\r\\n?', E'\\n', 'g'),
+      approver = regexp_replace(approver, E'\\r\\n?', E'\\n', 'g'),
+      review_notes = regexp_replace(review_notes, E'\\r\\n?', E'\\n', 'g')
+    WHERE activity_name LIKE '%' || chr(13) || '%'
+       OR class_unit LIKE '%' || chr(13) || '%'
+       OR hazards LIKE '%' || chr(13) || '%'
+       OR control_measures LIKE '%' || chr(13) || '%'
+       OR required_supervision LIKE '%' || chr(13) || '%'
+       OR submitted_by LIKE '%' || chr(13) || '%'
+       OR approver LIKE '%' || chr(13) || '%'
+       OR review_notes LIKE '%' || chr(13) || '%';
+  `);
+
+  await pool.query(`
+    UPDATE cara_records SET
+      activity_name = regexp_replace(activity_name, E'\\r\\n?', E'\\n', 'g'),
+      class_unit = regexp_replace(class_unit, E'\\r\\n?', E'\\n', 'g'),
+      activity_scope = regexp_replace(activity_scope, E'\\r\\n?', E'\\n', 'g'),
+      students_notes = regexp_replace(students_notes, E'\\r\\n?', E'\\n', 'g'),
+      emergency_first_aid = regexp_replace(emergency_first_aid, E'\\r\\n?', E'\\n', 'g'),
+      induction_instruction = regexp_replace(induction_instruction, E'\\r\\n?', E'\\n', 'g'),
+      supervision_notes = regexp_replace(supervision_notes, E'\\r\\n?', E'\\n', 'g'),
+      supervisor_qualification = regexp_replace(supervisor_qualification, E'\\r\\n?', E'\\n', 'g'),
+      facilities_equipment = regexp_replace(facilities_equipment, E'\\r\\n?', E'\\n', 'g'),
+      environmental_hazards = regexp_replace(environmental_hazards, E'\\r\\n?', E'\\n', 'g'),
+      environmental_controls = regexp_replace(environmental_controls, E'\\r\\n?', E'\\n', 'g'),
+      facilities_hazards = regexp_replace(facilities_hazards, E'\\r\\n?', E'\\n', 'g'),
+      facilities_controls = regexp_replace(facilities_controls, E'\\r\\n?', E'\\n', 'g'),
+      student_hazards = regexp_replace(student_hazards, E'\\r\\n?', E'\\n', 'g'),
+      student_controls = regexp_replace(student_controls, E'\\r\\n?', E'\\n', 'g'),
+      submitted_by = regexp_replace(submitted_by, E'\\r\\n?', E'\\n', 'g'),
+      approver = regexp_replace(approver, E'\\r\\n?', E'\\n', 'g'),
+      review_notes = regexp_replace(review_notes, E'\\r\\n?', E'\\n', 'g'),
+      monitoring_details = regexp_replace(monitoring_details, E'\\r\\n?', E'\\n', 'g')
+    WHERE activity_name LIKE '%' || chr(13) || '%'
+       OR class_unit LIKE '%' || chr(13) || '%'
+       OR activity_scope LIKE '%' || chr(13) || '%'
+       OR students_notes LIKE '%' || chr(13) || '%'
+       OR emergency_first_aid LIKE '%' || chr(13) || '%'
+       OR induction_instruction LIKE '%' || chr(13) || '%'
+       OR supervision_notes LIKE '%' || chr(13) || '%'
+       OR supervisor_qualification LIKE '%' || chr(13) || '%'
+       OR facilities_equipment LIKE '%' || chr(13) || '%'
+       OR environmental_hazards LIKE '%' || chr(13) || '%'
+       OR environmental_controls LIKE '%' || chr(13) || '%'
+       OR facilities_hazards LIKE '%' || chr(13) || '%'
+       OR facilities_controls LIKE '%' || chr(13) || '%'
+       OR student_hazards LIKE '%' || chr(13) || '%'
+       OR student_controls LIKE '%' || chr(13) || '%'
+       OR submitted_by LIKE '%' || chr(13) || '%'
+       OR approver LIKE '%' || chr(13) || '%'
+       OR review_notes LIKE '%' || chr(13) || '%'
+       OR monitoring_details LIKE '%' || chr(13) || '%';
+  `);
+
+  await pool.query(`
+    UPDATE cara_change_log SET
+      summary = regexp_replace(summary, E'\\r\\n?', E'\\n', 'g')
+    WHERE summary LIKE '%' || chr(13) || '%';
+  `);
 }
 
 module.exports = { pool, migrate };
