@@ -1937,6 +1937,68 @@ app.post('/cara/:id/unarchive', async (req, res, next) => {
 
 const EQUIPMENT_STATUSES = ['Operational', 'Needs repair', 'Out of service'];
 
+// How often an item needs checking. Drives next_inspection_due whenever a
+// check is logged (see computeNextDue below) — a school term/semester is
+// only approximate (~10/~20 weeks) since actual term dates move year to
+// year, but that's close enough for a maintenance reminder.
+const EQUIPMENT_FREQUENCIES = ['Daily', 'Week', 'Term', 'Semester', 'Yearly'];
+const FREQUENCY_DAYS = { Daily: 1, Week: 7, Term: 70, Semester: 140, Yearly: 365 };
+
+// An item with no next_inspection_due is "unscheduled" rather than overdue —
+// there's nothing to be late for until a frequency/check sets one.
+const DUE_SOON_DAYS = 14;
+
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function computeNextDue(fromDate, frequency) {
+  if (!frequency || !FREQUENCY_DAYS[frequency]) return null;
+  return addDays(fromDate || new Date(), FREQUENCY_DAYS[frequency]);
+}
+
+// Checklist items are stored as a JSON array of short strings (e.g. "Blade
+// guard", "Power cord condition") — plain lines of text, not records in
+// their own right — so the form just edits them as one item per line.
+function parseChecklistText(text) {
+  if (!text) return [];
+  return String(text)
+    .split('\n')
+    .map((s) => normalizeText(s).trim())
+    .filter(Boolean);
+}
+
+function checklistTextareaValue(items) {
+  return Array.isArray(items) ? items.join('\n') : '';
+}
+
+function equipmentFrequencyOptions(selected) {
+  return EQUIPMENT_FREQUENCIES.map((f) => `<option value="${f}" ${f === selected ? 'selected' : ''}>${f}</option>`).join('');
+}
+
+// Express's urlencoded parser gives an array for a repeated field name, but
+// only a bare string when exactly one checkbox of that name was checked (and
+// undefined when none were) — normalise all three to an array.
+function toArray(v) {
+  if (v === undefined || v === null) return [];
+  return Array.isArray(v) ? v : [v];
+}
+
+// 'overdue' | 'due-soon' | 'scheduled' | 'unscheduled', in that urgency order.
+function equipmentUrgency(nextDue) {
+  if (!nextDue) return 'unscheduled';
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const due = new Date(nextDue);
+  due.setHours(0, 0, 0, 0);
+  const diffDays = Math.round((due - today) / 86400000);
+  if (diffDays < 0) return 'overdue';
+  if (diffDays <= DUE_SOON_DAYS) return 'due-soon';
+  return 'scheduled';
+}
+
 function equipmentBadgeClass(status) {
   return {
     'Operational': 'badge-operational',
@@ -2025,7 +2087,7 @@ app.get('/equipment', async (req, res, next) => {
       <div class="page-header">
         <div>
           <h1 class="page-title">Equipment</h1>
-          <p class="page-subtitle">The school's register of tools and machinery, and the condition/inspection status of each item.</p>
+          <p class="page-subtitle">The school's register of tools and machinery, and the condition/inspection status of each item. <a href="/equipment/by-room" style="color:#1B5E52;font-weight:600;">View by room →</a></p>
         </div>
         <a class="btn btn-primary" href="/equipment/new">+ New equipment</a>
       </div>
@@ -2090,6 +2152,17 @@ app.get('/equipment/new', async (req, res, next) => {
           <input type="date" id="next_inspection_due" name="next_inspection_due">
         </div>
         <div class="form-row">
+          <label for="inspection_frequency">Inspection frequency</label>
+          <select id="inspection_frequency" name="inspection_frequency">
+            <option value="">— None —</option>
+            ${equipmentFrequencyOptions('')}
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="checklist_items">Checklist items</label>
+          <textarea id="checklist_items" name="checklist_items" placeholder="One thing to check per line, e.g.&#10;Blade guard&#10;Power cord condition&#10;Emergency stop"></textarea>
+        </div>
+        <div class="form-row">
           <label for="notes">Notes</label>
           <textarea id="notes" name="notes" placeholder="Serial number, maintenance history, anything else worth recording..."></textarea>
         </div>
@@ -2110,24 +2183,146 @@ app.get('/equipment/new', async (req, res, next) => {
 
 app.post('/equipment', async (req, res, next) => {
   try {
-    const { name, category, location, status, pera_id, last_inspected, next_inspection_due, notes } = req.body;
+    const {
+      name, category, location, status, pera_id, last_inspected, next_inspection_due, notes,
+      inspection_frequency, checklist_items,
+    } = req.body;
 
     if (!name || !EQUIPMENT_STATUSES.includes(status)) {
       return res.status(400).send('Name and a valid status are required.');
     }
+    const frequency = EQUIPMENT_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
 
     const result = await pool.query(
       `INSERT INTO equipment_items
-        (name, category, location, status, pera_id, last_inspected, next_inspection_due, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        (name, category, location, status, pera_id, last_inspected, next_inspection_due, notes, inspection_frequency, checklist_items)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        RETURNING id`,
       [
         normalizeText(name), normalizeText(category) || null, normalizeText(location) || null, status,
         pera_id || null, last_inspected || null, next_inspection_due || null, normalizeText(notes) || null,
+        frequency, JSON.stringify(parseChecklistText(checklist_items)),
       ]
     );
 
     res.redirect(`/equipment/${result.rows[0].id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Equipment: by room ----------
+// Must be registered before the "/equipment/:id" route below, since Express
+// matches route patterns in registration order and ":id" would otherwise
+// swallow "/equipment/by-room" as if "by-room" were an id.
+
+app.get('/equipment/by-room', async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM equipment_items ORDER BY name ASC');
+    const hideClear = req.query.hide_clear === '1';
+
+    const groups = new Map();
+    for (const r of result.rows) {
+      const key = normalizeText(r.location) || 'Unassigned location';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(r);
+    }
+
+    let totalOverdue = 0;
+    let totalDueSoon = 0;
+    const urgencyRank = { overdue: 0, 'due-soon': 1, scheduled: 2, unscheduled: 3 };
+
+    const rooms = [...groups.entries()].map(([location, items]) => {
+      const withUrgency = items.map((r) => ({ ...r, urgency: equipmentUrgency(r.next_inspection_due) }));
+      const overdueCount = withUrgency.filter((r) => r.urgency === 'overdue').length;
+      const dueSoonCount = withUrgency.filter((r) => r.urgency === 'due-soon').length;
+      totalOverdue += overdueCount;
+      totalDueSoon += dueSoonCount;
+      withUrgency.sort((a, b) => {
+        const rankDiff = urgencyRank[a.urgency] - urgencyRank[b.urgency];
+        if (rankDiff !== 0) return rankDiff;
+        const aDue = a.next_inspection_due ? new Date(a.next_inspection_due).getTime() : Infinity;
+        const bDue = b.next_inspection_due ? new Date(b.next_inspection_due).getTime() : Infinity;
+        return aDue - bDue;
+      });
+      return { location, items: withUrgency, overdueCount, dueSoonCount };
+    });
+
+    rooms.sort((a, b) => {
+      if (a.overdueCount !== b.overdueCount) return b.overdueCount - a.overdueCount;
+      if (a.dueSoonCount !== b.dueSoonCount) return b.dueSoonCount - a.dueSoonCount;
+      return a.location.localeCompare(b.location);
+    });
+
+    const urgencyBadge = { overdue: 'badge-out-of-service', 'due-soon': 'badge-needs-repair', scheduled: 'badge-operational', unscheduled: 'badge-draft' };
+    const urgencyLabel = { overdue: 'Overdue', 'due-soon': 'Due soon', scheduled: 'Scheduled', unscheduled: 'Not scheduled' };
+
+    let roomsHtml = '';
+    for (const room of rooms) {
+      const isClear = room.overdueCount === 0 && room.dueSoonCount === 0;
+      if (hideClear && isClear) continue;
+
+      const rowsHtml = room.items.map((r) => `
+        <tr class="row-link" onclick="window.location='/equipment/${r.id}'">
+          <td>${escapeHtml(r.name)}</td>
+          <td><span class="badge ${urgencyBadge[r.urgency]}">${urgencyLabel[r.urgency]}</span></td>
+          <td>${formatDate(r.next_inspection_due)}</td>
+          <td><span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
+          <td onclick="event.stopPropagation();">
+            <form method="post" action="/equipment/${r.id}/check">
+              <input type="hidden" name="return_to" value="by-room">
+              <button type="submit" class="btn btn-secondary" style="padding:6px 12px;font-size:12px;">Log check</button>
+            </form>
+          </td>
+        </tr>
+      `).join('');
+
+      const summary = isClear
+        ? 'All clear'
+        : [room.overdueCount ? `${room.overdueCount} overdue` : '', room.dueSoonCount ? `${room.dueSoonCount} due soon` : ''].filter(Boolean).join(' · ');
+
+      roomsHtml += `
+        <div class="form-section-title" style="display:flex;justify-content:space-between;align-items:baseline;">
+          <span>${escapeHtml(room.location)}</span>
+          <span style="font-size:12px;font-weight:500;color:${isClear ? '#2F7D5A' : '#B7791F'};">${summary}</span>
+        </div>
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Next inspection</th>
+                <th>Condition</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    if (!roomsHtml) {
+      roomsHtml = `<div class="empty-state">${result.rows.length === 0 ? 'No equipment recorded yet.' : 'Nothing overdue or due soon — every room is all clear.'}</div>`;
+    }
+
+    const body = `
+      <a class="back-link" href="/equipment">← Back to Equipment</a>
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Equipment by room</h1>
+          <p class="page-subtitle">${(totalOverdue || totalDueSoon) ? `${totalOverdue} overdue · ${totalDueSoon} due soon across ${rooms.length} room${rooms.length === 1 ? '' : 's'}.` : 'Nothing overdue or due soon right now.'}</p>
+        </div>
+      </div>
+      <div class="checkbox-row" style="margin-bottom:16px;">
+        <input type="checkbox" id="hide_clear" ${hideClear ? 'checked' : ''} onchange="window.location='/equipment/by-room' + (this.checked ? '?hide_clear=1' : '')">
+        <label for="hide_clear">Hide rooms that are all clear</label>
+      </div>
+      ${roomsHtml}
+    `;
+
+    res.send(page({ title: 'Equipment by room', active: 'equipment', body }));
   } catch (err) {
     next(err);
   }
@@ -2148,6 +2343,34 @@ app.get('/equipment/:id', async (req, res, next) => {
       return res.status(404).send('Equipment item not found.');
     }
     const r = result.rows[0];
+    const checklist = Array.isArray(r.checklist_items) ? r.checklist_items : [];
+
+    const checksResult = await pool.query(
+      'SELECT * FROM equipment_checks WHERE equipment_id = $1 ORDER BY checked_at DESC LIMIT 10',
+      [r.id]
+    );
+
+    const checklistHtml = checklist.length
+      ? checklist.map((item, i) => `
+          <div class="checkbox-row" style="margin-bottom:8px;">
+            <input type="checkbox" id="ci_${i}" name="completed_items" value="${escapeHtml(item)}" checked>
+            <label for="ci_${i}">${escapeHtml(item)}</label>
+          </div>
+        `).join('')
+      : '<div class="form-section-hint" style="margin:0 0 12px 0;">No checklist items set for this item — <a href="/admin/equipment/' + r.id + '/edit" style="color:#1B5E52;font-weight:600;">add some</a> so a check has something to tick off.</div>';
+
+    const historyHtml = checksResult.rows.length
+      ? checksResult.rows.map((c) => `
+          <div class="detail-section">
+            <div class="detail-label">${formatDateTime(c.checked_at)}${c.checked_by ? ` · ${escapeHtml(c.checked_by)}` : ''}</div>
+            <div class="detail-value">${
+              (Array.isArray(c.completed_items) && c.completed_items.length)
+                ? escapeHtml(c.completed_items.join(', '))
+                : 'No checklist items recorded'
+            }${c.notes ? `<br>${escapeHtml(c.notes)}` : ''}</div>
+          </div>
+        `).join('')
+      : '<div class="form-section-hint" style="margin:0;">No checks logged yet.</div>';
 
     const body = `
       <a class="back-link" href="/equipment">← Back to Equipment</a>
@@ -2170,22 +2393,83 @@ app.get('/equipment/:id', async (req, res, next) => {
           </div>
           <div class="detail-section">
             <div class="detail-label">Next inspection due</div>
-            <div class="detail-value">${formatDate(r.next_inspection_due)}</div>
+            <div class="detail-value">${formatDate(r.next_inspection_due)}${r.inspection_frequency ? ` (checked every ${escapeHtml(r.inspection_frequency)})` : ''}</div>
           </div>
           ${r.notes ? `
           <div class="detail-section">
             <div class="detail-label">Notes</div>
             <div class="detail-value">${escapeHtml(r.notes)}</div>
           </div>` : ''}
+          <div class="form-section-title" style="margin-top:32px;">Check history</div>
+          ${historyHtml}
         </div>
-        <div class="card" style="padding:22px;">
-          <div class="note-box">Keep this record up to date after every inspection or repair — it's what the equipment register relies on to flag what needs attention.</div>
-          <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-top:14px;">Edit this item</a>
+        <div>
+          <div class="card" style="padding:22px;margin-bottom:20px;">
+            <div class="note-box">Keep this record up to date after every inspection or repair — it's what the equipment register relies on to flag what needs attention.</div>
+            <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-top:14px;">Edit this item</a>
+          </div>
+          <div class="card" style="padding:22px;">
+            <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Log a check</div>
+            <form method="post" action="/equipment/${r.id}/check">
+              ${checklistHtml}
+              <div class="form-row" style="margin-top:12px;">
+                <label for="checked_by">Checked by</label>
+                <input type="text" id="checked_by" name="checked_by" placeholder="Your name">
+              </div>
+              <div class="form-row">
+                <label for="check_notes">Notes</label>
+                <textarea id="check_notes" name="notes" placeholder="Anything noticed during this check..."></textarea>
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Log check</button>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
     `;
 
     res.send(page({ title: r.name, active: 'equipment', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Equipment: log a check ----------
+
+app.post('/equipment/:id/check', async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM equipment_items WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).send('Equipment item not found.');
+    }
+    const r = result.rows[0];
+
+    // The full "Log a check" form on the detail page submits completed_items
+    // (only the boxes left ticked) plus checked_by/notes. The one-click
+    // "Log check" button on the by-room page submits none of these — treat
+    // that as "the whole checklist was done, no name/notes recorded".
+    const formSubmitted = 'completed_items' in req.body || 'checked_by' in req.body || 'notes' in req.body;
+    const completedItems = formSubmitted
+      ? toArray(req.body.completed_items).map((v) => normalizeText(v))
+      : (Array.isArray(r.checklist_items) ? r.checklist_items : []);
+    const checkedBy = formSubmitted ? (normalizeText(req.body.checked_by) || null) : null;
+    const checkNotes = formSubmitted ? (normalizeText(req.body.notes) || null) : null;
+
+    const today = new Date();
+    const nextDue = computeNextDue(today, r.inspection_frequency);
+
+    await pool.query(
+      `INSERT INTO equipment_checks (equipment_id, checked_by, completed_items, notes)
+       VALUES ($1,$2,$3,$4)`,
+      [r.id, checkedBy, JSON.stringify(completedItems), checkNotes]
+    );
+    await pool.query(
+      `UPDATE equipment_items SET last_inspected = $1, next_inspection_due = $2, updated_at = now() WHERE id = $3`,
+      [today, nextDue, r.id]
+    );
+
+    res.redirect(req.body.return_to === 'by-room' ? '/equipment/by-room' : `/equipment/${r.id}`);
   } catch (err) {
     next(err);
   }
@@ -2662,6 +2946,17 @@ app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
           <input type="date" id="next_inspection_due" name="next_inspection_due" value="${toDateInputValue(r.next_inspection_due)}">
         </div>
         <div class="form-row">
+          <label for="inspection_frequency">Inspection frequency</label>
+          <select id="inspection_frequency" name="inspection_frequency">
+            <option value="">— None —</option>
+            ${equipmentFrequencyOptions(r.inspection_frequency || '')}
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="checklist_items">Checklist items</label>
+          <textarea id="checklist_items" name="checklist_items" placeholder="One thing to check per line, e.g.&#10;Blade guard&#10;Power cord condition&#10;Emergency stop">${escapeHtml(checklistTextareaValue(r.checklist_items))}</textarea>
+        </div>
+        <div class="form-row">
           <label for="notes">Notes</label>
           <textarea id="notes" name="notes">${escapeHtml(r.notes || '')}</textarea>
         </div>
@@ -2683,20 +2978,26 @@ app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
 
 app.post('/admin/equipment/:id', requireAdmin, async (req, res, next) => {
   try {
-    const { name, category, location, status, pera_id, last_inspected, next_inspection_due, notes } = req.body;
+    const {
+      name, category, location, status, pera_id, last_inspected, next_inspection_due, notes,
+      inspection_frequency, checklist_items,
+    } = req.body;
 
     if (!name || !EQUIPMENT_STATUSES.includes(status)) {
       return res.status(400).send('Name and a valid status are required.');
     }
+    const frequency = EQUIPMENT_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
 
     await pool.query(
       `UPDATE equipment_items SET
          name = $1, category = $2, location = $3, status = $4, pera_id = $5,
-         last_inspected = $6, next_inspection_due = $7, notes = $8, updated_at = now()
-       WHERE id = $9`,
+         last_inspected = $6, next_inspection_due = $7, notes = $8,
+         inspection_frequency = $9, checklist_items = $10, updated_at = now()
+       WHERE id = $11`,
       [
         normalizeText(name), normalizeText(category) || null, normalizeText(location) || null, status,
         pera_id || null, last_inspected || null, next_inspection_due || null, normalizeText(notes) || null,
+        frequency, JSON.stringify(parseChecklistText(checklist_items)),
         req.params.id,
       ]
     );
