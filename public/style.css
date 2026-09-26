@@ -118,11 +118,11 @@ a { color: inherit; }
 
 h1.page-title {
   margin: 0;
-  font-family: 'Fraunces', serif;
-  font-size: 27px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 25px;
   font-weight: 600;
   color: #1A1D1B;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .page-subtitle {
@@ -192,8 +192,8 @@ h1.page-title {
 }
 
 .stat-value {
-  font-family: 'Fraunces', serif;
-  font-size: 26px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 25px;
   font-weight: 600;
   color: #1A1D1B;
   margin-top: 2px;
@@ -256,6 +256,16 @@ h1.page-title {
 .chip-high.active { background: #C2600F; color: #FFFFFF; border-color: #C2600F; }
 .chip-extreme.active { background: #C0392B; color: #FFFFFF; border-color: #C0392B; }
 
+/* Equipment status filter chips, same pastel-palette treatment as the risk
+   chips above. */
+.chip-operational { background: #E4F3EA; color: #2F7D5A; border-color: #E4F3EA; }
+.chip-needs-repair { background: #FBEBD0; color: #B7791F; border-color: #FBEBD0; }
+.chip-out-of-service { background: #FBE0DD; color: #C0392B; border-color: #FBE0DD; }
+
+.chip-operational.active { background: #2F7D5A; color: #FFFFFF; border-color: #2F7D5A; }
+.chip-needs-repair.active { background: #B7791F; color: #FFFFFF; border-color: #B7791F; }
+.chip-out-of-service.active { background: #C0392B; color: #FFFFFF; border-color: #C0392B; }
+
 table {
   border-collapse: collapse;
   width: 100%;
@@ -308,6 +318,10 @@ tr.row-link:hover {
 .badge-pending { background: #FBEBD0; color: #B7791F; }
 .badge-approved { background: #E4F3EA; color: #2F7D5A; }
 .badge-changes { background: #FBE0DD; color: #C0392B; }
+
+.badge-operational { background: #E4F3EA; color: #2F7D5A; }
+.badge-needs-repair { background: #FBEBD0; color: #B7791F; }
+.badge-out-of-service { background: #FBE0DD; color: #C0392B; }
 
 .empty-state {
   padding: 48px 24px;
@@ -421,8 +435,8 @@ tr.row-link:hover {
 }
 
 .form-section-title {
-  font-family: 'Fraunces', serif;
-  font-size: 17px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 16px;
   font-weight: 600;
   color: #1A1D1B;
   margin: 32px 0 4px 0;
