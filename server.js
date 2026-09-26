@@ -109,14 +109,29 @@ function formatDateTime(d) {
 // cara_change_log.summary, one "Label: old -> new" line per changed field)
 // down to a short one-line label for the collapsed row in the change history
 // tree. The full summary is still shown in full once the entry is expanded.
-function briefChangeSummary(summary) {
-  if (!summary) return '';
-  if (summary.startsWith('CARA created')) return summary;
-  const labels = summary.split('\n').filter(Boolean).map((line) => line.split(':')[0].trim());
-  if (labels.length === 0) return 'Updated';
+// Builds the short one-line label shown in the collapsed row of the change
+// history tree, from the list of field labels that actually changed (must be
+// collected at the point the diff is computed -- see the "changedLabels"
+// arrays below -- since the changed values themselves can contain embedded
+// newlines, so the joined multi-line summary text can't be split back into
+// "one line per field" after the fact).
+function summarizeChangedLabels(labels) {
+  if (!labels || labels.length === 0) return 'Updated';
   if (labels.length === 1) return `Updated ${labels[0].toLowerCase()}`;
   if (labels.length === 2) return `Updated ${labels[0].toLowerCase()} and ${labels[1].toLowerCase()}`;
   return `Updated ${labels.length} fields`;
+}
+
+// Fallback brief label for change-log rows saved before the "brief" column
+// existed. Can only reliably recover the first changed field's label (text
+// changes can contain their own newlines, so a full field count isn't safe
+// to reconstruct from the stored summary text alone).
+function legacyBriefFromSummary(summary) {
+  if (!summary) return '';
+  if (summary.startsWith('CARA created')) return summary;
+  const firstColon = summary.indexOf(':');
+  const firstLabel = firstColon === -1 ? summary : summary.slice(0, firstColon).trim();
+  return `Updated ${firstLabel.toLowerCase()}`;
 }
 
 // Windows-style line endings (\r\n) sometimes end up in saved text (pasted
@@ -838,7 +853,7 @@ app.post('/cara', async (req, res, next) => {
     }
 
     await pool.query(
-      'INSERT INTO cara_change_log (cara_id, changed_by, summary) VALUES ($1, $2, $3)',
+      'INSERT INTO cara_change_log (cara_id, changed_by, summary, brief) VALUES ($1, $2, $3, $3)',
       [caraId, normalizeText(submitted_by) || null, 'CARA created']
     );
 
@@ -1128,17 +1143,20 @@ app.post('/cara/:id/edit', async (req, res, next) => {
     const displayValue = (v) => ((v === null || v === undefined || String(v).trim() === '') ? '(empty)' : String(v));
 
     const changeLines = [];
+    const changedLabels = [];
     for (const [key, label, newValue] of fields) {
       const oldValue = before[key];
       const oldStr = (oldValue === null || oldValue === undefined) ? '' : String(oldValue);
       const newStr = (newValue === null || newValue === undefined) ? '' : String(newValue);
       if (oldStr.trim() !== newStr.trim()) {
         changeLines.push(`${label}: ${displayValue(oldValue)} → ${displayValue(newValue)}`);
+        changedLabels.push(label);
       }
     }
 
     if (before.consent_required !== newConsentRequired) {
       changeLines.push(`Parent consent required: ${before.consent_required ? 'Yes' : 'No'} → ${newConsentRequired ? 'Yes' : 'No'}`);
+      changedLabels.push('Parent consent required');
     }
 
     const beforeToolSet = new Set(beforeToolIds);
@@ -1155,6 +1173,7 @@ app.post('/cara/:id/edit', async (req, res, next) => {
       if (addedToolIds.length) parts.push(`added ${addedToolIds.map((id) => nameById.get(id) || `#${id}`).join(', ')}`);
       if (removedToolIds.length) parts.push(`removed ${removedToolIds.map((id) => nameById.get(id) || `#${id}`).join(', ')}`);
       changeLines.push(`PERA used: ${parts.join('; ')}`);
+      changedLabels.push('PERA used');
     }
 
     if (changeLines.length === 0) {
@@ -1195,9 +1214,11 @@ app.post('/cara/:id/edit', async (req, res, next) => {
       );
     }
 
+    const briefSummary = summarizeChangedLabels(changedLabels);
+
     await pool.query(
-      'INSERT INTO cara_change_log (cara_id, changed_by, summary) VALUES ($1, $2, $3)',
-      [req.params.id, edited_by.trim(), changeLines.join('\n')]
+      'INSERT INTO cara_change_log (cara_id, changed_by, summary, brief) VALUES ($1, $2, $3, $4)',
+      [req.params.id, edited_by.trim(), changeLines.join('\n'), briefSummary]
     );
 
     res.redirect(`/cara/${req.params.id}`);
@@ -1236,7 +1257,7 @@ app.get('/cara/:id', async (req, res, next) => {
           <details class="change-log-entry">
             <summary class="change-log-summary">
               <span class="change-log-datetime">${formatDateTime(c.changed_at)} — ${escapeHtml(c.changed_by || 'Unknown')}</span>
-              <span class="change-log-brief">${escapeHtml(briefChangeSummary(c.summary))}</span>
+              <span class="change-log-brief">${escapeHtml(c.brief || legacyBriefFromSummary(c.summary))}</span>
             </summary>
             <div class="change-log-detail">${escapeHtml(c.summary)}</div>
           </details>
@@ -1762,7 +1783,7 @@ app.post('/cara/:id/duplicate', async (req, res, next) => {
     }
 
     await pool.query(
-      'INSERT INTO cara_change_log (cara_id, changed_by, summary) VALUES ($1, $2, $3)',
+      'INSERT INTO cara_change_log (cara_id, changed_by, summary, brief) VALUES ($1, $2, $3, $3)',
       [newId, r.submitted_by || null, `CARA created (duplicated from "${r.activity_name}")`]
     );
 
