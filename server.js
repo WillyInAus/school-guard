@@ -572,14 +572,20 @@ app.get('/cara/new', async (req, res, next) => {
 
     let toolListHtml = '';
     for (const [group, tools] of groups) {
-      toolListHtml += `<div class="tool-picker-group-label">${escapeHtml(group)}</div>`;
-      toolListHtml += tools.map((t) => `
-        <div class="tool-picker-item" data-search="${escapeHtml(t.activity_name.toLowerCase())}">
-          <input type="checkbox" id="tool_${t.id}" name="tool_ids" value="${t.id}">
-          <label for="tool_${t.id}">${escapeHtml(t.activity_name)}</label>
-          <span class="badge ${riskBadgeClass(t.risk_level)}">${escapeHtml(t.risk_level)}</span>
-        </div>
-      `).join('');
+      toolListHtml += `
+        <details class="tool-picker-group">
+          <summary class="tool-picker-group-label">${escapeHtml(group)} <span class="tool-picker-group-count">(${tools.length})</span></summary>
+          <div class="tool-picker-group-items">
+            ${tools.map((t) => `
+              <div class="tool-picker-item" data-search="${escapeHtml(t.activity_name.toLowerCase())}">
+                <input type="checkbox" id="tool_${t.id}" name="tool_ids" value="${t.id}">
+                <label for="tool_${t.id}">${escapeHtml(t.activity_name)}</label>
+                <span class="badge ${riskBadgeClass(t.risk_level)}">${escapeHtml(t.risk_level)}</span>
+              </div>
+            `).join('')}
+          </div>
+        </details>
+      `;
     }
     if (!toolsResult.rows.length) {
       toolListHtml = '<div class="tool-picker-item">No approved PERA records yet.</div>';
@@ -708,8 +714,19 @@ app.get('/cara/new', async (req, res, next) => {
       <script>
         function filterTools(query) {
           const q = query.toLowerCase();
-          document.querySelectorAll('.tool-picker-item[data-search]').forEach((item) => {
-            item.style.display = item.dataset.search.includes(q) ? '' : 'none';
+          document.querySelectorAll('.tool-picker-group').forEach((group) => {
+            let anyVisible = false;
+            group.querySelectorAll('.tool-picker-item[data-search]').forEach((item) => {
+              const match = item.dataset.search.includes(q);
+              item.style.display = match ? '' : 'none';
+              if (match) anyVisible = true;
+            });
+            if (q) {
+              group.open = anyVisible;
+              group.style.display = anyVisible ? '' : 'none';
+            } else {
+              group.style.display = '';
+            }
           });
         }
       </script>
@@ -810,14 +827,21 @@ app.get('/cara/:id/edit', async (req, res, next) => {
 
     let toolListHtml = '';
     for (const [group, tools] of groups) {
-      toolListHtml += `<div class="tool-picker-group-label">${escapeHtml(group)}</div>`;
-      toolListHtml += tools.map((t) => `
-        <div class="tool-picker-item" data-search="${escapeHtml(t.activity_name.toLowerCase())}">
-          <input type="checkbox" id="tool_${t.id}" name="tool_ids" value="${t.id}" ${linkedIds.has(String(t.id)) ? 'checked' : ''}>
-          <label for="tool_${t.id}">${escapeHtml(t.activity_name)}</label>
-          <span class="badge ${riskBadgeClass(t.risk_level)}">${escapeHtml(t.risk_level)}</span>
-        </div>
-      `).join('');
+      const groupHasChecked = tools.some((t) => linkedIds.has(String(t.id)));
+      toolListHtml += `
+        <details class="tool-picker-group"${groupHasChecked ? ' open' : ''}>
+          <summary class="tool-picker-group-label">${escapeHtml(group)} <span class="tool-picker-group-count">(${tools.length})</span></summary>
+          <div class="tool-picker-group-items">
+            ${tools.map((t) => `
+              <div class="tool-picker-item" data-search="${escapeHtml(t.activity_name.toLowerCase())}">
+                <input type="checkbox" id="tool_${t.id}" name="tool_ids" value="${t.id}" ${linkedIds.has(String(t.id)) ? 'checked' : ''}>
+                <label for="tool_${t.id}">${escapeHtml(t.activity_name)}</label>
+                <span class="badge ${riskBadgeClass(t.risk_level)}">${escapeHtml(t.risk_level)}</span>
+              </div>
+            `).join('')}
+          </div>
+        </details>
+      `;
     }
     if (!toolsResult.rows.length) {
       toolListHtml = '<div class="tool-picker-item">No approved PERA records yet.</div>';
@@ -954,8 +978,19 @@ app.get('/cara/:id/edit', async (req, res, next) => {
       <script>
         function filterTools(query) {
           const q = query.toLowerCase();
-          document.querySelectorAll('.tool-picker-item[data-search]').forEach((item) => {
-            item.style.display = item.dataset.search.includes(q) ? '' : 'none';
+          document.querySelectorAll('.tool-picker-group').forEach((group) => {
+            let anyVisible = false;
+            group.querySelectorAll('.tool-picker-item[data-search]').forEach((item) => {
+              const match = item.dataset.search.includes(q);
+              item.style.display = match ? '' : 'none';
+              if (match) anyVisible = true;
+            });
+            if (q) {
+              group.open = anyVisible;
+              group.style.display = anyVisible ? '' : 'none';
+            } else {
+              group.style.display = '';
+            }
           });
         }
       </script>
