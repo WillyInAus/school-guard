@@ -94,6 +94,31 @@ function formatDate(d) {
   return date.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+// Used for the change history tree on a CARA, where each entry needs both a
+// date and a time (unlike formatDate, which is date-only). Recorded
+// automatically from cara_change_log.changed_at whenever a change is saved.
+function formatDateTime(d) {
+  if (!d) return '—';
+  const date = new Date(d);
+  const datePart = date.toLocaleDateString('en-AU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const timePart = date.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${datePart} – ${timePart}`;
+}
+
+// Reduces a full field-by-field change summary (as stored in
+// cara_change_log.summary, one "Label: old -> new" line per changed field)
+// down to a short one-line label for the collapsed row in the change history
+// tree. The full summary is still shown in full once the entry is expanded.
+function briefChangeSummary(summary) {
+  if (!summary) return '';
+  if (summary.startsWith('CARA created')) return summary;
+  const labels = summary.split('\n').filter(Boolean).map((line) => line.split(':')[0].trim());
+  if (labels.length === 0) return 'Updated';
+  if (labels.length === 1) return `Updated ${labels[0].toLowerCase()}`;
+  if (labels.length === 2) return `Updated ${labels[0].toLowerCase()} and ${labels[1].toLowerCase()}`;
+  return `Updated ${labels.length} fields`;
+}
+
 // Windows-style line endings (\r\n) sometimes end up in saved text (pasted
 // from Word/Excel, or older seed data). Browsers silently normalise these to
 // \n when displaying HTML, so it's invisible on the CARA/PERA pages — but
@@ -812,6 +837,11 @@ app.post('/cara', async (req, res, next) => {
       );
     }
 
+    await pool.query(
+      'INSERT INTO cara_change_log (cara_id, changed_by, summary) VALUES ($1, $2, $3)',
+      [caraId, normalizeText(submitted_by) || null, 'CARA created']
+    );
+
     res.redirect(`/cara/${caraId}`);
   } catch (err) {
     next(err);
@@ -1198,13 +1228,19 @@ app.get('/cara/:id', async (req, res, next) => {
       [req.params.id]
     );
 
+    // Newest first (already ORDER BY changed_at DESC above), each entry
+    // collapsed to a single date/time/user/brief-description line by
+    // default, expanding to the full field-by-field detail on click.
     const changeLogHtml = changeLogResult.rows.length
-      ? changeLogResult.rows.map((c) => `
-          <div class="detail-section">
-            <div class="detail-label">${escapeHtml(c.changed_by || 'Unknown')} — ${formatDate(c.changed_at)}</div>
-            <div class="detail-value">${escapeHtml(c.summary)}</div>
-          </div>
-        `).join('')
+      ? `<div class="change-log">${changeLogResult.rows.map((c) => `
+          <details class="change-log-entry">
+            <summary class="change-log-summary">
+              <span class="change-log-datetime">${formatDateTime(c.changed_at)} — ${escapeHtml(c.changed_by || 'Unknown')}</span>
+              <span class="change-log-brief">${escapeHtml(briefChangeSummary(c.summary))}</span>
+            </summary>
+            <div class="change-log-detail">${escapeHtml(c.summary)}</div>
+          </details>
+        `).join('')}</div>`
       : `<div class="detail-value">No edits recorded yet.</div>`;
 
     const toolChips = toolsResult.rows.length
@@ -1724,6 +1760,11 @@ app.post('/cara/:id/duplicate', async (req, res, next) => {
         [newId, ...toolLinks.rows.map((t) => t.pera_id)]
       );
     }
+
+    await pool.query(
+      'INSERT INTO cara_change_log (cara_id, changed_by, summary) VALUES ($1, $2, $3)',
+      [newId, r.submitted_by || null, `CARA created (duplicated from "${r.activity_name}")`]
+    );
 
     res.redirect(`/cara/${newId}`);
   } catch (err) {
