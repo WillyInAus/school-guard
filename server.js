@@ -1974,6 +1974,81 @@ function checklistTextareaValue(items) {
   return Array.isArray(items) ? items.join('\n') : '';
 }
 
+// Renders the "Checklist items" form row as an add/remove list of rows (each
+// with a decorative, disabled checkbox previewing how it'll look when
+// someone logs a check) instead of a free-text textarea. A hidden textarea
+// keeps the same name/id the server already expects (one item per line), so
+// nothing on the receiving end (parseChecklistText, the route handlers) has
+// to change — the builder just keeps that hidden field in sync as rows are
+// added, edited, or removed.
+function checklistBuilderHtml(initialItems) {
+  const initialItemsJson = JSON.stringify(Array.isArray(initialItems) ? initialItems : []).replace(/</g, '\\u003c');
+  return `
+        <div class="form-row">
+          <label>Checklist items</label>
+          <div id="checklist-builder"></div>
+          <button type="button" class="btn btn-secondary" id="checklist-add-btn" style="margin-top:4px;padding:6px 12px;font-size:12px;">+ Add item</button>
+          <textarea id="checklist_items" name="checklist_items" style="display:none;"></textarea>
+        </div>
+        <script>
+          (function() {
+            var initialItems = ${initialItemsJson};
+            var builder = document.getElementById('checklist-builder');
+            var hidden = document.getElementById('checklist_items');
+            var rows = [];
+
+            function sync() {
+              hidden.value = rows.map(function(r) { return r.input.value.trim(); }).filter(Boolean).join('\\n');
+            }
+
+            function addRow(value) {
+              var row = document.createElement('div');
+              row.className = 'checkbox-row';
+              row.style.marginBottom = '8px';
+
+              var cb = document.createElement('input');
+              cb.type = 'checkbox';
+              cb.disabled = true;
+              cb.title = 'Ticked off when someone logs a check';
+
+              var input = document.createElement('input');
+              input.type = 'text';
+              input.value = value || '';
+              input.placeholder = 'e.g. Blade guard';
+              input.style.flex = '1';
+              input.addEventListener('input', sync);
+
+              var removeBtn = document.createElement('button');
+              removeBtn.type = 'button';
+              removeBtn.className = 'btn btn-secondary';
+              removeBtn.style.padding = '4px 10px';
+              removeBtn.style.fontSize = '12px';
+              removeBtn.textContent = 'Remove';
+              removeBtn.addEventListener('click', function() {
+                builder.removeChild(row);
+                var idx = rows.findIndex(function(r) { return r.row === row; });
+                if (idx !== -1) rows.splice(idx, 1);
+                sync();
+              });
+
+              row.appendChild(cb);
+              row.appendChild(input);
+              row.appendChild(removeBtn);
+              builder.appendChild(row);
+              rows.push({ row: row, input: input });
+              sync();
+            }
+
+            (initialItems.length ? initialItems : ['']).forEach(addRow);
+
+            document.getElementById('checklist-add-btn').addEventListener('click', function() {
+              addRow('');
+            });
+          })();
+        </script>
+  `;
+}
+
 function equipmentFrequencyOptions(selected) {
   return EQUIPMENT_FREQUENCIES.map((f) => `<option value="${f}" ${f === selected ? 'selected' : ''}>${f}</option>`).join('');
 }
@@ -2117,6 +2192,13 @@ app.get('/equipment/new', async (req, res, next) => {
       '<option value="">— None —</option>',
       ...peraResult.rows.map((p) => `<option value="${p.id}">${escapeHtml(p.activity_name)}</option>`),
     ].join('');
+    // Category shares the same master tool list as "Linked PERA" (rather than
+    // a free-text field), so equipment is tagged with the school's existing
+    // standard tool names instead of ad hoc category labels.
+    const categoryOptions = [
+      '<option value="">— None —</option>',
+      ...peraResult.rows.map((p) => `<option value="${escapeHtml(p.activity_name)}">${escapeHtml(p.activity_name)}</option>`),
+    ].join('');
 
     const body = `
       <a class="back-link" href="/equipment">← Back to Equipment</a>
@@ -2129,7 +2211,7 @@ app.get('/equipment/new', async (req, res, next) => {
         </div>
         <div class="form-row">
           <label for="category">Category</label>
-          <input type="text" id="category" name="category" placeholder="e.g. Machinery, Power tool, Hand tool">
+          <select id="category" name="category">${categoryOptions}</select>
         </div>
         <div class="form-row">
           <label for="location">Location</label>
@@ -2158,10 +2240,7 @@ app.get('/equipment/new', async (req, res, next) => {
             ${equipmentFrequencyOptions('')}
           </select>
         </div>
-        <div class="form-row">
-          <label for="checklist_items">Checklist items</label>
-          <textarea id="checklist_items" name="checklist_items" placeholder="One thing to check per line, e.g.&#10;Blade guard&#10;Power cord condition&#10;Emergency stop"></textarea>
-        </div>
+        ${checklistBuilderHtml([])}
         <div class="form-row">
           <label for="notes">Notes</label>
           <textarea id="notes" name="notes" placeholder="Serial number, maintenance history, anything else worth recording..."></textarea>
@@ -2912,6 +2991,13 @@ app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
       '<option value="">— None —</option>',
       ...peraResult.rows.map((p) => `<option value="${p.id}" ${p.id === r.pera_id ? 'selected' : ''}>${escapeHtml(p.activity_name)}</option>`),
     ].join('');
+    // Category shares the same master tool list as "Linked PERA" (rather than
+    // a free-text field), so equipment is tagged with the school's existing
+    // standard tool names instead of ad hoc category labels.
+    const categoryOptions = [
+      '<option value="">— None —</option>',
+      ...peraResult.rows.map((p) => `<option value="${escapeHtml(p.activity_name)}" ${p.activity_name === r.category ? 'selected' : ''}>${escapeHtml(p.activity_name)}</option>`),
+    ].join('');
 
     const body = `
       <a class="back-link" href="/admin">← Back to Admin</a>
@@ -2923,7 +3009,7 @@ app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
         </div>
         <div class="form-row">
           <label for="category">Category</label>
-          <input type="text" id="category" name="category" value="${escapeHtml(r.category || '')}">
+          <select id="category" name="category">${categoryOptions}</select>
         </div>
         <div class="form-row">
           <label for="location">Location</label>
@@ -2952,10 +3038,7 @@ app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
             ${equipmentFrequencyOptions(r.inspection_frequency || '')}
           </select>
         </div>
-        <div class="form-row">
-          <label for="checklist_items">Checklist items</label>
-          <textarea id="checklist_items" name="checklist_items" placeholder="One thing to check per line, e.g.&#10;Blade guard&#10;Power cord condition&#10;Emergency stop">${escapeHtml(checklistTextareaValue(r.checklist_items))}</textarea>
-        </div>
+        ${checklistBuilderHtml(Array.isArray(r.checklist_items) ? r.checklist_items : [])}
         <div class="form-row">
           <label for="notes">Notes</label>
           <textarea id="notes" name="notes">${escapeHtml(r.notes || '')}</textarea>
