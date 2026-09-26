@@ -6,11 +6,24 @@ if (!connectionString) {
   console.error('DATABASE_URL environment variable is not set.');
 }
 
+// SSL: Render's managed Postgres needs it; a local/self-hosted Postgres
+// (Docker Compose, "localhost") normally doesn't have certs configured, so
+// skip it there. DATABASE_SSL lets a deployment override this explicitly
+// either way instead of relying on guessing from the hostname.
+let sslOption;
+if (process.env.DATABASE_SSL === 'false') {
+  sslOption = false;
+} else if (process.env.DATABASE_SSL === 'true') {
+  sslOption = { rejectUnauthorized: false };
+} else {
+  sslOption = connectionString && connectionString.includes('localhost')
+    ? false
+    : { rejectUnauthorized: false };
+}
+
 const pool = new Pool({
   connectionString,
-  ssl: connectionString && connectionString.includes('localhost')
-    ? false
-    : { rejectUnauthorized: false },
+  ssl: sslOption,
 });
 
 async function migrate() {
