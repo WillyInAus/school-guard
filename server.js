@@ -1,8 +1,22 @@
 const express = require('express');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const PDFDocument = require('pdfkit');
 const { pool, migrate } = require('./db');
 const { page, escapeHtml } = require('./views/layout');
+
+// Faith Lutheran College — Plainland letterhead, shown at the top of CARA PDF
+// exports (see GET /cara/:id/pdf below). Read once at startup; if the file
+// isn't there for some reason, the PDF export falls back to plain text
+// instead of failing.
+const LETTERHEAD_PATH = path.join(__dirname, 'public', 'Letter Head.png');
+let LETTERHEAD_BUFFER = null;
+try {
+  LETTERHEAD_BUFFER = fs.readFileSync(LETTERHEAD_PATH);
+} catch (e) {
+  console.warn('Letterhead image not found at', LETTERHEAD_PATH, '— CARA PDFs will use a plain text header instead.');
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1484,7 +1498,20 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     const MUTED = '#6B6659';
     const TEXT = '#1a1a1a';
 
-    doc.fontSize(9).fillColor(MUTED).text('School Guard — Faith Lutheran College', { align: 'left' });
+    if (LETTERHEAD_BUFFER) {
+      try {
+        doc.image(LETTERHEAD_BUFFER, { fit: [495, 85], align: 'center' });
+        doc.moveDown(0.5);
+      } catch (e) {
+        doc.fontSize(9).fillColor(MUTED).text('Faith Lutheran College — Plainland', { align: 'left' });
+        doc.moveDown(0.3);
+      }
+    } else {
+      doc.fontSize(9).fillColor(MUTED).text('Faith Lutheran College — Plainland', { align: 'left' });
+      doc.moveDown(0.3);
+    }
+
+    doc.fontSize(9).fillColor(MUTED).text('School Guard', { align: 'left' });
     doc.moveDown(0.3);
     doc.fontSize(16).fillColor(GREEN).text('Curriculum Activity Risk Assessment (CARA)');
     doc.moveDown(0.2);
