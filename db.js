@@ -203,6 +203,28 @@ async function migrate() {
       summary = regexp_replace(summary, E'\\r\\n?', E'\\n', 'g')
     WHERE summary LIKE '%' || chr(13) || '%';
   `);
+
+  // Equipment register: a simple list of the school's actual physical tools
+  // and machinery. This is deliberately separate from PERA, which is the
+  // risk-assessment paperwork for a *type* of tool/activity -- an equipment
+  // item is a specific physical thing (e.g. "Guillotine #2, Workshop A") that
+  // can optionally link to the PERA covering it, so a physical item can be
+  // traced straight to its risk assessment.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_items (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      category TEXT,
+      location TEXT,
+      status TEXT NOT NULL DEFAULT 'Operational' CHECK (status IN ('Operational','Needs repair','Out of service')),
+      pera_id INTEGER REFERENCES pera_records(id) ON DELETE SET NULL,
+      last_inspected DATE,
+      next_inspection_due DATE,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
 }
 
 module.exports = { pool, migrate };
