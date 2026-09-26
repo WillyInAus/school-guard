@@ -31,11 +31,11 @@ a { color: inherit; }
 }
 
 .sidebar-brand span {
-  font-family: 'Fraunces', serif;
-  font-size: 21px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 19px;
   font-weight: 600;
   color: #FFFFFF;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .sidebar-nav {
@@ -240,6 +240,21 @@ h1.page-title {
   background: #1B5E52;
   color: #FFFFFF;
 }
+
+/* Risk-level filter chips use the same pastel palette as the risk badges,
+   so a level is recognisable by colour before you even read the label.
+   The active chip for a level fills with that level's badge-text colour
+   (mirroring how the neutral "All" chip fills dark green when active)
+   rather than switching to the app's default green. */
+.chip-low { background: #E4F3EA; color: #2F7D5A; border-color: #E4F3EA; }
+.chip-medium { background: #FBEBD0; color: #B7791F; border-color: #FBEBD0; }
+.chip-high { background: #FBE7D6; color: #C2600F; border-color: #FBE7D6; }
+.chip-extreme { background: #FBE0DD; color: #C0392B; border-color: #FBE0DD; }
+
+.chip-low.active { background: #2F7D5A; color: #FFFFFF; border-color: #2F7D5A; }
+.chip-medium.active { background: #B7791F; color: #FFFFFF; border-color: #B7791F; }
+.chip-high.active { background: #C2600F; color: #FFFFFF; border-color: #C2600F; }
+.chip-extreme.active { background: #C0392B; color: #FFFFFF; border-color: #C0392B; }
 
 table {
   border-collapse: collapse;
