@@ -1555,6 +1555,86 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     const MUTED = '#6B6659';
     const TEXT = '#1a1a1a';
 
+    // Light rounded card panels for each section, matching the white/beige
+    // "detail-section" cards on the CARA web page (see public/style.css).
+    // A panel's height depends on its (possibly multi-paragraph) content, so
+    // it's measured with heightOfString using the exact fonts/sizes/width
+    // that will be used to draw it, then the background is drawn first and
+    // the text on top of it -- and if the panel doesn't fit in the space
+    // left on the page (but would fit a fresh page) it's moved to a new page
+    // rather than being cut in half by the page break.
+    const PANEL_FILL = '#F7F5F1';
+    const PANEL_BORDER = '#E4DFD3';
+    const PANEL_PADDING = 12;
+    const PANEL_RADIUS = 6;
+    const PANEL_GAP = 10;
+    const TITLE_SIZE = 10.5;
+    const BODY_SIZE = 10;
+    const TITLE_GAP = 4;
+
+    function panelContentWidth() {
+      return doc.page.width - doc.page.margins.left - doc.page.margins.right - PANEL_PADDING * 2;
+    }
+
+    function drawPanelShell(contentHeight, draw) {
+      const cw = panelContentWidth();
+      const panelW = cw + PANEL_PADDING * 2;
+      const panelH = contentHeight + PANEL_PADDING * 2;
+      const usableTop = doc.page.margins.top;
+      const usableBottom = doc.page.height - doc.page.margins.bottom;
+      const maxPageContentHeight = usableBottom - usableTop;
+      if (doc.y + panelH > usableBottom && panelH <= maxPageContentHeight) {
+        doc.addPage();
+      }
+      const left = doc.page.margins.left;
+      const top = doc.y;
+      doc.lineWidth(1);
+      doc.roundedRect(left, top, panelW, panelH, PANEL_RADIUS).fillAndStroke(PANEL_FILL, PANEL_BORDER);
+      doc.x = left + PANEL_PADDING;
+      doc.y = top + PANEL_PADDING;
+      draw(cw);
+      doc.y = top + panelH + PANEL_GAP;
+      doc.x = left;
+    }
+
+    // Renders one panel with a title followed by any number of styled text
+    // parts stacked underneath it (each with its own gap above it, font size
+    // and colour) -- used both for a plain "title + body" section and for
+    // panels like the monitoring review that mix several lines of text.
+    // `extraDraw(startX, width)`, if given, is called once a panel's text
+    // parts have all been drawn far enough to reach the first part with a
+    // fixed `height` instead of `text` -- used to place an image (whose
+    // rendered size isn't known ahead of time the way text height is) at
+    // the right y position within a reserved block of vertical space.
+    function multiPanel(title, parts, extraDraw) {
+      const cw = panelContentWidth();
+      doc.fontSize(TITLE_SIZE);
+      const titleHeight = doc.heightOfString(title, { width: cw });
+      let contentHeight = titleHeight;
+      for (const part of parts) {
+        contentHeight += part.gapBefore || 0;
+        if (part.height != null) {
+          contentHeight += part.height;
+        } else {
+          doc.fontSize(part.size || BODY_SIZE);
+          contentHeight += doc.heightOfString(part.text, { width: cw });
+        }
+      }
+      drawPanelShell(contentHeight, (w) => {
+        const startX = doc.x;
+        doc.fontSize(TITLE_SIZE).fillColor(GREEN).text(title, startX, doc.y, { width: w });
+        for (const part of parts) {
+          doc.y += part.gapBefore || 0;
+          if (part.height != null) {
+            if (extraDraw) extraDraw(startX, w);
+            doc.y += part.height;
+          } else {
+            doc.fontSize(part.size || BODY_SIZE).fillColor(part.color || TEXT).text(part.text, startX, doc.y, { width: w });
+          }
+        }
+      });
+    }
+
     if (LETTERHEAD_BUFFER) {
       try {
         doc.image(LETTERHEAD_BUFFER, { fit: [495, 85], align: 'center' });
@@ -1579,19 +1659,17 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     doc.moveDown(0.8);
 
     function section(title, value) {
-      doc.fontSize(10.5).fillColor(GREEN).text(title);
-      doc.fontSize(10).fillColor(TEXT).text(value && String(value).trim() ? normalizeText(value) : '—');
-      doc.moveDown(0.6);
+      const body = value && String(value).trim() ? normalizeText(value) : '—';
+      multiPanel(title, [{ text: body, gapBefore: TITLE_GAP }]);
     }
 
     section('Activity scope', r.activity_scope);
 
     if (toolsResult.rows.length) {
-      doc.fontSize(10.5).fillColor(GREEN).text('PERA used');
-      doc.fontSize(10).fillColor(TEXT).text(
-        toolsResult.rows.map((t) => `• ${t.activity_name} (${t.risk_level})`).join('\n')
-      );
-      doc.moveDown(0.6);
+      multiPanel('PERA used', [{
+        text: toolsResult.rows.map((t) => `• ${t.activity_name} (${t.risk_level})`).join('\n'),
+        gapBefore: TITLE_GAP,
+      }]);
     } else {
       section('PERA used', null);
     }
@@ -1620,32 +1698,47 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     }
 
     if (r.reviewed_at) {
-      doc.fontSize(10.5).fillColor(GREEN).text('Post-activity monitoring & review');
       const yn = (v) => (v === true ? 'Yes' : v === false ? 'No' : '—');
-      doc.fontSize(10).fillColor(TEXT).text(`Additional hazards identified: ${yn(r.monitoring_new_hazards)}`);
-      doc.text(`Control measures effective: ${yn(r.monitoring_controls_effective)}`);
-      doc.text(`Further action required: ${yn(r.monitoring_further_action)}`);
-      if (r.monitoring_details) doc.text(normalizeText(r.monitoring_details));
-      doc.fontSize(8.5).fillColor(MUTED).text(`Last reviewed ${formatDate(r.reviewed_at)}.`);
-      doc.moveDown(0.6);
+      const monitoringParts = [
+        { text: `Additional hazards identified: ${yn(r.monitoring_new_hazards)}`, gapBefore: TITLE_GAP },
+        { text: `Control measures effective: ${yn(r.monitoring_controls_effective)}`, gapBefore: 2 },
+        { text: `Further action required: ${yn(r.monitoring_further_action)}`, gapBefore: 2 },
+      ];
+      if (r.monitoring_details) {
+        monitoringParts.push({ text: normalizeText(r.monitoring_details), gapBefore: 6 });
+      }
+      monitoringParts.push({ text: `Last reviewed ${formatDate(r.reviewed_at)}.`, gapBefore: 6, size: 8.5, color: MUTED });
+      multiPanel('Post-activity monitoring & review', monitoringParts);
     }
 
-    doc.fontSize(10.5).fillColor(GREEN).text('Teacher signature');
-    doc.fontSize(10).fillColor(TEXT).text(
-      `Submitted by: ${r.submitted_by || 'unknown'}${r.signed_at ? `  on  ${formatDate(r.signed_at)}` : ''}`
-    );
+    const signatureParts = [{
+      text: `Submitted by: ${r.submitted_by || 'unknown'}${r.signed_at ? `  on  ${formatDate(r.signed_at)}` : ''}`,
+      gapBefore: TITLE_GAP,
+    }];
+    let signatureImage = null;
     if (r.teacher_signature) {
       try {
         const base64 = r.teacher_signature.split(',')[1];
-        const imgBuffer = Buffer.from(base64, 'base64');
-        doc.moveDown(0.3);
-        doc.image(imgBuffer, { fit: [200, 80] });
+        signatureImage = Buffer.from(base64, 'base64');
+        // Reserve the fitted image's max height (see `fit` below); the exact
+        // rendered height depends on the signature's aspect ratio, but this
+        // keeps the panel comfortably tall enough either way.
+        signatureParts.push({ text: '', gapBefore: 8, height: 80 });
       } catch (e) {
-        doc.fontSize(9).fillColor(MUTED).text('(signature image could not be rendered)');
+        signatureParts.push({ text: '(signature image could not be rendered)', gapBefore: 6, size: 9, color: MUTED });
       }
     } else {
-      doc.fontSize(9).fillColor(MUTED).text('No signature captured.');
+      signatureParts.push({ text: 'No signature captured.', gapBefore: 6, size: 9, color: MUTED });
     }
+    multiPanel('Teacher signature', signatureParts, (startX) => {
+      if (signatureImage) {
+        try {
+          doc.image(signatureImage, startX, doc.y, { fit: [200, 80] });
+        } catch (e) {
+          doc.fontSize(9).fillColor(MUTED).text('(signature image could not be rendered)', startX, doc.y);
+        }
+      }
+    });
 
     doc.moveDown(1.2);
     doc.fontSize(8).fillColor('#999999').text(
