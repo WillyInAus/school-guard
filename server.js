@@ -80,6 +80,17 @@ function formatDate(d) {
   return date.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+// Windows-style line endings (\r\n) sometimes end up in saved text (pasted
+// from Word/Excel, or older seed data). Browsers silently normalise these to
+// \n when displaying HTML, so it's invisible on the CARA/PERA pages — but
+// PDFKit's built-in fonts have no glyph for a lone \r and render it as a
+// stray "Ð" character at the end of every line. Strip it wherever text is
+// saved or rendered to a PDF.
+function normalizeText(v) {
+  if (v === null || v === undefined) return v;
+  return String(v).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
 // ---------- Dashboard ----------
 
 app.get('/', async (req, res, next) => {
@@ -287,9 +298,9 @@ app.post('/pera', async (req, res, next) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        RETURNING id`,
       [
-        activity_name, class_unit || null, risk_level,
-        hazards || null, control_measures || null, required_supervision || null,
-        consent_required === 'true', submitted_by || null,
+        normalizeText(activity_name), normalizeText(class_unit) || null, risk_level,
+        normalizeText(hazards) || null, normalizeText(control_measures) || null, normalizeText(required_supervision) || null,
+        consent_required === 'true', normalizeText(submitted_by) || null,
       ]
     );
 
@@ -766,13 +777,13 @@ app.post('/cara', async (req, res, next) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        RETURNING id`,
       [
-        activity_name, class_unit || null, activity_scope || null, risk_level,
-        students_notes || null, emergency_first_aid || null, induction_instruction || null, consent_required === 'true',
-        supervision_notes || null, supervisor_qualification || null, facilities_equipment || null,
-        environmental_hazards || null, environmental_controls || null,
-        facilities_hazards || null, facilities_controls || null,
-        student_hazards || null, student_controls || null,
-        submitted_by || null,
+        normalizeText(activity_name), normalizeText(class_unit) || null, normalizeText(activity_scope) || null, risk_level,
+        normalizeText(students_notes) || null, normalizeText(emergency_first_aid) || null, normalizeText(induction_instruction) || null, consent_required === 'true',
+        normalizeText(supervision_notes) || null, normalizeText(supervisor_qualification) || null, normalizeText(facilities_equipment) || null,
+        normalizeText(environmental_hazards) || null, normalizeText(environmental_controls) || null,
+        normalizeText(facilities_hazards) || null, normalizeText(facilities_controls) || null,
+        normalizeText(student_hazards) || null, normalizeText(student_controls) || null,
+        normalizeText(submitted_by) || null,
       ]
     );
 
@@ -1004,7 +1015,7 @@ app.get('/cara/:id/edit', async (req, res, next) => {
 
 app.post('/cara/:id/edit', async (req, res, next) => {
   try {
-    const {
+    let {
       activity_name, class_unit, activity_scope, risk_level,
       students_notes, emergency_first_aid, induction_instruction, consent_required,
       supervision_notes, supervisor_qualification, facilities_equipment,
@@ -1013,6 +1024,23 @@ app.post('/cara/:id/edit', async (req, res, next) => {
       student_hazards, student_controls,
       submitted_by, edited_by,
     } = req.body;
+
+    activity_name = normalizeText(activity_name);
+    class_unit = normalizeText(class_unit);
+    activity_scope = normalizeText(activity_scope);
+    students_notes = normalizeText(students_notes);
+    emergency_first_aid = normalizeText(emergency_first_aid);
+    induction_instruction = normalizeText(induction_instruction);
+    supervision_notes = normalizeText(supervision_notes);
+    supervisor_qualification = normalizeText(supervisor_qualification);
+    facilities_equipment = normalizeText(facilities_equipment);
+    environmental_hazards = normalizeText(environmental_hazards);
+    environmental_controls = normalizeText(environmental_controls);
+    facilities_hazards = normalizeText(facilities_hazards);
+    facilities_controls = normalizeText(facilities_controls);
+    student_hazards = normalizeText(student_hazards);
+    student_controls = normalizeText(student_controls);
+    submitted_by = normalizeText(submitted_by);
 
     if (!activity_name || !RISK_LEVELS.includes(risk_level)) {
       return res.status(400).send('Activity name and a valid risk level are required.');
@@ -1468,7 +1496,7 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
 
     function section(title, value) {
       doc.fontSize(10.5).fillColor(GREEN).text(title);
-      doc.fontSize(10).fillColor(TEXT).text(value && String(value).trim() ? String(value) : '—');
+      doc.fontSize(10).fillColor(TEXT).text(value && String(value).trim() ? normalizeText(value) : '—');
       doc.moveDown(0.6);
     }
 
@@ -1513,7 +1541,7 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
       doc.fontSize(10).fillColor(TEXT).text(`Additional hazards identified: ${yn(r.monitoring_new_hazards)}`);
       doc.text(`Control measures effective: ${yn(r.monitoring_controls_effective)}`);
       doc.text(`Further action required: ${yn(r.monitoring_further_action)}`);
-      if (r.monitoring_details) doc.text(r.monitoring_details);
+      if (r.monitoring_details) doc.text(normalizeText(r.monitoring_details));
       doc.fontSize(8.5).fillColor(MUTED).text(`Last reviewed ${formatDate(r.reviewed_at)}.`);
       doc.moveDown(0.6);
     }
@@ -1613,7 +1641,7 @@ app.post('/cara/:id/review', async (req, res, next) => {
        WHERE id = $5`,
       [
         toBool(monitoring_new_hazards), toBool(monitoring_controls_effective),
-        toBool(monitoring_further_action), monitoring_details || null,
+        toBool(monitoring_further_action), normalizeText(monitoring_details) || null,
         req.params.id,
       ]
     );
@@ -1908,9 +1936,9 @@ app.post('/admin/pera/:id', requireAdmin, async (req, res, next) => {
          submitted_by = $9, approver = $10, updated_at = now()
        WHERE id = $11`,
       [
-        activity_name, class_unit || null, risk_level, status,
-        hazards || null, control_measures || null, required_supervision || null,
-        consent_required === 'true', submitted_by || null, approver || null,
+        normalizeText(activity_name), normalizeText(class_unit) || null, risk_level, status,
+        normalizeText(hazards) || null, normalizeText(control_measures) || null, normalizeText(required_supervision) || null,
+        consent_required === 'true', normalizeText(submitted_by) || null, normalizeText(approver) || null,
         req.params.id,
       ]
     );
@@ -2070,13 +2098,13 @@ app.post('/admin/cara/:id', requireAdmin, async (req, res, next) => {
          submitted_by = $19, approver = $20, updated_at = now()
        WHERE id = $21`,
       [
-        activity_name, class_unit || null, activity_scope || null, risk_level, status,
-        students_notes || null, emergency_first_aid || null, induction_instruction || null, consent_required === 'true',
-        supervision_notes || null, supervisor_qualification || null, facilities_equipment || null,
-        environmental_hazards || null, environmental_controls || null,
-        facilities_hazards || null, facilities_controls || null,
-        student_hazards || null, student_controls || null,
-        submitted_by || null, approver || null,
+        normalizeText(activity_name), normalizeText(class_unit) || null, normalizeText(activity_scope) || null, risk_level, status,
+        normalizeText(students_notes) || null, normalizeText(emergency_first_aid) || null, normalizeText(induction_instruction) || null, consent_required === 'true',
+        normalizeText(supervision_notes) || null, normalizeText(supervisor_qualification) || null, normalizeText(facilities_equipment) || null,
+        normalizeText(environmental_hazards) || null, normalizeText(environmental_controls) || null,
+        normalizeText(facilities_hazards) || null, normalizeText(facilities_controls) || null,
+        normalizeText(student_hazards) || null, normalizeText(student_controls) || null,
+        normalizeText(submitted_by) || null, normalizeText(approver) || null,
         req.params.id,
       ]
     );
