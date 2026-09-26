@@ -225,6 +225,40 @@ async function migrate() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+
+  // How often each item needs to be checked (drives next_inspection_due
+  // whenever a check is logged), and the list of things to look at during a
+  // check (e.g. "Blade guard", "Power cord condition") — a plain JSON array
+  // of strings, since these are just a checklist, not records in their own
+  // right.
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS inspection_frequency TEXT;`);
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS checklist_items JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'equipment_items_inspection_frequency_check'
+      ) THEN
+        ALTER TABLE equipment_items
+          ADD CONSTRAINT equipment_items_inspection_frequency_check
+          CHECK (inspection_frequency IS NULL OR inspection_frequency IN ('Daily','Week','Term','Semester','Yearly'));
+      END IF;
+    END $$;
+  `);
+
+  // One row per logged check ("I checked this today, here's what I looked
+  // at"). Kept separate from equipment_items so the history isn't lost every
+  // time a new check overwrites last_inspected/next_inspection_due.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_checks (
+      id SERIAL PRIMARY KEY,
+      equipment_id INTEGER NOT NULL REFERENCES equipment_items(id) ON DELETE CASCADE,
+      checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      checked_by TEXT,
+      completed_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+      notes TEXT
+    );
+  `);
 }
 
 module.exports = { pool, migrate };
