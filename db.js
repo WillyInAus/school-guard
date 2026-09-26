@@ -121,6 +121,12 @@ async function migrate() {
     );
   `);
 
+  // Short one-line label for the collapsed row of the change history tree
+  // (e.g. "Updated supervision", "CARA created"), computed and stored at
+  // write time -- see server.js. Rows saved before this column existed are
+  // NULL and fall back to a best-effort label derived from "summary".
+  await pool.query(`ALTER TABLE cara_change_log ADD COLUMN IF NOT EXISTS brief TEXT;`);
+
   // One-off cleanup: some existing records (older seed data / text pasted
   // from Word) have Windows-style \r\n line endings saved in their text
   // fields. Browsers silently normalise \r\n to \n when rendering the HTML
