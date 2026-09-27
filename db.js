@@ -542,6 +542,182 @@ async function migrate() {
   // from the three unchanged flags above (see server.js), so make it
   // optional for new rows while leaving old ones exactly as they were.
   await pool.query(`ALTER TABLE pera_annual_reviews ALTER COLUMN outcome DROP NOT NULL;`);
+
+  // ---------------------------------------------------------------
+  // Equipment: shared Maintenance/Inspection criteria libraries.
+  //
+  // Replaces the old free-text-per-item equipment_items.checklist_items
+  // (left in place, unused, rather than dropped -- see the app's usual
+  // never-rewrite-old-data approach) with two shared, categorised master
+  // lists -- one for Maintenance (servicing work: "replaced bearing",
+  // "tensioned drive belt") and one for Inspection (safety condition
+  // checks: "blade is sharp, undamaged...") -- so a category/criterion is
+  // defined once and then just ticked "applies to this item" per piece of
+  // equipment, instead of being retyped from scratch every time.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maintenance_categories (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maintenance_criteria (
+      id SERIAL PRIMARY KEY,
+      category_id INTEGER NOT NULL REFERENCES maintenance_categories(id) ON DELETE CASCADE,
+      description TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inspection_categories (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inspection_criteria (
+      id SERIAL PRIMARY KEY,
+      category_id INTEGER NOT NULL REFERENCES inspection_categories(id) ON DELETE CASCADE,
+      description TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+
+  // Which master criteria apply to a specific physical equipment item --
+  // set when the item is added/edited (the "Maintenance Categories" /
+  // "Inspection Categories" picker).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_maintenance_criteria (
+      equipment_id INTEGER NOT NULL REFERENCES equipment_items(id) ON DELETE CASCADE,
+      criterion_id INTEGER NOT NULL REFERENCES maintenance_criteria(id) ON DELETE CASCADE,
+      PRIMARY KEY (equipment_id, criterion_id)
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_inspection_criteria (
+      equipment_id INTEGER NOT NULL REFERENCES equipment_items(id) ON DELETE CASCADE,
+      criterion_id INTEGER NOT NULL REFERENCES inspection_criteria(id) ON DELETE CASCADE,
+      PRIMARY KEY (equipment_id, criterion_id)
+    );
+  `);
+
+  // Logged Maintenance/Inspection events -- kept as two separate tables
+  // (rather than the old single equipment_checks) since they're now two
+  // distinct activities with their own due dates. completed_criteria
+  // snapshots the ticked descriptions as text at the time of logging
+  // (not a live FK to the criteria table), so a log entry still reads
+  // correctly even if that criterion is later reworded or removed from
+  // the shared library -- same reasoning as equipment_checks.completed_items
+  // before it.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_maintenance_logs (
+      id SERIAL PRIMARY KEY,
+      equipment_id INTEGER NOT NULL REFERENCES equipment_items(id) ON DELETE CASCADE,
+      performed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      performed_by TEXT,
+      completed_criteria JSONB NOT NULL DEFAULT '[]'::jsonb,
+      notes TEXT
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_inspection_logs (
+      id SERIAL PRIMARY KEY,
+      equipment_id INTEGER NOT NULL REFERENCES equipment_items(id) ON DELETE CASCADE,
+      performed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      performed_by TEXT,
+      completed_criteria JSONB NOT NULL DEFAULT '[]'::jsonb,
+      notes TEXT
+    );
+  `);
+
+  // equipment_items already has inspection_frequency/last_inspected/
+  // next_inspection_due; Maintenance gets its own matching set so the two
+  // can be due on different schedules (e.g. inspected weekly, serviced
+  // yearly).
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS maintenance_frequency TEXT;`);
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS last_maintained DATE;`);
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS next_maintenance_due DATE;`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'equipment_items_maintenance_frequency_check'
+      ) THEN
+        ALTER TABLE equipment_items
+          ADD CONSTRAINT equipment_items_maintenance_frequency_check
+          CHECK (maintenance_frequency IS NULL OR maintenance_frequency IN ('Daily','Week','Term','Semester','Yearly'));
+      END IF;
+    END $$;
+  `);
+
+  // Seed the default Maintenance/Inspection libraries once, only if empty --
+  // Sean can freely edit/add/remove afterwards without them being re-seeded
+  // on the next startup. "Site Specific" is seeded as an empty category in
+  // each so there's somewhere for school-specific custom criteria to go
+  // straight away.
+  const maintenanceCategoryCount = await pool.query('SELECT COUNT(*)::int AS count FROM maintenance_categories');
+  if (maintenanceCategoryCount.rows[0].count === 0) {
+    const MAINTENANCE_LIBRARY = [
+      ['Bearings', ['Lubricated points/bearings', 'Protected machined surfaces', 'Replaced bearing']],
+      ['Belts', ['Adjusted belt tension', 'Aligned belt tracking', 'Replaced sanding belt', 'Tensioned drive belt']],
+      ['Blades/Discs/Wheels', ['Replaced blade guides', 'Replaced blade/disc/wheel', 'Sharpened blade']],
+      ['Brackets & Mounts', ['Replaced bracket/support', 'Tensioned/adjusted motor mounts']],
+      ['Cutters', ['Replaced cutter', 'Replenished cutting fluid', 'Tensioned cutters']],
+      ['Dust', ['Cleaned dust, swarf and waste', 'Replaced dust collection bag']],
+      ['Electrical', ['Machine inspected, tested and tagged by a competent person', 'Portable/in-line safety switch (RCD) tested', 'Safety switch (ELCB) tested - permanent switchboard installation']],
+      ['Fences', ['Adjusted alignment of fence', 'Adjusted saw riving knife']],
+      ['Guards', ['Repaired/adjusted guard/shield', 'Replaced guard/shield']],
+      ['OTHER', ['Noted in comments']],
+      ['Pulleys', ['Aligned pulleys', 'Replaced drive belt']],
+      ['Site Specific', []],
+    ];
+    for (let ci = 0; ci < MAINTENANCE_LIBRARY.length; ci += 1) {
+      const [name, criteria] = MAINTENANCE_LIBRARY[ci];
+      const catResult = await pool.query(
+        'INSERT INTO maintenance_categories (name, sort_order) VALUES ($1,$2) RETURNING id',
+        [name, ci]
+      );
+      const categoryId = catResult.rows[0].id;
+      for (let ii = 0; ii < criteria.length; ii += 1) {
+        await pool.query(
+          'INSERT INTO maintenance_criteria (category_id, description, sort_order) VALUES ($1,$2,$3)',
+          [categoryId, criteria[ii], ii]
+        );
+      }
+    }
+  }
+
+  const inspectionCategoryCount = await pool.query('SELECT COUNT(*)::int AS count FROM inspection_categories');
+  if (inspectionCategoryCount.rows[0].count === 0) {
+    const INSPECTION_LIBRARY = [
+      ['Blades/Wheels/Discs', ['Blade is sharp, undamaged, tensioned correctly and tracking properly', 'Blades/bits/discs/wheels free of cracks, deformation, broken teeth', 'Disc/wheel/drum/belt displays even wear, without cracks, nicks, chips or tears']],
+      ['Electrical', ['All plugs/sockets/cables/leads free of damage', 'Current electrical testing certification evident (tested & tagged) including battery charger where applicable.', 'Machine can be mechanically isolated/disconnected from power supply', 'Start/Stop/Emergency switches comply with AS/NZS 4024.1201:2014', 'Start/Stop/Emergency switches operate properly']],
+      ['Gas/Welding', ['Fire extinguisher of correct type appropriately positioned', 'Fume extraction system operational, current maintenance evident', 'Gas Arrestor / Regulator certification evident (tagged)', 'Gas bottle secured appropriately', 'Gas hose/s and handpiece in good condition']],
+      ['Guarding', ['Guards are secured with mechanical locking device (where applicable)', 'Guards correctly fitted, adjusted and in good working order. Where applicable, mechanical locking device fitted', 'Interlocking and emergency systems on guards functional (micro switch where available)']],
+      ['Housekeeping', ['No flammable gases, liquids or other materials in the machine area', 'Operator zone and work spaces clear and unobstructed', 'Safe Work Zone clearly defined on floor', 'SOP and hazard warning signs displayed next to machine', 'Work area is clean and clear of off cuts, saw dust and other materials']],
+      ['Machine Operation', ['Adjusting keys, spanners, wrenches removed from the work surface', 'Dust extraction system operates effectively', 'Moving parts are well lubricated and free of rust and dirt', 'Push sticks, push blocks, featherboards and jigs available and appropriate', 'Thrust bearings and guides in good condition, correctly adjusted and rotate freely']],
+      ['Mounts/Stand', ['Base/stand of machine mounted to floor securely', 'Drive belts in good condition and correctly tensioned', 'Machine motor mounts correctly tensioned']],
+      ['Other', ['30 minute exposure for noise emission standard does not exceed 97dB(A) (without PPE)', 'Machine area adequately illuminated', 'Personal Protective Equipment available and in good condition', 'Slip resistant flooring evident in machine space']],
+      ['Power/Battery Tools', ['Battery charger - current testing certification evident (tested & tagged)', 'Dust collection bag attached and in good condition', 'Electrical cable - current testing certification evident (tested & tagged)', 'Residual Current Device (RCD) connected and operational', 'Start/Stop switch operates properly']],
+      ['Site Specific', []],
+    ];
+    for (let ci = 0; ci < INSPECTION_LIBRARY.length; ci += 1) {
+      const [name, criteria] = INSPECTION_LIBRARY[ci];
+      const catResult = await pool.query(
+        'INSERT INTO inspection_categories (name, sort_order) VALUES ($1,$2) RETURNING id',
+        [name, ci]
+      );
+      const categoryId = catResult.rows[0].id;
+      for (let ii = 0; ii < criteria.length; ii += 1) {
+        await pool.query(
+          'INSERT INTO inspection_criteria (category_id, description, sort_order) VALUES ($1,$2,$3)',
+          [categoryId, criteria[ii], ii]
+        );
+      }
+    }
+  }
 }
 
 module.exports = { pool, migrate };

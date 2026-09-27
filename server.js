@@ -3134,6 +3134,199 @@ function toArray(v) {
   return Array.isArray(v) ? v : [v];
 }
 
+// ---- Equipment: shared Maintenance/Inspection criteria libraries --------
+// kind is always the literal string 'maintenance' or 'inspection' from
+// code in this file, never user input, so building table names with it is
+// safe (nothing here is interpolated from a request).
+
+async function fetchCriteriaLibrary(kind) {
+  const catTable = kind === 'maintenance' ? 'maintenance_categories' : 'inspection_categories';
+  const critTable = kind === 'maintenance' ? 'maintenance_criteria' : 'inspection_criteria';
+  const [catsResult, critResult] = await Promise.all([
+    pool.query(`SELECT * FROM ${catTable} ORDER BY sort_order, id`),
+    pool.query(`SELECT * FROM ${critTable} ORDER BY sort_order, id`),
+  ]);
+  const byCategory = new Map();
+  for (const c of catsResult.rows) byCategory.set(c.id, { ...c, criteria: [] });
+  for (const cr of critResult.rows) {
+    const cat = byCategory.get(cr.category_id);
+    if (cat) cat.criteria.push(cr);
+  }
+  return [...byCategory.values()];
+}
+
+async function fetchSelectedCriteriaIds(kind, equipmentId) {
+  if (!equipmentId) return [];
+  const table = kind === 'maintenance' ? 'equipment_maintenance_criteria' : 'equipment_inspection_criteria';
+  const result = await pool.query(`SELECT criterion_id FROM ${table} WHERE equipment_id = $1`, [equipmentId]);
+  return result.rows.map((r) => r.criterion_id);
+}
+
+// The selected criteria for one equipment item, joined with their category
+// name, for read-only display on the detail page and for the "Log a
+// maintenance/inspection" checklist.
+async function fetchEquipmentCriteria(kind, equipmentId) {
+  const junctionTable = kind === 'maintenance' ? 'equipment_maintenance_criteria' : 'equipment_inspection_criteria';
+  const critTable = kind === 'maintenance' ? 'maintenance_criteria' : 'inspection_criteria';
+  const catTable = kind === 'maintenance' ? 'maintenance_categories' : 'inspection_categories';
+  const result = await pool.query(
+    `SELECT cr.id, cr.description, cat.name AS category_name
+     FROM ${junctionTable} j
+     JOIN ${critTable} cr ON cr.id = j.criterion_id
+     JOIN ${catTable} cat ON cat.id = cr.category_id
+     WHERE j.equipment_id = $1
+     ORDER BY cat.sort_order, cr.sort_order`,
+    [equipmentId]
+  );
+  return result.rows;
+}
+
+// Renders the "Manage Maintenance/Inspection Criteria" picker for the
+// equipment new/edit form: one collapsible group per category (mirrors the
+// existing CARA "tool-picker" pattern), each with a select/deselect-all
+// checkbox, plus a "Site Specific" group that can grow a custom criterion
+// right there without leaving the form. Selections submit as part of the
+// same equipment <form> as ordinary checkboxes -- no separate JS-sync step,
+// and no cross-page form association, so the round-7 selector bug class
+// can't happen here.
+function criteriaPickerHtml(kind, categories, selectedIds) {
+  const label = kind === 'maintenance' ? 'Maintenance' : 'Inspection';
+  const fieldName = `${kind}_criteria_ids`;
+  const newFieldName = `new_${kind}_criteria`;
+  const selectedSet = new Set((selectedIds || []).map(String));
+
+  const groupsHtml = categories.map((cat) => {
+    const isSiteSpecific = cat.name === 'Site Specific';
+    const itemsHtml = cat.criteria.map((cr) => `
+      <div class="tool-picker-item">
+        <input type="checkbox" id="${kind}_crit_${cr.id}" name="${fieldName}" value="${cr.id}" class="${kind}-criteria-checkbox" ${selectedSet.has(String(cr.id)) ? 'checked' : ''}>
+        <label for="${kind}_crit_${cr.id}">${escapeHtml(cr.description)}</label>
+      </div>
+    `).join('');
+    const selectAllHtml = cat.criteria.length ? `
+      <div class="tool-picker-item" style="font-weight:600;">
+        <input type="checkbox" id="${kind}_selall_${cat.id}" onchange="this.closest('.tool-picker-group-items').querySelectorAll('input.${kind}-criteria-checkbox').forEach((cb) => { cb.checked = this.checked; })">
+        <label for="${kind}_selall_${cat.id}">Select / deselect all</label>
+      </div>
+    ` : '';
+    const addRowHtml = isSiteSpecific ? `
+      <div id="${kind}-new-rows"></div>
+      <div class="tool-picker-item">
+        <input type="text" id="${kind}-new-input" placeholder="Add a custom ${label.toLowerCase()} criterion..." style="flex:1;padding:6px 8px;border:1px solid #E4DFD3;border-radius:6px;font-size:13px;">
+        <button type="button" class="btn btn-secondary" id="${kind}-add-btn" style="padding:5px 10px;font-size:12px;flex-shrink:0;">+ Add</button>
+      </div>
+    ` : '';
+    return `
+      <details class="tool-picker-group">
+        <summary class="tool-picker-group-label">${escapeHtml(cat.name)} <span class="tool-picker-group-count">(${cat.criteria.length})</span></summary>
+        <div class="tool-picker-group-items">
+          ${selectAllHtml}
+          ${itemsHtml || (isSiteSpecific ? '' : '<div class="tool-picker-item" style="color:#6B6659;">No criteria yet.</div>')}
+          ${addRowHtml}
+        </div>
+      </details>
+    `;
+  }).join('');
+
+  return `
+    <div class="form-row">
+      <label>${label} criteria</label>
+      <p class="form-section-hint" style="margin-top:-4px;">Tick which of these apply to this specific item. Add a custom one under "Site Specific" if something's missing — it's saved to the shared library so it's there for other equipment too.</p>
+      <div class="tool-picker">
+        <div class="tool-picker-list">
+          ${groupsHtml}
+        </div>
+      </div>
+    </div>
+    <script>
+      (function() {
+        var addBtn = document.getElementById('${kind}-add-btn');
+        if (!addBtn) return;
+        addBtn.addEventListener('click', function() {
+          var input = document.getElementById('${kind}-new-input');
+          var text = input.value.trim();
+          if (!text) return;
+          var row = document.createElement('div');
+          row.className = 'tool-picker-item';
+          var cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = true;
+          cb.disabled = true;
+          var lbl = document.createElement('label');
+          lbl.textContent = text + ' (new)';
+          var hidden = document.createElement('input');
+          hidden.type = 'hidden';
+          hidden.name = '${newFieldName}';
+          hidden.value = text;
+          row.appendChild(cb);
+          row.appendChild(lbl);
+          row.appendChild(hidden);
+          document.getElementById('${kind}-new-rows').appendChild(row);
+          input.value = '';
+        });
+      })();
+    </script>
+  `;
+}
+
+// Persists a picker's submission for one equipment item: links the ticked
+// existing criteria, creates any new custom ones under "Site Specific" and
+// links those too, then replaces the item's full selection with this set
+// (so unticking something in the picker actually removes it).
+async function saveEquipmentCriteria(kind, equipmentId, existingIdsRaw, newDescriptionsRaw) {
+  const critTable = kind === 'maintenance' ? 'maintenance_criteria' : 'inspection_criteria';
+  const catTable = kind === 'maintenance' ? 'maintenance_categories' : 'inspection_categories';
+  const junctionTable = kind === 'maintenance' ? 'equipment_maintenance_criteria' : 'equipment_inspection_criteria';
+
+  const ids = toArray(existingIdsRaw).map((id) => parseInt(id, 10)).filter((id) => Number.isInteger(id));
+
+  const newDescriptions = toArray(newDescriptionsRaw).map((d) => normalizeText(d)).filter(Boolean);
+  if (newDescriptions.length) {
+    const existingSiteSpecific = await pool.query(`SELECT id FROM ${catTable} WHERE name = 'Site Specific' LIMIT 1`);
+    let categoryId = existingSiteSpecific.rows.length ? existingSiteSpecific.rows[0].id : null;
+    if (!categoryId) {
+      const created = await pool.query(`INSERT INTO ${catTable} (name, sort_order) VALUES ('Site Specific', 999) RETURNING id`);
+      categoryId = created.rows[0].id;
+    }
+    for (const description of newDescriptions) {
+      const inserted = await pool.query(
+        `INSERT INTO ${critTable} (category_id, description, sort_order) VALUES ($1,$2,0) RETURNING id`,
+        [categoryId, description]
+      );
+      ids.push(inserted.rows[0].id);
+    }
+  }
+
+  await pool.query(`DELETE FROM ${junctionTable} WHERE equipment_id = $1`, [equipmentId]);
+  for (const criterionId of ids) {
+    await pool.query(`INSERT INTO ${junctionTable} (equipment_id, criterion_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [equipmentId, criterionId]);
+  }
+}
+
+// Renders the ticked-by-default checklist for "Log a maintenance/inspection"
+// on the equipment detail page, grouped by category for readability.
+function criteriaLogChecklistHtml(kind, items, equipmentId) {
+  if (!items.length) {
+    return `<div class="form-section-hint" style="margin:0 0 12px 0;">No ${kind} criteria set for this item — <a href="/admin/equipment/${equipmentId}/edit" style="color:#1B5E52;font-weight:600;">add some</a> so a log has something to tick off.</div>`;
+  }
+  const groups = new Map();
+  for (const item of items) {
+    if (!groups.has(item.category_name)) groups.set(item.category_name, []);
+    groups.get(item.category_name).push(item);
+  }
+  let html = '';
+  for (const [categoryName, criteria] of groups) {
+    html += `<div style="font-size:11px;font-weight:600;color:#6B6659;text-transform:uppercase;letter-spacing:0.03em;margin:10px 0 4px;">${escapeHtml(categoryName)}</div>`;
+    html += criteria.map((item) => `
+      <div class="checkbox-row" style="margin-bottom:6px;">
+        <input type="checkbox" id="${kind}_ci_${item.id}" name="completed_criteria" value="${escapeHtml(item.description)}" checked>
+        <label for="${kind}_ci_${item.id}">${escapeHtml(item.description)}</label>
+      </div>
+    `).join('');
+  }
+  return html;
+}
+
 // 'overdue' | 'due-soon' | 'scheduled' | 'unscheduled', in that urgency order.
 function equipmentUrgency(nextDue) {
   if (!nextDue) return 'unscheduled';
@@ -3260,6 +3453,10 @@ app.get('/equipment', async (req, res, next) => {
 app.get('/equipment/new', async (req, res, next) => {
   try {
     const peraResult = await pool.query('SELECT id, activity_name FROM pera_records WHERE archived = false ORDER BY activity_name ASC');
+    const [maintenanceCategories, inspectionCategories] = await Promise.all([
+      fetchCriteriaLibrary('maintenance'),
+      fetchCriteriaLibrary('inspection'),
+    ]);
     const statusOptions = EQUIPMENT_STATUSES.map((s) => `<option value="${s}" ${s === 'Operational' ? 'selected' : ''}>${s}</option>`).join('');
     const peraOptions = [
       '<option value="">— None —</option>',
@@ -3313,7 +3510,23 @@ app.get('/equipment/new', async (req, res, next) => {
             ${equipmentFrequencyOptions('')}
           </select>
         </div>
-        ${checklistBuilderHtml([])}
+        ${criteriaPickerHtml('inspection', inspectionCategories, [])}
+        <div class="form-row">
+          <label for="maintenance_frequency">Maintenance frequency</label>
+          <select id="maintenance_frequency" name="maintenance_frequency">
+            <option value="">— None —</option>
+            ${equipmentFrequencyOptions('')}
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="last_maintained">Last maintained</label>
+          <input type="date" id="last_maintained" name="last_maintained">
+        </div>
+        <div class="form-row">
+          <label for="next_maintenance_due">Next maintenance due</label>
+          <input type="date" id="next_maintenance_due" name="next_maintenance_due">
+        </div>
+        ${criteriaPickerHtml('maintenance', maintenanceCategories, [])}
         <div class="form-row">
           <label for="notes">Notes</label>
           <textarea id="notes" name="notes" placeholder="Serial number, maintenance history, anything else worth recording..."></textarea>
@@ -3337,27 +3550,34 @@ app.post('/equipment', async (req, res, next) => {
   try {
     const {
       name, category, location, status, pera_id, last_inspected, next_inspection_due, notes,
-      inspection_frequency, checklist_items,
+      inspection_frequency, maintenance_frequency, last_maintained, next_maintenance_due,
+      maintenance_criteria_ids, new_maintenance_criteria, inspection_criteria_ids, new_inspection_criteria,
     } = req.body;
 
     if (!name || !EQUIPMENT_STATUSES.includes(status)) {
       return res.status(400).send('Name and a valid status are required.');
     }
     const frequency = EQUIPMENT_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
+    const maintFrequency = EQUIPMENT_FREQUENCIES.includes(maintenance_frequency) ? maintenance_frequency : null;
 
     const result = await pool.query(
       `INSERT INTO equipment_items
-        (name, category, location, status, pera_id, last_inspected, next_inspection_due, notes, inspection_frequency, checklist_items, created_by_staff_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        (name, category, location, status, pera_id, last_inspected, next_inspection_due, notes,
+         inspection_frequency, maintenance_frequency, last_maintained, next_maintenance_due, created_by_staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING id`,
       [
         normalizeText(name), normalizeText(category) || null, normalizeText(location) || null, status,
         pera_id || null, last_inspected || null, next_inspection_due || null, normalizeText(notes) || null,
-        frequency, JSON.stringify(parseChecklistText(checklist_items)), req.staffUser.id,
+        frequency, maintFrequency, last_maintained || null, next_maintenance_due || null, req.staffUser.id,
       ]
     );
+    const equipmentId = result.rows[0].id;
 
-    res.redirect(`/equipment/${result.rows[0].id}`);
+    await saveEquipmentCriteria('maintenance', equipmentId, maintenance_criteria_ids, new_maintenance_criteria);
+    await saveEquipmentCriteria('inspection', equipmentId, inspection_criteria_ids, new_inspection_criteria);
+
+    res.redirect(`/equipment/${equipmentId}`);
   } catch (err) {
     next(err);
   }
@@ -3421,9 +3641,9 @@ app.get('/equipment/by-room', async (req, res, next) => {
           <td>${formatDate(r.next_inspection_due)}</td>
           <td><span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
           <td onclick="event.stopPropagation();">
-            <form method="post" action="/equipment/${r.id}/check">
+            <form method="post" action="/equipment/${r.id}/inspection-check">
               <input type="hidden" name="return_to" value="by-room">
-              <button type="submit" class="btn btn-secondary" style="padding:6px 12px;font-size:12px;">Log check</button>
+              <button type="submit" class="btn btn-secondary" style="padding:6px 12px;font-size:12px;">Log inspection</button>
             </form>
           </td>
         </tr>
@@ -3495,34 +3715,29 @@ app.get('/equipment/:id', async (req, res, next) => {
       return res.status(404).send('Equipment item not found.');
     }
     const r = result.rows[0];
-    const checklist = Array.isArray(r.checklist_items) ? r.checklist_items : [];
 
-    const checksResult = await pool.query(
-      'SELECT * FROM equipment_checks WHERE equipment_id = $1 ORDER BY checked_at DESC LIMIT 10',
-      [r.id]
-    );
+    const [maintenanceItems, inspectionItems, maintenanceLogsResult, inspectionLogsResult] = await Promise.all([
+      fetchEquipmentCriteria('maintenance', r.id),
+      fetchEquipmentCriteria('inspection', r.id),
+      pool.query('SELECT * FROM equipment_maintenance_logs WHERE equipment_id = $1 ORDER BY performed_at DESC LIMIT 10', [r.id]),
+      pool.query('SELECT * FROM equipment_inspection_logs WHERE equipment_id = $1 ORDER BY performed_at DESC LIMIT 10', [r.id]),
+    ]);
 
-    const checklistHtml = checklist.length
-      ? checklist.map((item, i) => `
-          <div class="checkbox-row" style="margin-bottom:8px;">
-            <input type="checkbox" id="ci_${i}" name="completed_items" value="${escapeHtml(item)}" checked>
-            <label for="ci_${i}">${escapeHtml(item)}</label>
-          </div>
-        `).join('')
-      : '<div class="form-section-hint" style="margin:0 0 12px 0;">No checklist items set for this item — <a href="/admin/equipment/' + r.id + '/edit" style="color:#1B5E52;font-weight:600;">add some</a> so a check has something to tick off.</div>';
+    const maintenanceChecklistHtml = criteriaLogChecklistHtml('maintenance', maintenanceItems, r.id);
+    const inspectionChecklistHtml = criteriaLogChecklistHtml('inspection', inspectionItems, r.id);
 
-    const historyHtml = checksResult.rows.length
-      ? checksResult.rows.map((c) => `
+    const logHistoryHtml = (logs) => logs.length
+      ? logs.map((c) => `
           <div class="detail-section">
-            <div class="detail-label">${formatDateTime(c.checked_at)}${c.checked_by ? ` · ${escapeHtml(c.checked_by)}` : ''}</div>
+            <div class="detail-label">${formatDateTime(c.performed_at)}${c.performed_by ? ` · ${escapeHtml(c.performed_by)}` : ''}</div>
             <div class="detail-value">${
-              (Array.isArray(c.completed_items) && c.completed_items.length)
-                ? escapeHtml(c.completed_items.join(', '))
-                : 'No checklist items recorded'
+              (Array.isArray(c.completed_criteria) && c.completed_criteria.length)
+                ? escapeHtml(c.completed_criteria.join(', '))
+                : 'No criteria recorded'
             }${c.notes ? `<br>${escapeHtml(c.notes)}` : ''}</div>
           </div>
         `).join('')
-      : '<div class="form-section-hint" style="margin:0;">No checks logged yet.</div>';
+      : '<div class="form-section-hint" style="margin:0;">None logged yet.</div>';
 
     const body = `
       <a class="back-link" href="/equipment">← Back to Equipment</a>
@@ -3547,33 +3762,60 @@ app.get('/equipment/:id', async (req, res, next) => {
             <div class="detail-label">Next inspection due</div>
             <div class="detail-value">${formatDate(r.next_inspection_due)}${r.inspection_frequency ? ` (checked every ${escapeHtml(r.inspection_frequency)})` : ''}</div>
           </div>
+          <div class="detail-section">
+            <div class="detail-label">Last maintained</div>
+            <div class="detail-value">${formatDate(r.last_maintained)}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Next maintenance due</div>
+            <div class="detail-value">${formatDate(r.next_maintenance_due)}${r.maintenance_frequency ? ` (serviced every ${escapeHtml(r.maintenance_frequency)})` : ''}</div>
+          </div>
           ${r.notes ? `
           <div class="detail-section">
             <div class="detail-label">Notes</div>
             <div class="detail-value">${escapeHtml(r.notes)}</div>
           </div>` : ''}
-          <div class="form-section-title" style="margin-top:32px;">Check history</div>
-          ${historyHtml}
+          <div class="form-section-title" style="margin-top:32px;">Inspection history</div>
+          ${logHistoryHtml(inspectionLogsResult.rows)}
+          <div class="form-section-title">Maintenance history</div>
+          ${logHistoryHtml(maintenanceLogsResult.rows)}
         </div>
         <div>
           <div class="card" style="padding:22px;margin-bottom:20px;">
-            <div class="note-box">Keep this record up to date after every inspection or repair — it's what the equipment register relies on to flag what needs attention.</div>
+            <div class="note-box">Keep this record up to date after every inspection or service — it's what the equipment register relies on to flag what needs attention.</div>
             <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-top:14px;">Edit this item</a>
           </div>
-          <div class="card" style="padding:22px;">
-            <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Log a check</div>
-            <form method="post" action="/equipment/${r.id}/check">
-              ${checklistHtml}
+          <div class="card" style="padding:22px;margin-bottom:20px;">
+            <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Log an inspection</div>
+            <form method="post" action="/equipment/${r.id}/inspection-check">
+              ${inspectionChecklistHtml}
               <div class="form-row" style="margin-top:12px;">
-                <label for="checked_by">Checked by</label>
-                <input type="text" id="checked_by" name="checked_by" placeholder="Your name">
+                <label for="inspected_by">Checked by</label>
+                <input type="text" id="inspected_by" name="performed_by" placeholder="Your name">
               </div>
               <div class="form-row">
-                <label for="check_notes">Notes</label>
-                <textarea id="check_notes" name="notes" placeholder="Anything noticed during this check..."></textarea>
+                <label for="inspection_notes">Notes</label>
+                <textarea id="inspection_notes" name="notes" placeholder="Anything noticed during this inspection..."></textarea>
               </div>
               <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Log check</button>
+                <button type="submit" class="btn btn-primary">Log inspection</button>
+              </div>
+            </form>
+          </div>
+          <div class="card" style="padding:22px;">
+            <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Log maintenance</div>
+            <form method="post" action="/equipment/${r.id}/maintenance-check">
+              ${maintenanceChecklistHtml}
+              <div class="form-row" style="margin-top:12px;">
+                <label for="maintained_by">Serviced by</label>
+                <input type="text" id="maintained_by" name="performed_by" placeholder="Your name">
+              </div>
+              <div class="form-row">
+                <label for="maintenance_notes">Notes</label>
+                <textarea id="maintenance_notes" name="notes" placeholder="Anything done or noticed during this service..."></textarea>
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Log maintenance</button>
               </div>
             </form>
           </div>
@@ -3587,9 +3829,12 @@ app.get('/equipment/:id', async (req, res, next) => {
   }
 });
 
-// ---------- Equipment: log a check ----------
+// ---------- Equipment: log an inspection / log maintenance ----------
+// Two separate flows (each with its own due date/frequency) instead of the
+// old single generic "check" -- see the equipment_maintenance_logs /
+// equipment_inspection_logs comment in db.js for why.
 
-app.post('/equipment/:id/check', async (req, res, next) => {
+app.post('/equipment/:id/inspection-check', async (req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM equipment_items WHERE id = $1', [req.params.id]);
     if (result.rows.length === 0) {
@@ -3597,24 +3842,29 @@ app.post('/equipment/:id/check', async (req, res, next) => {
     }
     const r = result.rows[0];
 
-    // The full "Log a check" form on the detail page submits completed_items
-    // (only the boxes left ticked) plus checked_by/notes. The one-click
-    // "Log check" button on the by-room page submits none of these — treat
-    // that as "the whole checklist was done, no name/notes recorded".
-    const formSubmitted = 'completed_items' in req.body || 'checked_by' in req.body || 'notes' in req.body;
-    const completedItems = formSubmitted
-      ? toArray(req.body.completed_items).map((v) => normalizeText(v))
-      : (Array.isArray(r.checklist_items) ? r.checklist_items : []);
-    const checkedBy = formSubmitted ? (normalizeText(req.body.checked_by) || null) : null;
-    const checkNotes = formSubmitted ? (normalizeText(req.body.notes) || null) : null;
+    // The full "Log an inspection" form on the detail page submits
+    // completed_criteria (only the boxes left ticked) plus performed_by/
+    // notes. The one-click "Log inspection" button on the by-room page
+    // submits none of these — treat that as "the whole checklist was done,
+    // no name/notes recorded".
+    const formSubmitted = 'completed_criteria' in req.body || 'performed_by' in req.body || 'notes' in req.body;
+    let completedCriteria;
+    if (formSubmitted) {
+      completedCriteria = toArray(req.body.completed_criteria).map((v) => normalizeText(v));
+    } else {
+      const items = await fetchEquipmentCriteria('inspection', r.id);
+      completedCriteria = items.map((item) => item.description);
+    }
+    const performedBy = formSubmitted ? (normalizeText(req.body.performed_by) || null) : null;
+    const notes = formSubmitted ? (normalizeText(req.body.notes) || null) : null;
 
     const today = new Date();
     const nextDue = computeNextDue(today, r.inspection_frequency);
 
     await pool.query(
-      `INSERT INTO equipment_checks (equipment_id, checked_by, completed_items, notes)
+      `INSERT INTO equipment_inspection_logs (equipment_id, performed_by, completed_criteria, notes)
        VALUES ($1,$2,$3,$4)`,
-      [r.id, checkedBy, JSON.stringify(completedItems), checkNotes]
+      [r.id, performedBy, JSON.stringify(completedCriteria), notes]
     );
     await pool.query(
       `UPDATE equipment_items SET last_inspected = $1, next_inspection_due = $2, updated_at = now() WHERE id = $3`,
@@ -3622,6 +3872,37 @@ app.post('/equipment/:id/check', async (req, res, next) => {
     );
 
     res.redirect(req.body.return_to === 'by-room' ? '/equipment/by-room' : `/equipment/${r.id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/equipment/:id/maintenance-check', async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM equipment_items WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).send('Equipment item not found.');
+    }
+    const r = result.rows[0];
+
+    const completedCriteria = toArray(req.body.completed_criteria).map((v) => normalizeText(v));
+    const performedBy = normalizeText(req.body.performed_by) || null;
+    const notes = normalizeText(req.body.notes) || null;
+
+    const today = new Date();
+    const nextDue = computeNextDue(today, r.maintenance_frequency);
+
+    await pool.query(
+      `INSERT INTO equipment_maintenance_logs (equipment_id, performed_by, completed_criteria, notes)
+       VALUES ($1,$2,$3,$4)`,
+      [r.id, performedBy, JSON.stringify(completedCriteria), notes]
+    );
+    await pool.query(
+      `UPDATE equipment_items SET last_maintained = $1, next_maintenance_due = $2, updated_at = now() WHERE id = $3`,
+      [today, nextDue, r.id]
+    );
+
+    res.redirect(`/equipment/${r.id}`);
   } catch (err) {
     next(err);
   }
@@ -4554,6 +4835,13 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
     }
     const r = result.rows[0];
 
+    const [maintenanceCategories, inspectionCategories, selectedMaintenanceIds, selectedInspectionIds] = await Promise.all([
+      fetchCriteriaLibrary('maintenance'),
+      fetchCriteriaLibrary('inspection'),
+      fetchSelectedCriteriaIds('maintenance', r.id),
+      fetchSelectedCriteriaIds('inspection', r.id),
+    ]);
+
     const peraResult = await pool.query('SELECT id, activity_name FROM pera_records WHERE archived = false OR id = $1 ORDER BY activity_name ASC', [r.pera_id]);
     const statusOptions = EQUIPMENT_STATUSES.map((s) => `<option value="${s}" ${s === r.status ? 'selected' : ''}>${s}</option>`).join('');
     const peraOptions = [
@@ -4607,7 +4895,23 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
             ${equipmentFrequencyOptions(r.inspection_frequency || '')}
           </select>
         </div>
-        ${checklistBuilderHtml(Array.isArray(r.checklist_items) ? r.checklist_items : [])}
+        ${criteriaPickerHtml('inspection', inspectionCategories, selectedInspectionIds)}
+        <div class="form-row">
+          <label for="maintenance_frequency">Maintenance frequency</label>
+          <select id="maintenance_frequency" name="maintenance_frequency">
+            <option value="">— None —</option>
+            ${equipmentFrequencyOptions(r.maintenance_frequency || '')}
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="last_maintained">Last maintained</label>
+          <input type="date" id="last_maintained" name="last_maintained" value="${toDateInputValue(r.last_maintained)}">
+        </div>
+        <div class="form-row">
+          <label for="next_maintenance_due">Next maintenance due</label>
+          <input type="date" id="next_maintenance_due" name="next_maintenance_due" value="${toDateInputValue(r.next_maintenance_due)}">
+        </div>
+        ${criteriaPickerHtml('maintenance', maintenanceCategories, selectedMaintenanceIds)}
         <div class="form-row">
           <label for="notes">Notes</label>
           <textarea id="notes" name="notes">${escapeHtml(r.notes || '')}</textarea>
@@ -4632,27 +4936,33 @@ app.post('/admin/equipment/:id', requireRole('admin'), async (req, res, next) =>
   try {
     const {
       name, category, location, status, pera_id, last_inspected, next_inspection_due, notes,
-      inspection_frequency, checklist_items,
+      inspection_frequency, maintenance_frequency, last_maintained, next_maintenance_due,
+      maintenance_criteria_ids, new_maintenance_criteria, inspection_criteria_ids, new_inspection_criteria,
     } = req.body;
 
     if (!name || !EQUIPMENT_STATUSES.includes(status)) {
       return res.status(400).send('Name and a valid status are required.');
     }
     const frequency = EQUIPMENT_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
+    const maintFrequency = EQUIPMENT_FREQUENCIES.includes(maintenance_frequency) ? maintenance_frequency : null;
 
     await pool.query(
       `UPDATE equipment_items SET
          name = $1, category = $2, location = $3, status = $4, pera_id = $5,
          last_inspected = $6, next_inspection_due = $7, notes = $8,
-         inspection_frequency = $9, checklist_items = $10, updated_at = now()
-       WHERE id = $11`,
+         inspection_frequency = $9, maintenance_frequency = $10, last_maintained = $11,
+         next_maintenance_due = $12, updated_at = now()
+       WHERE id = $13`,
       [
         normalizeText(name), normalizeText(category) || null, normalizeText(location) || null, status,
         pera_id || null, last_inspected || null, next_inspection_due || null, normalizeText(notes) || null,
-        frequency, JSON.stringify(parseChecklistText(checklist_items)),
+        frequency, maintFrequency, last_maintained || null, next_maintenance_due || null,
         req.params.id,
       ]
     );
+
+    await saveEquipmentCriteria('maintenance', req.params.id, maintenance_criteria_ids, new_maintenance_criteria);
+    await saveEquipmentCriteria('inspection', req.params.id, inspection_criteria_ids, new_inspection_criteria);
 
     res.redirect(`/admin/equipment/${req.params.id}/edit`);
   } catch (err) {
