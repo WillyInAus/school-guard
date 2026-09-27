@@ -467,6 +467,13 @@ async function migrate() {
     END $$;
   `);
 
+  // Lets admins move a PERA out of the main list without deleting it --
+  // same idea as the existing cara_records.archived flag. Hidden from the
+  // main list, tool pickers, and equipment links by default; still fully
+  // viewable (read-only) via the PERA Archive admin page and can be
+  // restored at any time.
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT false;`);
+
   // Status per checklist item, replacing the plain tick. "met" is kept
   // (unused by the form going forward) so nothing breaks for any row saved
   // by the first round of this feature before "status" existed.

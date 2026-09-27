@@ -439,9 +439,9 @@ function normalizeText(v) {
 
 app.get('/', async (req, res, next) => {
   try {
-    const totalResult = await pool.query('SELECT COUNT(*)::int AS count FROM pera_records');
+    const totalResult = await pool.query('SELECT COUNT(*)::int AS count FROM pera_records WHERE archived = false');
     const pendingResult = await pool.query(
-      "SELECT COUNT(*)::int AS count FROM pera_records WHERE status = 'Pending approval'"
+      "SELECT COUNT(*)::int AS count FROM pera_records WHERE status = 'Pending approval' AND archived = false"
     );
     const caraTotalResult = await pool.query('SELECT COUNT(*)::int AS count FROM cara_records WHERE archived = false');
     const caraPendingResult = await pool.query(
@@ -507,7 +507,8 @@ app.get('/', async (req, res, next) => {
 app.get('/pera', async (req, res, next) => {
   try {
     const { risk, q } = req.query;
-    const conditions = [];
+    const isAdmin = req.staffUser && req.staffUser.role === 'admin';
+    const conditions = ['archived = false'];
     const params = [];
 
     if (risk && RISK_LEVELS.includes(risk)) {
@@ -519,7 +520,7 @@ app.get('/pera', async (req, res, next) => {
       conditions.push(`activity_name ILIKE $${params.length}`);
     }
 
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const where = `WHERE ${conditions.join(' AND ')}`;
     const result = await pool.query(
       `SELECT * FROM pera_records ${where} ORDER BY created_at DESC`,
       params
@@ -538,6 +539,7 @@ app.get('/pera', async (req, res, next) => {
     } else {
       const rows = result.rows.map((r) => `
         <tr class="row-link" onclick="window.location='/pera/${r.id}'">
+          ${isAdmin ? `<td style="width:1%;" onclick="event.stopPropagation();"><input type="checkbox" name="ids" value="${r.id}" form="pera-archive-form" onchange="document.getElementById('archive-selected-btn').disabled = !document.querySelectorAll('#pera-archive-form input[name=ids]:checked').length;"></td>` : ''}
           <td>${escapeHtml(r.activity_name)}</td>
           <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
           <td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
@@ -549,6 +551,7 @@ app.get('/pera', async (req, res, next) => {
         <table>
           <thead>
             <tr>
+              ${isAdmin ? `<th style="width:1%;"><input type="checkbox" onchange="document.querySelectorAll('#pera-archive-form input[name=ids]').forEach((cb) => cb.checked = this.checked); document.getElementById('archive-selected-btn').disabled = !this.checked;"></th>` : ''}
               <th>Activity / Unit</th>
               <th>Risk</th>
               <th>Status</th>
@@ -576,6 +579,13 @@ app.get('/pera', async (req, res, next) => {
         </form>
         <div class="chip-row">${chips}</div>
       </div>
+      ${isAdmin ? `
+        <form id="pera-archive-form" method="post" action="/admin/pera/archive" onsubmit="return confirm('Archive the selected PERA record(s)? They will be hidden from this list but can be restored anytime from the PERA Archive.');" style="margin-bottom:10px;">
+          <input type="hidden" name="redirect_to" value="${escapeHtml(req.originalUrl)}">
+          <button type="submit" id="archive-selected-btn" class="btn btn-secondary" disabled>Archive selected</button>
+          <a href="/admin/pera/archive" style="margin-left:12px;font-size:13px;color:#6B6659;text-decoration:underline;">View PERA Archive →</a>
+        </form>
+      ` : ''}
       <div class="card">${rowsHtml}</div>
     `;
 
@@ -1049,7 +1059,14 @@ app.get('/pera/:id', async (req, res, next) => {
       pool.query('SELECT * FROM pera_change_log WHERE pera_id = $1 ORDER BY changed_at DESC', [req.params.id]),
     ]);
 
-    const canEdit = canManageOwnRecord(req.staffUser, r);
+    // Archived records are read-only for everyone -- every edit control below
+    // is already gated on canEdit, so this one line locks the whole page down.
+    const canEdit = !r.archived && canManageOwnRecord(req.staffUser, r);
+    const isAdmin = req.staffUser && req.staffUser.role === 'admin';
+
+    const archivedBannerHtml = r.archived
+      ? `<div class="note-box" style="margin-bottom:16px;">This PERA is archived and hidden from the main PERA list. It's read-only${isAdmin ? '' : ' — ask an admin to restore it if it needs changes'}.</div>`
+      : '';
 
     let bannerHtml = '';
     if (r.risk_level === 'High' || r.risk_level === 'Extreme') {
@@ -1212,13 +1229,13 @@ app.get('/pera/:id', async (req, res, next) => {
       : `<div class="empty-state">No history recorded yet.</div>`;
 
     let actionsHtml = '';
-    if (r.status === 'Draft') {
+    if (!r.archived && r.status === 'Draft') {
       actionsHtml = `
         <form method="post" action="/pera/${r.id}/submit">
           <button type="submit" class="btn btn-primary" style="width:100%;">Submit for approval</button>
         </form>
       `;
-    } else if (r.status === 'Pending approval' || r.status === 'Changes requested') {
+    } else if (!r.archived && (r.status === 'Pending approval' || r.status === 'Changes requested')) {
       const decisionOptions = APPROVAL_DECISIONS.map((d) => `<option value="${d}">${d}</option>`).join('');
       const requiredLevelOptions = APPROVAL_REQUIRED_LEVELS.map((lvl) => `<option value="${lvl}" ${r.approval_required_level === lvl ? 'selected' : ''}>${lvl}</option>`).join('');
       actionsHtml = `
@@ -1283,8 +1300,16 @@ app.get('/pera/:id', async (req, res, next) => {
         <div style="display:flex;gap:10px;align-items:flex-start;">
           <span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
           ${canEdit ? `<a class="btn btn-secondary" href="/pera/${r.id}/edit">Edit</a>` : ''}
+          ${r.archived && isAdmin ? `
+            <form method="post" action="/admin/pera/restore" style="display:inline;">
+              <input type="hidden" name="ids" value="${r.id}">
+              <input type="hidden" name="redirect_to" value="/pera/${r.id}">
+              <button type="submit" class="btn btn-secondary">Restore</button>
+            </form>
+          ` : ''}
         </div>
       </div>
+      ${archivedBannerHtml}
       ${bannerHtml}
       ${summaryStripHtml}
       <div class="detail-grid">
@@ -1683,7 +1708,7 @@ app.get('/cara/new', async (req, res, next) => {
   try {
     const toolsResult = await pool.query(
       `SELECT id, activity_name, class_unit, risk_level FROM pera_records
-       WHERE status = 'Approved' ORDER BY class_unit NULLS LAST, activity_name`
+       WHERE status = 'Approved' AND archived = false ORDER BY class_unit NULLS LAST, activity_name`
     );
 
     const groups = new Map();
@@ -1944,7 +1969,7 @@ app.get('/cara/:id/edit', async (req, res, next) => {
 
     const toolsResult = await pool.query(
       `SELECT DISTINCT pr.id, pr.activity_name, pr.class_unit, pr.risk_level FROM pera_records pr
-       WHERE pr.status = 'Approved' OR pr.id IN (SELECT pera_id FROM cara_tool_links WHERE cara_id = $1)
+       WHERE (pr.status = 'Approved' AND pr.archived = false) OR pr.id IN (SELECT pera_id FROM cara_tool_links WHERE cara_id = $1)
        ORDER BY pr.class_unit NULLS LAST, pr.activity_name`,
       [req.params.id]
     );
@@ -3234,7 +3259,7 @@ app.get('/equipment', async (req, res, next) => {
 
 app.get('/equipment/new', async (req, res, next) => {
   try {
-    const peraResult = await pool.query('SELECT id, activity_name FROM pera_records ORDER BY activity_name ASC');
+    const peraResult = await pool.query('SELECT id, activity_name FROM pera_records WHERE archived = false ORDER BY activity_name ASC');
     const statusOptions = EQUIPMENT_STATUSES.map((s) => `<option value="${s}" ${s === 'Operational' ? 'selected' : ''}>${s}</option>`).join('');
     const peraOptions = [
       '<option value="">— None —</option>',
@@ -3747,6 +3772,7 @@ function adminTabs(activeTab) {
   const tabs = [
     { key: 'staff', href: '/admin/staff', label: 'Manage Staff' },
     { key: 'pera', href: '/admin/pera', label: 'PERA' },
+    { key: 'pera-archive', href: '/admin/pera/archive', label: 'PERA Archive' },
     { key: 'cara', href: '/admin/cara', label: 'CARA' },
     { key: 'equipment', href: '/admin/equipment', label: 'Equipment' },
   ];
@@ -3777,7 +3803,7 @@ app.get('/admin', requireRole('admin'), (req, res) => {
 
 app.get('/admin/pera', requireRole('admin'), async (req, res, next) => {
   try {
-    const result = await pool.query('SELECT * FROM pera_records ORDER BY id');
+    const result = await pool.query('SELECT * FROM pera_records WHERE archived = false ORDER BY id');
 
     const rows = result.rows.map((r) => `
       <tr class="row-link" onclick="window.location='/admin/pera/${r.id}/edit'">
@@ -3809,6 +3835,95 @@ app.get('/admin/pera', requireRole('admin'), async (req, res, next) => {
     `;
 
     res.send(page({ title: 'PERA records', active: 'admin', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- PERA: archive (declutter the main list without deleting) ----------
+// Archiving is admin-only and bulk (checkboxes on the main /pera list, or on
+// this page to restore). An archived PERA is hidden from the main list, the
+// CARA tool-picker, and the Equipment "covered by" dropdown, but stays fully
+// viewable -- read-only -- at its normal /pera/:id URL, and can be restored
+// at any time. These two routes must stay registered before the
+// /admin/pera/:id... routes further down, or "archive"/"restore" would be
+// swallowed as an :id.
+
+app.get('/admin/pera/archive', requireRole('admin'), async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM pera_records WHERE archived = true ORDER BY activity_name ASC');
+
+    const rows = result.rows.map((r) => `
+      <tr class="row-link" onclick="window.location='/pera/${r.id}'">
+        <td onclick="event.stopPropagation();"><input type="checkbox" name="ids" value="${r.id}" form="pera-restore-form" onchange="document.getElementById('restore-selected-btn').disabled = !document.querySelectorAll('#pera-restore-form input[name=ids]:checked').length;"></td>
+        <td>${escapeHtml(r.activity_name)}</td>
+        <td>${escapeHtml(r.class_unit || '—')}</td>
+        <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
+        <td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
+      </tr>
+    `).join('');
+
+    const body = `
+      ${adminHeader('PERA Archive', 'Archived PERAs are hidden from the main PERA list but stay viewable here. Click a record to view it, or restore it to bring it back to the main list.')}
+      ${adminTabs('pera-archive')}
+      <form id="pera-restore-form" method="post" action="/admin/pera/restore" onsubmit="return confirm('Restore the selected PERA record(s) to the main PERA list?');" style="margin-bottom:10px;">
+        <button type="submit" id="restore-selected-btn" class="btn btn-secondary" disabled>Restore selected</button>
+      </form>
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:1%;"><input type="checkbox" onchange="document.querySelectorAll('#pera-restore-form input[name=ids]').forEach((cb) => cb.checked = this.checked); document.getElementById('restore-selected-btn').disabled = !this.checked;"></th>
+              <th>Activity</th>
+              <th>Class / unit</th>
+              <th>Risk</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="5" style="text-align:center;color:#6B6659;padding:24px;">No PERA records archived.</td></tr>'}</tbody>
+        </table>
+      </div>
+    `;
+
+    res.send(page({ title: 'PERA Archive', active: 'admin', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/pera/archive', requireRole('admin'), async (req, res, next) => {
+  try {
+    const ids = toArray(req.body.ids).map((id) => parseInt(id, 10)).filter((id) => Number.isInteger(id));
+    if (ids.length) {
+      await pool.query("UPDATE pera_records SET archived = true, updated_at = now() WHERE id = ANY($1::int[])", [ids]);
+      const namesResult = await pool.query('SELECT id, activity_name, version FROM pera_records WHERE id = ANY($1::int[])', [ids]);
+      for (const row of namesResult.rows) {
+        await pool.query(
+          `INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1,$2,'Archived',$3,'Archived (removed from the main PERA list)','Archived')`,
+          [row.id, req.staffUser ? req.staffUser.name : null, row.version]
+        );
+      }
+    }
+    res.redirect(req.body.redirect_to && req.body.redirect_to.startsWith('/') ? req.body.redirect_to : '/pera');
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/pera/restore', requireRole('admin'), async (req, res, next) => {
+  try {
+    const ids = toArray(req.body.ids).map((id) => parseInt(id, 10)).filter((id) => Number.isInteger(id));
+    if (ids.length) {
+      await pool.query("UPDATE pera_records SET archived = false, updated_at = now() WHERE id = ANY($1::int[])", [ids]);
+      const namesResult = await pool.query('SELECT id, version FROM pera_records WHERE id = ANY($1::int[])', [ids]);
+      for (const row of namesResult.rows) {
+        await pool.query(
+          `INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1,$2,'Restored',$3,'Restored to the main PERA list','Restored')`,
+          [row.id, req.staffUser ? req.staffUser.name : null, row.version]
+        );
+      }
+    }
+    res.redirect(req.body.redirect_to && req.body.redirect_to.startsWith('/') ? req.body.redirect_to : '/admin/pera/archive');
   } catch (err) {
     next(err);
   }
@@ -4433,7 +4548,7 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
     }
     const r = result.rows[0];
 
-    const peraResult = await pool.query('SELECT id, activity_name FROM pera_records ORDER BY activity_name ASC');
+    const peraResult = await pool.query('SELECT id, activity_name FROM pera_records WHERE archived = false OR id = $1 ORDER BY activity_name ASC', [r.pera_id]);
     const statusOptions = EQUIPMENT_STATUSES.map((s) => `<option value="${s}" ${s === r.status ? 'selected' : ''}>${s}</option>`).join('');
     const peraOptions = [
       '<option value="">— None —</option>',
