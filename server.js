@@ -539,7 +539,7 @@ app.get('/pera', async (req, res, next) => {
     } else {
       const rows = result.rows.map((r) => `
         <tr class="row-link" onclick="window.location='/pera/${r.id}'">
-          ${isAdmin ? `<td style="width:1%;" onclick="event.stopPropagation();"><input type="checkbox" name="ids" value="${r.id}" form="pera-archive-form" onchange="document.getElementById('archive-selected-btn').disabled = !document.querySelectorAll('#pera-archive-form input[name=ids]:checked').length;"></td>` : ''}
+          ${isAdmin ? `<td style="width:1%;" onclick="event.stopPropagation();"><input type="checkbox" name="ids" value="${r.id}" form="pera-archive-form" onchange="document.getElementById('archive-selected-btn').disabled = !document.querySelectorAll('input[name=ids][form=pera-archive-form]:checked').length;"></td>` : ''}
           <td>${escapeHtml(r.activity_name)}</td>
           <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
           <td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
@@ -551,7 +551,7 @@ app.get('/pera', async (req, res, next) => {
         <table>
           <thead>
             <tr>
-              ${isAdmin ? `<th style="width:1%;"><input type="checkbox" onchange="document.querySelectorAll('#pera-archive-form input[name=ids]').forEach((cb) => cb.checked = this.checked); document.getElementById('archive-selected-btn').disabled = !this.checked;"></th>` : ''}
+              ${isAdmin ? `<th style="width:1%;"><input type="checkbox" onchange="document.querySelectorAll('input[name=ids][form=pera-archive-form]').forEach((cb) => cb.checked = this.checked); document.getElementById('archive-selected-btn').disabled = !this.checked;"></th>` : ''}
               <th>Activity / Unit</th>
               <th>Risk</th>
               <th>Status</th>
@@ -3807,7 +3807,7 @@ app.get('/admin/pera', requireRole('admin'), async (req, res, next) => {
 
     const rows = result.rows.map((r) => `
       <tr class="row-link" onclick="window.location='/admin/pera/${r.id}/edit'">
-        <td style="width:1%;" onclick="event.stopPropagation();"><input type="checkbox" name="ids" value="${r.id}" form="admin-pera-archive-form" onchange="document.getElementById('admin-archive-selected-btn').disabled = !document.querySelectorAll('#admin-pera-archive-form input[name=ids]:checked').length;"></td>
+        <td style="width:1%;" onclick="event.stopPropagation();"><input type="checkbox" name="ids" value="${r.id}" form="admin-pera-archive-form" onchange="document.getElementById('admin-archive-selected-btn').disabled = !document.querySelectorAll('input[name=ids][form=admin-pera-archive-form]:checked').length;"></td>
         <td>${escapeHtml(r.activity_name)}</td>
         <td>${escapeHtml(r.class_unit || '—')}</td>
         <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
@@ -3827,7 +3827,7 @@ app.get('/admin/pera', requireRole('admin'), async (req, res, next) => {
         <table>
           <thead>
             <tr>
-              <th style="width:1%;"><input type="checkbox" onchange="document.querySelectorAll('#admin-pera-archive-form input[name=ids]').forEach((cb) => cb.checked = this.checked); document.getElementById('admin-archive-selected-btn').disabled = !this.checked;"></th>
+              <th style="width:1%;"><input type="checkbox" onchange="document.querySelectorAll('input[name=ids][form=admin-pera-archive-form]').forEach((cb) => cb.checked = this.checked); document.getElementById('admin-archive-selected-btn').disabled = !this.checked;"></th>
               <th>Activity</th>
               <th>Class / unit</th>
               <th>Risk</th>
@@ -3861,7 +3861,7 @@ app.get('/admin/pera/archive', requireRole('admin'), async (req, res, next) => {
 
     const rows = result.rows.map((r) => `
       <tr class="row-link" onclick="window.location='/pera/${r.id}'">
-        <td onclick="event.stopPropagation();"><input type="checkbox" name="ids" value="${r.id}" form="pera-restore-form" onchange="document.getElementById('restore-selected-btn').disabled = !document.querySelectorAll('#pera-restore-form input[name=ids]:checked').length;"></td>
+        <td onclick="event.stopPropagation();"><input type="checkbox" name="ids" value="${r.id}" form="pera-restore-form" onchange="document.getElementById('restore-selected-btn').disabled = !document.querySelectorAll('input[name=ids][form=pera-restore-form]:checked').length;"></td>
         <td>${escapeHtml(r.activity_name)}</td>
         <td>${escapeHtml(r.class_unit || '—')}</td>
         <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
@@ -3879,7 +3879,7 @@ app.get('/admin/pera/archive', requireRole('admin'), async (req, res, next) => {
         <table>
           <thead>
             <tr>
-              <th style="width:1%;"><input type="checkbox" onchange="document.querySelectorAll('#pera-restore-form input[name=ids]').forEach((cb) => cb.checked = this.checked); document.getElementById('restore-selected-btn').disabled = !this.checked;"></th>
+              <th style="width:1%;"><input type="checkbox" onchange="document.querySelectorAll('input[name=ids][form=pera-restore-form]').forEach((cb) => cb.checked = this.checked); document.getElementById('restore-selected-btn').disabled = !this.checked;"></th>
               <th>Activity</th>
               <th>Class / unit</th>
               <th>Risk</th>
