@@ -26,11 +26,19 @@ app.use(express.static('public'));
 
 const RISK_LEVELS = ['Low', 'Medium', 'High', 'Extreme'];
 const STATUSES = ['Draft', 'Pending approval', 'Approved', 'Changes requested'];
+const STAFF_ROLES = ['admin', 'approver', 'submitter'];
 
-// ---------- Admin auth (shared password) ----------
+// ---------- Staff auth (individual accounts, roles) ----------
+// Replaces the old single shared ADMIN_PASSWORD. Three roles:
+//   admin     - everything, including managing other staff accounts
+//   approver  - everything a submitter can do, plus approve/reject PERA
+//               and CARA records
+//   submitter - create records and edit their own; can't approve
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
-const ADMIN_TOKEN = crypto.createHash('sha256').update(`school-guard-admin:${ADMIN_PASSWORD}`).digest('hex');
+const SESSION_SECRET = process.env.SESSION_SECRET || '';
+if (!SESSION_SECRET) {
+  console.error('SESSION_SECRET environment variable is not set -- staff sign-in will not work until it is. Set it to a long random value.');
+}
 
 function getCookie(req, name) {
   const header = req.headers.cookie;
@@ -40,12 +48,122 @@ function getCookie(req, name) {
   return found ? decodeURIComponent(found.slice(name.length + 1)) : null;
 }
 
-function requireAdmin(req, res, next) {
-  if (ADMIN_PASSWORD && getCookie(req, 'admin_token') === ADMIN_TOKEN) {
-    return next();
+// ---- Password hashing (scrypt via Node's built-in crypto -- no extra
+// dependency needed, which matters here since adding one means regenerating
+// package-lock.json). Stored as "salt:hash", both hex. ----
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  if (!stored || !stored.includes(':')) return false;
+  const [salt, hash] = stored.split(':');
+  const hashBuffer = Buffer.from(hash, 'hex');
+  const candidate = crypto.scryptSync(password, salt, hashBuffer.length);
+  if (candidate.length !== hashBuffer.length) return false;
+  return crypto.timingSafeEqual(candidate, hashBuffer);
+}
+
+// ---- Session cookies: "<userId>.<expiryMs>.<hmac>", HMAC-SHA256 signed
+// with SESSION_SECRET. Deliberately stateless (no sessions table) -- role
+// and disabled/enabled state are re-checked from staff_users on every
+// request, so disabling someone takes effect on their very next click. ----
+
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+function signSession(userId) {
+  const expiry = Date.now() + SESSION_MAX_AGE_MS;
+  const payload = `${userId}.${expiry}`;
+  const hmac = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+  return `${payload}.${hmac}`;
+}
+
+function verifySession(token) {
+  if (!token || !SESSION_SECRET) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [userId, expiry, hmac] = parts;
+  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(`${userId}.${expiry}`).digest('hex');
+  const expectedBuf = Buffer.from(expected, 'hex');
+  const actualBuf = Buffer.from(hmac, 'hex');
+  if (expectedBuf.length !== actualBuf.length || !crypto.timingSafeEqual(expectedBuf, actualBuf)) return null;
+  if (Number(expiry) < Date.now()) return null;
+  const id = Number(userId);
+  return Number.isInteger(id) ? id : null;
+}
+
+// Cookie is deliberately NOT marked Secure: this app is typically reached
+// over plain HTTP on a school LAN (no TLS terminator in front of it), and a
+// Secure cookie would silently never be sent in that setup.
+function setSessionCookie(res, userId) {
+  const token = signSession(userId);
+  res.setHeader('Set-Cookie', `staff_session=${token}; HttpOnly; Path=/; Max-Age=${Math.floor(SESSION_MAX_AGE_MS / 1000)}; SameSite=Lax`);
+}
+
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', 'staff_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
+}
+
+// Runs on every request; attaches req.staffUser when a valid, non-disabled
+// session cookie is present. Doesn't block anything itself.
+async function loadStaffUser(req, res, next) {
+  const userId = verifySession(getCookie(req, 'staff_session'));
+  if (userId) {
+    try {
+      const { rows } = await pool.query(
+        'SELECT id, name, email, role, disabled FROM staff_users WHERE id = $1',
+        [userId]
+      );
+      if (rows.length && !rows[0].disabled) {
+        req.staffUser = rows[0];
+      }
+    } catch (e) {
+      // DB hiccup: fall through as logged-out rather than failing the request.
+    }
   }
+  next();
+}
+app.use(loadStaffUser);
+
+function requireAuth(req, res, next) {
+  if (req.staffUser) return next();
   res.redirect(`/admin/login?next=${encodeURIComponent(req.originalUrl)}`);
 }
+
+// Admins and approvers can edit any record; a submitter can only edit ones
+// they created themselves. Used on the CARA edit form, which is the one
+// non-admin edit route staff use day-to-day (PERA only has an admin-only
+// edit route, so this check isn't needed there).
+function canManageOwnRecord(user, record) {
+  if (user.role === 'admin' || user.role === 'approver') return true;
+  return record.created_by_staff_id === user.id;
+}
+
+function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!req.staffUser) {
+      return res.redirect(`/admin/login?next=${encodeURIComponent(req.originalUrl)}`);
+    }
+    if (!roles.includes(req.staffUser.role)) {
+      return res.status(403).send('You do not have permission to do that. <a href="/">Back to dashboard</a>');
+    }
+    next();
+  };
+}
+
+// Every route below needs a logged-in staff member except these: the login
+// page, the one-time setup bootstrap, logout, and the Docker healthcheck.
+// (Static files under /public are already handled above and never reach
+// here.) Individual routes layer requireRole(...) on top of this where a
+// specific role is required (see the admin/approve routes further down).
+const PUBLIC_PATHS = new Set(['/admin/login', '/admin/setup', '/admin/logout', '/healthz']);
+app.use((req, res, next) => {
+  if (PUBLIC_PATHS.has(req.path)) return next();
+  return requireAuth(req, res, next);
+});
 
 function riskBadgeClass(level) {
   return {
@@ -363,13 +481,13 @@ app.post('/pera', async (req, res, next) => {
 
     const result = await pool.query(
       `INSERT INTO pera_records
-        (activity_name, class_unit, risk_level, hazards, control_measures, required_supervision, consent_required, submitted_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        (activity_name, class_unit, risk_level, hazards, control_measures, required_supervision, consent_required, submitted_by, created_by_staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING id`,
       [
         normalizeText(activity_name), normalizeText(class_unit) || null, risk_level,
         normalizeText(hazards) || null, normalizeText(control_measures) || null, normalizeText(required_supervision) || null,
-        consent_required === 'true', normalizeText(submitted_by) || null,
+        consent_required === 'true', normalizeText(submitted_by) || null, req.staffUser.id,
       ]
     );
 
@@ -491,7 +609,7 @@ app.post('/pera/:id/submit', async (req, res, next) => {
   }
 });
 
-app.post('/pera/:id/approve', async (req, res, next) => {
+app.post('/pera/:id/approve', requireRole('admin', 'approver'), async (req, res, next) => {
   try {
     const { approver } = req.body;
     await pool.query(
@@ -507,7 +625,7 @@ app.post('/pera/:id/approve', async (req, res, next) => {
   }
 });
 
-app.post('/pera/:id/reject', async (req, res, next) => {
+app.post('/pera/:id/reject', requireRole('admin', 'approver'), async (req, res, next) => {
   try {
     const { review_notes } = req.body;
     await pool.query(
@@ -843,8 +961,8 @@ app.post('/cara', async (req, res, next) => {
          environmental_hazards, environmental_controls,
          facilities_hazards, facilities_controls,
          student_hazards, student_controls,
-         submitted_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+         submitted_by, created_by_staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        RETURNING id`,
       [
         normalizeText(activity_name), normalizeText(class_unit) || null, normalizeText(activity_scope) || null, risk_level,
@@ -853,7 +971,7 @@ app.post('/cara', async (req, res, next) => {
         normalizeText(environmental_hazards) || null, normalizeText(environmental_controls) || null,
         normalizeText(facilities_hazards) || null, normalizeText(facilities_controls) || null,
         normalizeText(student_hazards) || null, normalizeText(student_controls) || null,
-        normalizeText(submitted_by) || null,
+        normalizeText(submitted_by) || null, req.staffUser.id,
       ]
     );
 
@@ -893,6 +1011,9 @@ app.get('/cara/:id/edit', async (req, res, next) => {
       return res.status(404).send('CARA record not found.');
     }
     const r = result.rows[0];
+    if (!canManageOwnRecord(req.staffUser, r)) {
+      return res.status(403).send('You can only edit CARA records you created yourself. <a href="/cara">Back to CARA list</a>');
+    }
 
     const linkedResult = await pool.query('SELECT pera_id FROM cara_tool_links WHERE cara_id = $1', [req.params.id]);
     const linkedIds = new Set(linkedResult.rows.map((row) => String(row.pera_id)));
@@ -1127,6 +1248,9 @@ app.post('/cara/:id/edit', async (req, res, next) => {
     const existingResult = await pool.query('SELECT * FROM cara_records WHERE id = $1', [req.params.id]);
     if (existingResult.rows.length === 0) {
       return res.status(404).send('CARA record not found.');
+    }
+    if (!canManageOwnRecord(req.staffUser, existingResult.rows[0])) {
+      return res.status(403).send('You can only edit CARA records you created yourself. <a href="/cara">Back to CARA list</a>');
     }
     const before = existingResult.rows[0];
 
@@ -1791,7 +1915,7 @@ app.post('/cara/:id/submit', async (req, res, next) => {
   }
 });
 
-app.post('/cara/:id/approve', async (req, res, next) => {
+app.post('/cara/:id/approve', requireRole('admin', 'approver'), async (req, res, next) => {
   try {
     const { approver } = req.body;
     await pool.query(
@@ -1807,7 +1931,7 @@ app.post('/cara/:id/approve', async (req, res, next) => {
   }
 });
 
-app.post('/cara/:id/reject', async (req, res, next) => {
+app.post('/cara/:id/reject', requireRole('admin', 'approver'), async (req, res, next) => {
   try {
     const { review_notes } = req.body;
     await pool.query(
@@ -2274,13 +2398,13 @@ app.post('/equipment', async (req, res, next) => {
 
     const result = await pool.query(
       `INSERT INTO equipment_items
-        (name, category, location, status, pera_id, last_inspected, next_inspection_due, notes, inspection_frequency, checklist_items)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        (name, category, location, status, pera_id, last_inspected, next_inspection_due, notes, inspection_frequency, checklist_items, created_by_staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        RETURNING id`,
       [
         normalizeText(name), normalizeText(category) || null, normalizeText(location) || null, status,
         pera_id || null, last_inspected || null, next_inspection_due || null, normalizeText(notes) || null,
-        frequency, JSON.stringify(parseChecklistText(checklist_items)),
+        frequency, JSON.stringify(parseChecklistText(checklist_items)), req.staffUser.id,
       ]
     );
 
@@ -2554,18 +2678,22 @@ app.post('/equipment/:id/check', async (req, res, next) => {
   }
 });
 
-// ---------- Admin: login ----------
+// ---------- Staff: login / logout ----------
 
 app.get('/admin/login', (req, res) => {
-  const next = typeof req.query.next === 'string' && req.query.next.startsWith('/') ? req.query.next : '/admin';
+  const next = typeof req.query.next === 'string' && req.query.next.startsWith('/') ? req.query.next : '/';
   const body = `
     <div class="form-card" style="max-width:380px;margin:60px auto;">
-      <h1 class="page-title" style="margin-bottom:20px;">Admin sign in</h1>
+      <h1 class="page-title" style="margin-bottom:20px;">Staff sign in</h1>
       <form method="post" action="/admin/login">
         <input type="hidden" name="next" value="${escapeHtml(next)}">
         <div class="form-row">
-          <label for="password">Admin password</label>
-          <input type="password" id="password" name="password" required autofocus>
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" required autofocus>
+        </div>
+        <div class="form-row">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required>
         </div>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary" style="width:100%;">Sign in</button>
@@ -2573,32 +2701,121 @@ app.get('/admin/login', (req, res) => {
       </form>
     </div>
   `;
-  res.send(page({ title: 'Admin sign in', active: '', body }));
+  res.send(page({ title: 'Staff sign in', active: '', body }));
 });
 
-app.post('/admin/login', (req, res) => {
-  const { password, next } = req.body;
-  const target = typeof next === 'string' && next.startsWith('/') ? next : '/admin';
+app.post('/admin/login', async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+    const target = typeof req.body.next === 'string' && req.body.next.startsWith('/') ? req.body.next : '/';
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
 
-  if (ADMIN_PASSWORD && password === ADMIN_PASSWORD) {
-    res.setHeader(
-      'Set-Cookie',
-      `admin_token=${ADMIN_TOKEN}; HttpOnly; Secure; Path=/; Max-Age=2592000; SameSite=Lax`
-    );
-    return res.redirect(target);
+    if (!normalizedEmail || !password) {
+      return res.status(401).send('Email and password are required. <a href="/admin/login">Try again</a>');
+    }
+
+    const { rows } = await pool.query('SELECT * FROM staff_users WHERE lower(email) = $1', [normalizedEmail]);
+    const user = rows[0];
+    if (!user || user.disabled || !verifyPassword(password, user.password_hash)) {
+      return res.status(401).send('Incorrect email or password. <a href="/admin/login">Try again</a>');
+    }
+
+    setSessionCookie(res, user.id);
+    res.redirect(target);
+  } catch (err) {
+    next(err);
   }
-
-  res.status(401).send('Incorrect password. <a href="/admin/login">Try again</a>');
 });
 
 app.post('/admin/logout', (req, res) => {
-  res.setHeader('Set-Cookie', 'admin_token=; HttpOnly; Secure; Path=/; Max-Age=0');
-  res.redirect('/pera');
+  clearSessionCookie(res);
+  res.redirect('/admin/login');
+});
+
+// ---------- Staff: one-time first-admin setup ----------
+// Only reachable while no staff accounts exist at all -- bootstraps the very
+// first Admin account without needing shell/database access. Once at least
+// one account exists, this permanently redirects to the ordinary login page
+// instead, so it can't be used to create a second, unauthorised admin later.
+
+app.get('/admin/setup', async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM staff_users');
+    if (rows[0].count > 0) {
+      return res.redirect('/admin/login');
+    }
+    const body = `
+      <div class="form-card" style="max-width:420px;margin:60px auto;">
+        <h1 class="page-title" style="margin-bottom:8px;">Set up the first admin account</h1>
+        <p class="page-subtitle" style="margin-bottom:20px;">This only works once, before any staff accounts exist. Once you're signed in, add everyone else from Admin &rarr; Staff.</p>
+        <form method="post" action="/admin/setup">
+          <div class="form-row">
+            <label for="name">Your name</label>
+            <input type="text" id="name" name="name" required autofocus>
+          </div>
+          <div class="form-row">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" required>
+          </div>
+          <div class="form-row">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" minlength="8" required>
+          </div>
+          <div class="form-row">
+            <label for="password_confirm">Confirm password</label>
+            <input type="password" id="password_confirm" name="password_confirm" minlength="8" required>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" style="width:100%;">Create admin account</button>
+          </div>
+        </form>
+      </div>
+    `;
+    res.send(page({ title: 'Set up admin account', active: '', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/setup', async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM staff_users');
+    if (rows[0].count > 0) {
+      return res.redirect('/admin/login');
+    }
+
+    const { name, email, password, password_confirm } = req.body;
+    const normalizedName = normalizeText(name || '').trim();
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+
+    if (!normalizedName || !normalizedEmail || !password) {
+      return res.status(400).send('All fields are required. <a href="/admin/setup">Try again</a>');
+    }
+    if (password !== password_confirm) {
+      return res.status(400).send('Passwords do not match. <a href="/admin/setup">Try again</a>');
+    }
+    if (password.length < 8) {
+      return res.status(400).send('Password must be at least 8 characters. <a href="/admin/setup">Try again</a>');
+    }
+
+    const passwordHash = hashPassword(password);
+    const insertResult = await pool.query(
+      `INSERT INTO staff_users (name, email, password_hash, role) VALUES ($1, $2, $3, 'admin') RETURNING id`,
+      [normalizedName, normalizedEmail, passwordHash]
+    );
+    setSessionCookie(res, insertResult.rows[0].id);
+    res.redirect('/admin/staff');
+  } catch (err) {
+    if (err && err.code === '23505') {
+      return res.status(400).send('That email is already in use. <a href="/admin/setup">Try again</a>');
+    }
+    next(err);
+  }
 });
 
 // ---------- Admin: records list ----------
 
-app.get('/admin', requireAdmin, async (req, res, next) => {
+app.get('/admin', requireRole('admin'), async (req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM pera_records ORDER BY id');
     const caraResult = await pool.query('SELECT * FROM cara_records ORDER BY id');
@@ -2639,9 +2856,12 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
           <h1 class="page-title">Admin</h1>
           <p class="page-subtitle">Click any record to edit or delete it.</p>
         </div>
-        <form method="post" action="/admin/logout">
-          <button type="submit" class="btn btn-secondary">Sign out</button>
-        </form>
+        <div style="display:flex;gap:10px;">
+          <a href="/admin/staff" class="btn btn-secondary">Manage staff</a>
+          <form method="post" action="/admin/logout">
+            <button type="submit" class="btn btn-secondary">Sign out</button>
+          </form>
+        </div>
       </div>
       <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">PERA records</div>
       <div class="card">
@@ -2695,9 +2915,267 @@ app.get('/admin', requireAdmin, async (req, res, next) => {
   }
 });
 
+// ---------- Admin: staff accounts ----------
+
+function roleLabel(role) {
+  return { admin: 'Admin', approver: 'Approver', submitter: 'Submitter' }[role] || role;
+}
+
+// Safety net so an admin can't lock everyone out by disabling/deleting the
+// last remaining enabled admin account (themselves or someone else).
+async function isLastEnabledAdmin(staffId) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM staff_users WHERE role = 'admin' AND disabled = false AND id != $1`,
+    [staffId]
+  );
+  return rows[0].count === 0;
+}
+
+app.get('/admin/staff', requireRole('admin'), async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM staff_users ORDER BY name ASC');
+
+    const staffRows = rows.map((s) => `
+      <tr class="row-link" onclick="window.location='/admin/staff/${s.id}/edit'">
+        <td>${escapeHtml(s.name)}${s.id === req.staffUser.id ? ' <span style="color:#6B6659;">(you)</span>' : ''}</td>
+        <td>${escapeHtml(s.email)}</td>
+        <td>${escapeHtml(roleLabel(s.role))}</td>
+        <td>${s.disabled ? '<span class="badge badge-changes">Disabled</span>' : '<span class="badge badge-approved">Active</span>'}</td>
+      </tr>
+    `).join('');
+
+    const body = `
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Staff</h1>
+          <p class="page-subtitle">Click any staff member to change their role, disable them, or reset their password.</p>
+        </div>
+        <a href="/admin" class="btn btn-secondary">Back to Admin</a>
+      </div>
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Role</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>${staffRows || '<tr><td colspan="4" style="text-align:center;color:#6B6659;padding:24px;">No staff accounts yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+
+      <div class="form-section-title">Add a staff member</div>
+      <form class="form-card" method="post" action="/admin/staff" style="max-width:480px;">
+        <div class="form-row">
+          <label for="name">Name</label>
+          <input type="text" id="name" name="name" required>
+        </div>
+        <div class="form-row">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" required>
+        </div>
+        <div class="form-row">
+          <label for="role">Role</label>
+          <select id="role" name="role" required>
+            <option value="submitter">Submitter — create and edit their own records</option>
+            <option value="approver">Approver — also approves/rejects PERA and CARA</option>
+            <option value="admin">Admin — full access, including managing staff</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="password">Temporary password</label>
+          <input type="password" id="password" name="password" minlength="8" required>
+          <div class="form-section-hint">Share this with them directly — not by email — and encourage them to note it somewhere safe. There's no self-service "change password" page yet, so if they want a different one later, an admin resets it from here.</div>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Create account</button>
+        </div>
+      </form>
+    `;
+
+    res.send(page({ title: 'Staff', active: 'admin', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/staff', requireRole('admin'), async (req, res, next) => {
+  try {
+    const { name, email, role, password } = req.body;
+    const normalizedName = normalizeText(name || '').trim();
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+
+    if (!normalizedName || !normalizedEmail || !STAFF_ROLES.includes(role)) {
+      return res.status(400).send('Name, email and a valid role are required. <a href="/admin/staff">Back</a>');
+    }
+    if (!password || password.length < 8) {
+      return res.status(400).send('Password must be at least 8 characters. <a href="/admin/staff">Back</a>');
+    }
+
+    await pool.query(
+      `INSERT INTO staff_users (name, email, password_hash, role) VALUES ($1, $2, $3, $4)`,
+      [normalizedName, normalizedEmail, hashPassword(password), role]
+    );
+
+    res.redirect('/admin/staff');
+  } catch (err) {
+    if (err && err.code === '23505') {
+      return res.status(400).send('That email is already in use. <a href="/admin/staff">Back</a>');
+    }
+    next(err);
+  }
+});
+
+app.get('/admin/staff/:id/edit', requireRole('admin'), async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM staff_users WHERE id = $1', [req.params.id]);
+    if (rows.length === 0) {
+      return res.status(404).send('Staff account not found.');
+    }
+    const s = rows[0];
+
+    const roleOptions = STAFF_ROLES.map((r) =>
+      `<option value="${r}"${s.role === r ? ' selected' : ''}>${roleLabel(r)}</option>`
+    ).join('');
+
+    const body = `
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">${escapeHtml(s.name)}</h1>
+          <p class="page-subtitle">${escapeHtml(s.email)}</p>
+        </div>
+        <a href="/admin/staff" class="btn btn-secondary">Back to Staff</a>
+      </div>
+
+      <form class="form-card" method="post" action="/admin/staff/${s.id}/edit" style="max-width:480px;">
+        <div class="form-row">
+          <label for="name">Name</label>
+          <input type="text" id="name" name="name" value="${escapeHtml(s.name)}" required>
+        </div>
+        <div class="form-row">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" value="${escapeHtml(s.email)}" required>
+        </div>
+        <div class="form-row">
+          <label for="role">Role</label>
+          <select id="role" name="role" required>${roleOptions}</select>
+        </div>
+        <div class="form-row">
+          <label for="new_password">Reset password (leave blank to keep it unchanged)</label>
+          <input type="password" id="new_password" name="new_password" minlength="8">
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save changes</button>
+        </div>
+      </form>
+
+      <form method="post" action="/admin/staff/${s.id}/${s.disabled ? 'enable' : 'disable'}" style="margin-top:16px;">
+        <button type="submit" class="btn btn-secondary">${s.disabled ? 'Re-enable this account' : 'Disable this account'}</button>
+      </form>
+      ${s.id !== req.staffUser.id ? `
+      <form method="post" action="/admin/staff/${s.id}/delete" style="margin-top:16px;" onsubmit="return confirm('Delete this staff account permanently? Any records they created stay in place, just no longer linked to their account. This cannot be undone.');">
+        <button type="submit" class="btn btn-secondary" style="color:#B3261E;">Delete this account</button>
+      </form>` : ''}
+    `;
+
+    res.send(page({ title: s.name, active: 'admin', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/staff/:id/edit', requireRole('admin'), async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM staff_users WHERE id = $1', [req.params.id]);
+    if (rows.length === 0) {
+      return res.status(404).send('Staff account not found.');
+    }
+    const existing = rows[0];
+
+    const { name, email, role, new_password } = req.body;
+    const normalizedName = normalizeText(name || '').trim();
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+
+    if (!normalizedName || !normalizedEmail || !STAFF_ROLES.includes(role)) {
+      return res.status(400).send('Name, email and a valid role are required. <a href="/admin/staff/' + existing.id + '/edit">Back</a>');
+    }
+    if (existing.role === 'admin' && role !== 'admin' && await isLastEnabledAdmin(existing.id)) {
+      return res.status(400).send('Cannot change the last remaining admin to another role — promote someone else to Admin first. <a href="/admin/staff/' + existing.id + '/edit">Back</a>');
+    }
+    if (new_password && new_password.length < 8) {
+      return res.status(400).send('New password must be at least 8 characters. <a href="/admin/staff/' + existing.id + '/edit">Back</a>');
+    }
+
+    if (new_password) {
+      await pool.query(
+        `UPDATE staff_users SET name = $1, email = $2, role = $3, password_hash = $4, updated_at = now() WHERE id = $5`,
+        [normalizedName, normalizedEmail, role, hashPassword(new_password), existing.id]
+      );
+    } else {
+      await pool.query(
+        `UPDATE staff_users SET name = $1, email = $2, role = $3, updated_at = now() WHERE id = $4`,
+        [normalizedName, normalizedEmail, role, existing.id]
+      );
+    }
+
+    res.redirect('/admin/staff');
+  } catch (err) {
+    if (err && err.code === '23505') {
+      return res.status(400).send('That email is already in use. <a href="/admin/staff/' + req.params.id + '/edit">Back</a>');
+    }
+    next(err);
+  }
+});
+
+app.post('/admin/staff/:id/disable', requireRole('admin'), async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM staff_users WHERE id = $1', [req.params.id]);
+    if (rows.length === 0) {
+      return res.status(404).send('Staff account not found.');
+    }
+    if (rows[0].role === 'admin' && await isLastEnabledAdmin(rows[0].id)) {
+      return res.status(400).send('Cannot disable the last remaining admin account. <a href="/admin/staff">Back</a>');
+    }
+    await pool.query('UPDATE staff_users SET disabled = true, updated_at = now() WHERE id = $1', [req.params.id]);
+    res.redirect('/admin/staff');
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/staff/:id/enable', requireRole('admin'), async (req, res, next) => {
+  try {
+    await pool.query('UPDATE staff_users SET disabled = false, updated_at = now() WHERE id = $1', [req.params.id]);
+    res.redirect('/admin/staff');
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/staff/:id/delete', requireRole('admin'), async (req, res, next) => {
+  try {
+    if (Number(req.params.id) === req.staffUser.id) {
+      return res.status(400).send('You cannot delete your own account while signed in as it. <a href="/admin/staff">Back</a>');
+    }
+    const { rows } = await pool.query('SELECT * FROM staff_users WHERE id = $1', [req.params.id]);
+    if (rows.length === 0) {
+      return res.status(404).send('Staff account not found.');
+    }
+    if (rows[0].role === 'admin' && await isLastEnabledAdmin(rows[0].id)) {
+      return res.status(400).send('Cannot delete the last remaining admin account. <a href="/admin/staff">Back</a>');
+    }
+    await pool.query('DELETE FROM staff_users WHERE id = $1', [req.params.id]);
+    res.redirect('/admin/staff');
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ---------- Admin: edit a record ----------
 
-app.get('/admin/pera/:id/edit', requireAdmin, async (req, res, next) => {
+app.get('/admin/pera/:id/edit', requireRole('admin'), async (req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id]);
     if (result.rows.length === 0) {
@@ -2768,7 +3246,7 @@ app.get('/admin/pera/:id/edit', requireAdmin, async (req, res, next) => {
   }
 });
 
-app.post('/admin/pera/:id', requireAdmin, async (req, res, next) => {
+app.post('/admin/pera/:id', requireRole('admin'), async (req, res, next) => {
   try {
     const {
       activity_name, class_unit, risk_level, status,
@@ -2800,7 +3278,7 @@ app.post('/admin/pera/:id', requireAdmin, async (req, res, next) => {
   }
 });
 
-app.post('/admin/pera/:id/delete', requireAdmin, async (req, res, next) => {
+app.post('/admin/pera/:id/delete', requireRole('admin'), async (req, res, next) => {
   try {
     await pool.query('DELETE FROM pera_records WHERE id = $1', [req.params.id]);
     res.redirect('/admin');
@@ -2811,7 +3289,7 @@ app.post('/admin/pera/:id/delete', requireAdmin, async (req, res, next) => {
 
 // ---------- Admin: edit a CARA record ----------
 
-app.get('/admin/cara/:id/edit', requireAdmin, async (req, res, next) => {
+app.get('/admin/cara/:id/edit', requireRole('admin'), async (req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM cara_records WHERE id = $1', [req.params.id]);
     if (result.rows.length === 0) {
@@ -2922,7 +3400,7 @@ app.get('/admin/cara/:id/edit', requireAdmin, async (req, res, next) => {
   }
 });
 
-app.post('/admin/cara/:id', requireAdmin, async (req, res, next) => {
+app.post('/admin/cara/:id', requireRole('admin'), async (req, res, next) => {
   try {
     const {
       activity_name, class_unit, activity_scope, risk_level, status,
@@ -2966,7 +3444,7 @@ app.post('/admin/cara/:id', requireAdmin, async (req, res, next) => {
   }
 });
 
-app.post('/admin/cara/:id/delete', requireAdmin, async (req, res, next) => {
+app.post('/admin/cara/:id/delete', requireRole('admin'), async (req, res, next) => {
   try {
     await pool.query('DELETE FROM cara_records WHERE id = $1', [req.params.id]);
     res.redirect('/admin');
@@ -2977,7 +3455,7 @@ app.post('/admin/cara/:id/delete', requireAdmin, async (req, res, next) => {
 
 // ---------- Admin: edit an Equipment item ----------
 
-app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
+app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM equipment_items WHERE id = $1', [req.params.id]);
     if (result.rows.length === 0) {
@@ -3059,7 +3537,7 @@ app.get('/admin/equipment/:id/edit', requireAdmin, async (req, res, next) => {
   }
 });
 
-app.post('/admin/equipment/:id', requireAdmin, async (req, res, next) => {
+app.post('/admin/equipment/:id', requireRole('admin'), async (req, res, next) => {
   try {
     const {
       name, category, location, status, pera_id, last_inspected, next_inspection_due, notes,
@@ -3091,7 +3569,7 @@ app.post('/admin/equipment/:id', requireAdmin, async (req, res, next) => {
   }
 });
 
-app.post('/admin/equipment/:id/delete', requireAdmin, async (req, res, next) => {
+app.post('/admin/equipment/:id/delete', requireRole('admin'), async (req, res, next) => {
   try {
     await pool.query('DELETE FROM equipment_items WHERE id = $1', [req.params.id]);
     res.redirect('/admin');
