@@ -2815,11 +2815,45 @@ app.post('/admin/setup', async (req, res, next) => {
 
 // ---------- Admin: records list ----------
 
-app.get('/admin', requireRole('admin'), async (req, res, next) => {
+// The admin area is a set of sibling tabs (Manage Staff / PERA / CARA /
+// Equipment), each its own page/URL rather than one long scrolling page.
+// adminTabs() renders the shared tab bar; adminHeader() the shared
+// title-plus-sign-out-button row that sits above it on every tab.
+function adminTabs(activeTab) {
+  const tabs = [
+    { key: 'staff', href: '/admin/staff', label: 'Manage Staff' },
+    { key: 'pera', href: '/admin/pera', label: 'PERA' },
+    { key: 'cara', href: '/admin/cara', label: 'CARA' },
+    { key: 'equipment', href: '/admin/equipment', label: 'Equipment' },
+  ];
+  return `
+    <div class="admin-tabs">
+      ${tabs.map((t) => `<a href="${t.href}" class="admin-tab${t.key === activeTab ? ' active' : ''}">${escapeHtml(t.label)}</a>`).join('')}
+    </div>
+  `;
+}
+
+function adminHeader(title, subtitle) {
+  return `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">${escapeHtml(title)}</h1>
+        <p class="page-subtitle">${escapeHtml(subtitle)}</p>
+      </div>
+      <form method="post" action="/admin/logout">
+        <button type="submit" class="btn btn-secondary">Sign out</button>
+      </form>
+    </div>
+  `;
+}
+
+app.get('/admin', requireRole('admin'), (req, res) => {
+  res.redirect('/admin/pera');
+});
+
+app.get('/admin/pera', requireRole('admin'), async (req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM pera_records ORDER BY id');
-    const caraResult = await pool.query('SELECT * FROM cara_records ORDER BY id');
-    const equipmentResult = await pool.query('SELECT * FROM equipment_items ORDER BY name ASC');
 
     const rows = result.rows.map((r) => `
       <tr class="row-link" onclick="window.location='/admin/pera/${r.id}/edit'">
@@ -2831,39 +2865,9 @@ app.get('/admin', requireRole('admin'), async (req, res, next) => {
       </tr>
     `).join('');
 
-    const caraRows = caraResult.rows.map((r) => `
-      <tr class="row-link" onclick="window.location='/admin/cara/${r.id}/edit'">
-        <td>${escapeHtml(r.activity_name)}</td>
-        <td>${escapeHtml(r.class_unit || '—')}</td>
-        <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
-        <td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
-        <td>${escapeHtml(r.submitted_by || '—')}</td>
-      </tr>
-    `).join('');
-
-    const equipmentRows = equipmentResult.rows.map((r) => `
-      <tr class="row-link" onclick="window.location='/admin/equipment/${r.id}/edit'">
-        <td>${escapeHtml(r.name)}</td>
-        <td>${escapeHtml(r.category || '—')}</td>
-        <td>${escapeHtml(r.location || '—')}</td>
-        <td><span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
-      </tr>
-    `).join('');
-
     const body = `
-      <div class="page-header">
-        <div>
-          <h1 class="page-title">Admin</h1>
-          <p class="page-subtitle">Click any record to edit or delete it.</p>
-        </div>
-        <div style="display:flex;gap:10px;">
-          <a href="/admin/staff" class="btn btn-secondary">Manage staff</a>
-          <form method="post" action="/admin/logout">
-            <button type="submit" class="btn btn-secondary">Sign out</button>
-          </form>
-        </div>
-      </div>
-      <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">PERA records</div>
+      ${adminHeader('PERA records', 'Click any record to edit or delete it.')}
+      ${adminTabs('pera')}
       <div class="card">
         <table>
           <thead>
@@ -2875,10 +2879,34 @@ app.get('/admin', requireRole('admin'), async (req, res, next) => {
               <th>Approver</th>
             </tr>
           </thead>
-          <tbody>${rows}</tbody>
+          <tbody>${rows || '<tr><td colspan="5" style="text-align:center;color:#6B6659;padding:24px;">No PERA records yet.</td></tr>'}</tbody>
         </table>
       </div>
-      <div class="form-section-title">CARA records</div>
+    `;
+
+    res.send(page({ title: 'PERA records', active: 'admin', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/admin/cara', requireRole('admin'), async (req, res, next) => {
+  try {
+    const caraResult = await pool.query('SELECT * FROM cara_records ORDER BY id');
+
+    const caraRows = caraResult.rows.map((r) => `
+      <tr class="row-link" onclick="window.location='/admin/cara/${r.id}/edit'">
+        <td>${escapeHtml(r.activity_name)}</td>
+        <td>${escapeHtml(r.class_unit || '—')}</td>
+        <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
+        <td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
+        <td>${escapeHtml(r.submitted_by || '—')}</td>
+      </tr>
+    `).join('');
+
+    const body = `
+      ${adminHeader('CARA records', 'Click any record to edit or delete it.')}
+      ${adminTabs('cara')}
       <div class="card">
         <table>
           <thead>
@@ -2893,7 +2921,30 @@ app.get('/admin', requireRole('admin'), async (req, res, next) => {
           <tbody>${caraRows || '<tr><td colspan="5" style="text-align:center;color:#6B6659;padding:24px;">No CARA records yet.</td></tr>'}</tbody>
         </table>
       </div>
-      <div class="form-section-title">Equipment</div>
+    `;
+
+    res.send(page({ title: 'CARA records', active: 'admin', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/admin/equipment', requireRole('admin'), async (req, res, next) => {
+  try {
+    const equipmentResult = await pool.query('SELECT * FROM equipment_items ORDER BY name ASC');
+
+    const equipmentRows = equipmentResult.rows.map((r) => `
+      <tr class="row-link" onclick="window.location='/admin/equipment/${r.id}/edit'">
+        <td>${escapeHtml(r.name)}</td>
+        <td>${escapeHtml(r.category || '—')}</td>
+        <td>${escapeHtml(r.location || '—')}</td>
+        <td><span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
+      </tr>
+    `).join('');
+
+    const body = `
+      ${adminHeader('Equipment', 'Click any item to edit or delete it.')}
+      ${adminTabs('equipment')}
       <div class="card">
         <table>
           <thead>
@@ -2909,7 +2960,7 @@ app.get('/admin', requireRole('admin'), async (req, res, next) => {
       </div>
     `;
 
-    res.send(page({ title: 'Admin', active: 'admin', body }));
+    res.send(page({ title: 'Equipment', active: 'admin', body }));
   } catch (err) {
     next(err);
   }
@@ -2945,13 +2996,8 @@ app.get('/admin/staff', requireRole('admin'), async (req, res, next) => {
     `).join('');
 
     const body = `
-      <div class="page-header">
-        <div>
-          <h1 class="page-title">Staff</h1>
-          <p class="page-subtitle">Click any staff member to change their role, disable them, or reset their password.</p>
-        </div>
-        <a href="/admin" class="btn btn-secondary">Back to Admin</a>
-      </div>
+      ${adminHeader('Staff', 'Click any staff member to change their role, disable them, or reset their password.')}
+      ${adminTabs('staff')}
       <div class="card">
         <table>
           <thead>
@@ -3187,7 +3233,7 @@ app.get('/admin/pera/:id/edit', requireRole('admin'), async (req, res, next) => 
     const statusOptions = STATUSES.map((s) => `<option value="${s}" ${s === r.status ? 'selected' : ''}>${s}</option>`).join('');
 
     const body = `
-      <a class="back-link" href="/admin">← Back to Admin</a>
+      <a class="back-link" href="/admin/pera">← Back to PERA</a>
       <h1 class="page-title" style="margin-bottom:24px;">Edit: ${escapeHtml(r.activity_name)}</h1>
       <form class="form-card" method="post" action="/admin/pera/${r.id}">
         <div class="form-row">
@@ -3232,7 +3278,7 @@ app.get('/admin/pera/:id/edit', requireRole('admin'), async (req, res, next) => 
         </div>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">Save changes</button>
-          <a class="btn btn-secondary" href="/admin">Cancel</a>
+          <a class="btn btn-secondary" href="/admin/pera">Cancel</a>
         </div>
       </form>
       <form method="post" action="/admin/pera/${r.id}/delete" style="margin-top:16px;" onsubmit="return confirm('Delete this record permanently? This cannot be undone.');">
@@ -3281,7 +3327,7 @@ app.post('/admin/pera/:id', requireRole('admin'), async (req, res, next) => {
 app.post('/admin/pera/:id/delete', requireRole('admin'), async (req, res, next) => {
   try {
     await pool.query('DELETE FROM pera_records WHERE id = $1', [req.params.id]);
-    res.redirect('/admin');
+    res.redirect('/admin/pera');
   } catch (err) {
     next(err);
   }
@@ -3301,7 +3347,7 @@ app.get('/admin/cara/:id/edit', requireRole('admin'), async (req, res, next) => 
     const statusOptions = STATUSES.map((s) => `<option value="${s}" ${s === r.status ? 'selected' : ''}>${s}</option>`).join('');
 
     const body = `
-      <a class="back-link" href="/admin">← Back to Admin</a>
+      <a class="back-link" href="/admin/cara">← Back to CARA</a>
       <h1 class="page-title" style="margin-bottom:24px;">Edit CARA: ${escapeHtml(r.activity_name)}</h1>
       <form class="form-card" method="post" action="/admin/cara/${r.id}" style="max-width:760px;">
         <div class="form-row">
@@ -3386,7 +3432,7 @@ app.get('/admin/cara/:id/edit', requireRole('admin'), async (req, res, next) => 
         </div>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">Save changes</button>
-          <a class="btn btn-secondary" href="/admin">Cancel</a>
+          <a class="btn btn-secondary" href="/admin/cara">Cancel</a>
         </div>
       </form>
       <form method="post" action="/admin/cara/${r.id}/delete" style="margin-top:16px;" onsubmit="return confirm('Delete this CARA record permanently? This cannot be undone.');">
@@ -3447,7 +3493,7 @@ app.post('/admin/cara/:id', requireRole('admin'), async (req, res, next) => {
 app.post('/admin/cara/:id/delete', requireRole('admin'), async (req, res, next) => {
   try {
     await pool.query('DELETE FROM cara_records WHERE id = $1', [req.params.id]);
-    res.redirect('/admin');
+    res.redirect('/admin/cara');
   } catch (err) {
     next(err);
   }
@@ -3478,7 +3524,7 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
     ].join('');
 
     const body = `
-      <a class="back-link" href="/admin">← Back to Admin</a>
+      <a class="back-link" href="/admin/equipment">← Back to Equipment</a>
       <h1 class="page-title" style="margin-bottom:24px;">Edit: ${escapeHtml(r.name)}</h1>
       <form class="form-card" method="post" action="/admin/equipment/${r.id}">
         <div class="form-row">
@@ -3523,7 +3569,7 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
         </div>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">Save changes</button>
-          <a class="btn btn-secondary" href="/admin">Cancel</a>
+          <a class="btn btn-secondary" href="/admin/equipment">Cancel</a>
         </div>
       </form>
       <form method="post" action="/admin/equipment/${r.id}/delete" style="margin-top:16px;" onsubmit="return confirm('Delete this equipment item permanently? This cannot be undone.');">
@@ -3572,7 +3618,7 @@ app.post('/admin/equipment/:id', requireRole('admin'), async (req, res, next) =>
 app.post('/admin/equipment/:id/delete', requireRole('admin'), async (req, res, next) => {
   try {
     await pool.query('DELETE FROM equipment_items WHERE id = $1', [req.params.id]);
-    res.redirect('/admin');
+    res.redirect('/admin/equipment');
   } catch (err) {
     next(err);
   }
