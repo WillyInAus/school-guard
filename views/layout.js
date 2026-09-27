@@ -8,13 +8,50 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
-function navLink(href, label, iconSvg, active) {
+// Sidebar links are pastel pills — the same "pastel background + matching
+// text colour" look as the status badges used throughout the app (see
+// public/style.css .badge-*). Each section gets its own colour so the
+// sidebar reads as a set of distinct, colour-coded destinations; the active
+// one fills solid with white text instead of sitting pastel-on-pastel.
+const NAV_PALETTE = {
+  dashboard: { bg: '#E3EEFB', text: '#2C5FA8', solid: '#2C5FA8' },
+  pera: { bg: '#FDF0D8', text: '#A6740B', solid: '#B7791F' },
+  cara: { bg: '#E1F3E9', text: '#2F7D5A', solid: '#2F7D5A' },
+  equipment: { bg: '#EDE7FB', text: '#5B4FCF', solid: '#5B4FCF' },
+  admin: { bg: '#FBE7F0', text: '#B23A72', solid: '#B23A72' },
+};
+
+// The admin sub-nav (Manage Staff / PERA / CARA / Equipment) reuses the same
+// hue as its top-level counterpart, so "PERA" always means the same colour
+// whether you're looking at the main sidebar or the admin section — only
+// "Manage Staff" needs a colour of its own.
+const ADMIN_SUB_PALETTE = {
+  staff: { bg: '#DFF3F3', text: '#1F7A7A', solid: '#1F7A7A' },
+  pera: NAV_PALETTE.pera,
+  cara: NAV_PALETTE.cara,
+  equipment: NAV_PALETTE.equipment,
+};
+
+function navLink(href, label, iconSvg, active, palette) {
   const activeStyle = active
-    ? 'color:#FFFFFF;background:#1B5E52;'
-    : 'color:#CFE3DD;background:transparent;';
+    ? `color:#FFFFFF;background:${palette.solid};`
+    : `color:${palette.text};background:${palette.bg};`;
   return `
-    <a href="${href}" style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;font-size:14px;font-weight:500;text-decoration:none;${activeStyle}">
+    <a href="${href}" style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:999px;font-size:14px;font-weight:600;text-decoration:none;${activeStyle}">
       ${iconSvg}
+      ${label}
+    </a>`;
+}
+
+// A smaller, indented pastel pill for the admin tabs nested under "Admin" in
+// the sidebar — same look as navLink, minus the icon, so it reads as a
+// sub-level of the Admin entry above it.
+function navSubLink(href, label, active, palette) {
+  const activeStyle = active
+    ? `color:#FFFFFF;background:${palette.solid};`
+    : `color:${palette.text};background:${palette.bg};`;
+  return `
+    <a href="${href}" style="display:block;padding:7px 14px;margin-left:26px;border-radius:999px;font-size:12.5px;font-weight:600;text-decoration:none;${activeStyle}">
       ${label}
     </a>`;
 }
@@ -36,7 +73,7 @@ const ICONS = {
   equipment: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13.4 3.4a3 3 0 0 0-4 3.9L3.6 13a1.6 1.6 0 0 0 2.3 2.3l5.7-5.8a3 3 0 0 0 3.9-4l-2 2-1.7-.5-.5-1.7 2.1-2Z"/></svg>',
 };
 
-function page({ title, active, body }) {
+function page({ title, active, adminTab, body }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -54,13 +91,20 @@ function page({ title, active, body }) {
       <span>School Guard</span>
     </div>
     <nav class="sidebar-nav">
-      ${navLink('/', 'Dashboard', ICONS.dashboard, active === 'dashboard')}
-      ${navLink('/pera', 'PERA', ICONS.risk, active === 'pera')}
-      ${navLink('/cara', 'CARA', ICONS.cara, active === 'cara')}
-      ${navLink('/equipment', 'Equipment', ICONS.equipment, active === 'equipment')}
+      ${navLink('/', 'Dashboard', ICONS.dashboard, active === 'dashboard', NAV_PALETTE.dashboard)}
+      ${navLink('/pera', 'PERA', ICONS.risk, active === 'pera', NAV_PALETTE.pera)}
+      ${navLink('/cara', 'CARA', ICONS.cara, active === 'cara', NAV_PALETTE.cara)}
+      ${navLink('/equipment', 'Equipment', ICONS.equipment, active === 'equipment', NAV_PALETTE.equipment)}
     </nav>
     <nav class="sidebar-nav-bottom">
-      ${navLink('/admin', 'Admin', ICONS.admin, active === 'admin')}
+      ${navLink('/admin', 'Admin', ICONS.admin, active === 'admin', NAV_PALETTE.admin)}
+      ${active === 'admin' ? `
+      <div style="display:flex;flex-direction:column;gap:4px;margin-top:4px;">
+        ${navSubLink('/admin/staff', 'Manage Staff', adminTab === 'staff', ADMIN_SUB_PALETTE.staff)}
+        ${navSubLink('/admin/pera', 'PERA', adminTab === 'pera', ADMIN_SUB_PALETTE.pera)}
+        ${navSubLink('/admin/cara', 'CARA', adminTab === 'cara', ADMIN_SUB_PALETTE.cara)}
+        ${navSubLink('/admin/equipment', 'Equipment', adminTab === 'equipment', ADMIN_SUB_PALETTE.equipment)}
+      </div>` : ''}
     </nav>
     <div class="sidebar-footer">
       <div class="sidebar-footer-label">Signed in as</div>
