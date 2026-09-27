@@ -28,6 +28,27 @@ const RISK_LEVELS = ['Low', 'Medium', 'High', 'Extreme'];
 const STATUSES = ['Draft', 'Pending approval', 'Approved', 'Changes requested'];
 const STAFF_ROLES = ['admin', 'approver', 'submitter'];
 
+// ---------- Structured PERA ----------
+
+const HAZARD_CATEGORIES = ['Mechanical', 'Electrical', 'Chemical', 'Noise', 'Manual handling', 'Fire', 'Ergonomic', 'Environmental', 'Other'];
+const CONTROL_TYPES = ['Engineering', 'Administrative', 'PPE', 'Procedural'];
+const APPROVAL_DECISIONS = ['Approved as submitted', 'Approved with conditions', 'Not approved'];
+
+// Seeded onto every new PERA as pera_min_requirements rows (see POST /pera
+// below). Editing this list only changes what future PERAs are seeded with
+// -- it never touches rows already saved against existing records.
+const MIN_SAFETY_REQUIREMENTS = [
+  'Machine guards fitted and in place',
+  'Emergency stop / isolation switch accessible',
+  'PPE available and worn as required',
+  'Work area free of trip, slip and fire hazards',
+  'First aid kit accessible',
+  'Fire extinguisher or fire blanket accessible and appropriate for the hazard',
+  'Operator has received induction/training on this equipment',
+  'Supervision ratio appropriate to the risk level',
+  'SOP / Safe Work Method Statement displayed or accessible',
+];
+
 // ---------- Staff auth (individual accounts, roles) ----------
 // Replaces the old single shared ADMIN_PASSWORD. Three roles:
 //   admin     - everything, including managing other staff accounts
@@ -240,6 +261,96 @@ function summarizeChangedLabels(labels) {
   return `Updated ${labels.length} fields`;
 }
 
+// Groups a PERA's change_log rows (already ORDER BY changed_at DESC) by
+// calendar year for the collapsible change-history tree on the PERA detail
+// page -- newest year expanded, older years collapsed by default.
+function groupChangeLogByYear(rows) {
+  const years = new Map();
+  for (const row of rows) {
+    const year = new Date(row.changed_at).getFullYear();
+    if (!years.has(year)) years.set(year, []);
+    years.get(year).push(row);
+  }
+  return [...years.entries()].sort((a, b) => b[0] - a[0]);
+}
+
+function approvalDecisionBadgeClass(decision) {
+  return {
+    'Approved as submitted': 'badge-approved',
+    'Approved with conditions': 'badge-pending',
+    'Not approved': 'badge-changes',
+  }[decision] || 'badge-draft';
+}
+
+// Renders one hazard row for the PERA new/edit forms -- called once per
+// existing hazard when pre-filling an edit form, and once with no argument
+// for the empty <template> row that "+ Add hazard" clones. All fields
+// inside a row deliberately share their name with every other row's
+// (hazard_description, hazard_category, ...) rather than using array
+// brackets: express/qs collects same-name fields into parallel arrays in
+// document order, exactly like the tool_ids checkboxes elsewhere in this
+// file, and every field here is a text/select input (never a checkbox) so
+// a row can never be silently dropped from the arrays just because a box
+// was left unticked.
+function renderHazardRow(h = {}) {
+  const categoryOptions = ['', ...HAZARD_CATEGORIES].map((c) =>
+    `<option value="${escapeHtml(c)}" ${h.category === c ? 'selected' : ''}>${c || 'Select category…'}</option>`
+  ).join('');
+  const riskOptions = ['', ...RISK_LEVELS].map((l) =>
+    `<option value="${l}" ${h.risk_level === l ? 'selected' : ''}>${l || 'Select risk…'}</option>`
+  ).join('');
+  const controlTypeOptions = ['', ...CONTROL_TYPES].map((t) =>
+    `<option value="${escapeHtml(t)}" ${h.control_type === t ? 'selected' : ''}>${t || 'Select control type…'}</option>`
+  ).join('');
+  return `
+    <div class="hazard-row">
+      <button type="button" class="hazard-row-remove" onclick="this.closest('.hazard-row').remove()" title="Remove this hazard">×</button>
+      <div class="form-row">
+        <label>Hazard</label>
+        <textarea name="hazard_description" placeholder="e.g. Flying metal fragments from the grinding disc">${escapeHtml(h.description || '')}</textarea>
+      </div>
+      <div class="hazard-row-grid">
+        <div class="form-row">
+          <label>Category</label>
+          <select name="hazard_category">${categoryOptions}</select>
+        </div>
+        <div class="form-row">
+          <label>Risk level</label>
+          <select name="hazard_risk_level">${riskOptions}</select>
+        </div>
+        <div class="form-row">
+          <label>Control type</label>
+          <select name="hazard_control_type">${controlTypeOptions}</select>
+        </div>
+        <div class="form-row">
+          <label>Mandatory control?</label>
+          <select name="hazard_mandatory">
+            <option value="No" ${!h.mandatory ? 'selected' : ''}>No</option>
+            <option value="Yes" ${h.mandatory ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <label>Control measure</label>
+        <textarea name="hazard_control_measure" placeholder="What reduces this risk?">${escapeHtml(h.control_measure || '')}</textarea>
+      </div>
+      <div class="form-row">
+        <label>Applies to</label>
+        <input type="text" name="hazard_applies_to" value="${escapeHtml(h.applies_to || '')}" placeholder="e.g. All students, operator only">
+      </div>
+    </div>
+  `;
+}
+
+const HAZARD_BUILDER_SCRIPT = `
+  <script>
+    function addHazardRow() {
+      const tpl = document.getElementById('hazard-row-template');
+      document.getElementById('hazard-rows').appendChild(tpl.content.cloneNode(true));
+    }
+  </script>
+`;
+
 // Fallback brief label for change-log rows saved before the "brief" column
 // existed. Can only reliably recover the first changed field's label (text
 // changes can contain their own newlines, so a full field count isn't safe
@@ -421,10 +532,11 @@ app.get('/pera/new', (req, res) => {
   const body = `
     <a class="back-link" href="/pera">← Back to PERA Records</a>
     <h1 class="page-title">New PERA</h1>
-    <p class="page-subtitle" style="margin-bottom:24px;">This Plant &amp; Equipment Risk Assessment (PERA) will be saved as a Draft until you submit it for approval.</p>
+    <p class="page-subtitle" style="margin-bottom:24px;">This Plant &amp; Equipment Risk Assessment (PERA) will be saved as a Draft until you submit it for approval. A Minimum Safety Requirements checklist is added automatically once it's created.</p>
     <form class="form-card" method="post" action="/pera">
+      <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Plant / equipment</div>
       <div class="form-row">
-        <label for="activity_name">Activity name</label>
+        <label for="activity_name">Plant / equipment / activity name</label>
         <input type="text" id="activity_name" name="activity_name" required placeholder="e.g. Angle grinder induction — Yr 11 Metalwork">
       </div>
       <div class="form-row">
@@ -432,34 +544,63 @@ app.get('/pera/new', (req, res) => {
         <input type="text" id="class_unit" name="class_unit" placeholder="e.g. Yr 11 Metalwork, or UEE22020 Cert II Electrotechnology">
       </div>
       <div class="form-row">
+        <label for="location">Location</label>
+        <input type="text" id="location" name="location" placeholder="e.g. Workshop A">
+      </div>
+      <div class="form-row">
         <label for="risk_level">Risk level</label>
         <select id="risk_level" name="risk_level" required>${riskOptions}</select>
       </div>
+
+      <div class="form-section-title">Activity / process</div>
       <div class="form-row">
-        <label for="hazards">Hazards identified</label>
-        <textarea id="hazards" name="hazards" placeholder="What could cause harm during this activity?"></textarea>
+        <label for="activity_process">What happens during this activity or process?</label>
+        <textarea id="activity_process" name="activity_process" placeholder="Describe the process step by step"></textarea>
       </div>
       <div class="form-row">
-        <label for="control_measures">Control measures</label>
-        <textarea id="control_measures" name="control_measures" placeholder="PPE, guarding checks, supervision ratio, procedures..."></textarea>
+        <label for="materials_used">Materials used</label>
+        <textarea id="materials_used" name="materials_used"></textarea>
       </div>
       <div class="form-row">
-        <label for="required_supervision">Required supervision</label>
-        <input type="text" id="required_supervision" name="required_supervision" placeholder="e.g. Adult with Design and Technologies qualification, current first aid/CPR">
+        <label for="student_use">Student use</label>
+        <textarea id="student_use" name="student_use" placeholder="How and when do students use this equipment?"></textarea>
       </div>
+      <div class="form-row">
+        <label for="operating_conditions">Operating conditions</label>
+        <textarea id="operating_conditions" name="operating_conditions"></textarea>
+      </div>
+
+      <div class="form-section-title">Hazards and control measures</div>
+      <p class="form-section-hint">Add one row per hazard.</p>
+      <div id="hazard-rows">${renderHazardRow()}</div>
+      <button type="button" class="btn btn-secondary" onclick="addHazardRow()" style="margin-bottom:20px;">+ Add hazard</button>
+      <template id="hazard-row-template">${renderHazardRow()}</template>
+
+      <div class="form-section-title">Supervision and training</div>
+      <div class="form-row">
+        <label for="supervision_details">Supervision required</label>
+        <textarea id="supervision_details" name="supervision_details" placeholder="e.g. Adult with Design and Technologies qualification, current first aid/CPR"></textarea>
+      </div>
+      <div class="form-row">
+        <label for="training_competency">Training / competency required</label>
+        <textarea id="training_competency" name="training_competency"></textarea>
+      </div>
+
+      <div class="form-section-title">Consent and submission</div>
       <div class="form-row checkbox-row">
         <input type="checkbox" id="consent_required" name="consent_required" value="true">
         <label for="consent_required">Parent consent required</label>
       </div>
       <div class="form-row">
         <label for="submitted_by">Submitted by</label>
-        <input type="text" id="submitted_by" name="submitted_by" placeholder="Your name" value="Sean Willmott">
+        <input type="text" id="submitted_by" name="submitted_by" value="${escapeHtml(req.staffUser.name)}">
       </div>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary">Save as draft</button>
         <a class="btn btn-secondary" href="/pera">Cancel</a>
       </div>
     </form>
+    ${HAZARD_BUILDER_SCRIPT}
   `;
 
   res.send(page({ title: 'New PERA', active: 'pera', body }));
@@ -470,8 +611,9 @@ app.get('/pera/new', (req, res) => {
 app.post('/pera', async (req, res, next) => {
   try {
     const {
-      activity_name, class_unit, risk_level,
-      hazards, control_measures, required_supervision,
+      activity_name, class_unit, location, risk_level,
+      activity_process, materials_used, student_use, operating_conditions,
+      supervision_details, training_competency,
       consent_required, submitted_by,
     } = req.body;
 
@@ -479,19 +621,318 @@ app.post('/pera', async (req, res, next) => {
       return res.status(400).send('Activity name and a valid risk level are required.');
     }
 
+    const descriptions = [].concat(req.body.hazard_description || []);
+    const categories = [].concat(req.body.hazard_category || []);
+    const hazardRiskLevels = [].concat(req.body.hazard_risk_level || []);
+    const hazardControlMeasures = [].concat(req.body.hazard_control_measure || []);
+    const controlTypes = [].concat(req.body.hazard_control_type || []);
+    const mandatoryFlags = [].concat(req.body.hazard_mandatory || []);
+    const appliesTos = [].concat(req.body.hazard_applies_to || []);
+
     const result = await pool.query(
       `INSERT INTO pera_records
-        (activity_name, class_unit, risk_level, hazards, control_measures, required_supervision, consent_required, submitted_by, created_by_staff_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        (activity_name, class_unit, location, risk_level,
+         activity_process, materials_used, student_use, operating_conditions,
+         supervision_details, training_competency,
+         consent_required, submitted_by, created_by_staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING id`,
       [
-        normalizeText(activity_name), normalizeText(class_unit) || null, risk_level,
-        normalizeText(hazards) || null, normalizeText(control_measures) || null, normalizeText(required_supervision) || null,
+        normalizeText(activity_name), normalizeText(class_unit) || null, normalizeText(location) || null, risk_level,
+        normalizeText(activity_process) || null, normalizeText(materials_used) || null, normalizeText(student_use) || null, normalizeText(operating_conditions) || null,
+        normalizeText(supervision_details) || null, normalizeText(training_competency) || null,
         consent_required === 'true', normalizeText(submitted_by) || null, req.staffUser.id,
       ]
     );
+    const peraId = result.rows[0].id;
 
-    res.redirect(`/pera/${result.rows[0].id}`);
+    for (let i = 0; i < descriptions.length; i++) {
+      const description = normalizeText(descriptions[i] || '').trim();
+      if (!description) continue;
+      await pool.query(
+        `INSERT INTO pera_hazards (pera_id, category, description, risk_level, control_measure, control_type, mandatory, applies_to, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          peraId, categories[i] || null, description, hazardRiskLevels[i] || null,
+          normalizeText(hazardControlMeasures[i]) || null, controlTypes[i] || null,
+          mandatoryFlags[i] === 'Yes', normalizeText(appliesTos[i]) || null, i,
+        ]
+      );
+    }
+
+    for (let i = 0; i < MIN_SAFETY_REQUIREMENTS.length; i++) {
+      await pool.query(
+        `INSERT INTO pera_min_requirements (pera_id, requirement, sort_order) VALUES ($1,$2,$3)`,
+        [peraId, MIN_SAFETY_REQUIREMENTS[i], i]
+      );
+    }
+
+    await pool.query(
+      `INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [peraId, req.staffUser.name, 'Created', 1, 'PERA created', 'PERA created']
+    );
+
+    res.redirect(`/pera/${peraId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- PERA: edit ----------
+// Mirrors the CARA edit pattern: lets whoever created the PERA (or an
+// admin/approver) correct or expand it later. Any saved change that
+// actually changes something bumps "version" and resets the record to
+// Draft, clearing whatever approval decision was on it -- the old
+// decision no longer reflects the new content. Hazard rows are replaced
+// wholesale on every save rather than diffed row-by-row (same approach the
+// CARA edit form uses for its PERA tool links), which keeps this simple
+// and correct even though it means a hazard's own id changes on every
+// edit.
+
+app.get('/pera/:id/edit', async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).send('PERA record not found.');
+    }
+    const r = result.rows[0];
+    if (!canManageOwnRecord(req.staffUser, r)) {
+      return res.status(403).send('You can only edit PERA records you created yourself. <a href="/pera">Back to PERA Records</a>');
+    }
+
+    const hazardsResult = await pool.query('SELECT * FROM pera_hazards WHERE pera_id = $1 ORDER BY sort_order, id', [req.params.id]);
+    const hazardRowsHtml = hazardsResult.rows.length
+      ? hazardsResult.rows.map((h) => renderHazardRow(h)).join('')
+      : renderHazardRow();
+
+    const riskOptions = RISK_LEVELS.map((l) => `<option value="${l}" ${l === r.risk_level ? 'selected' : ''}>${l}</option>`).join('');
+
+    const resetWarning = r.status !== 'Draft'
+      ? `<div class="note-box" style="margin-bottom:20px;">Saving changes will reset this PERA to <strong>Draft</strong> and clear its current approval decision — it will need to be re-submitted and re-approved.</div>`
+      : '';
+
+    const body = `
+      <a class="back-link" href="/pera/${r.id}">← Back to PERA</a>
+      <h1 class="page-title">Edit PERA</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">Changes are recorded in the change history at the bottom of this PERA.</p>
+      ${resetWarning}
+      <form class="form-card" method="post" action="/pera/${r.id}/edit" style="max-width:760px;">
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Plant / equipment</div>
+        <div class="form-row">
+          <label for="activity_name">Plant / equipment / activity name</label>
+          <input type="text" id="activity_name" name="activity_name" required value="${escapeHtml(r.activity_name)}">
+        </div>
+        <div class="form-row">
+          <label for="class_unit">Class / unit</label>
+          <input type="text" id="class_unit" name="class_unit" value="${escapeHtml(r.class_unit || '')}">
+        </div>
+        <div class="form-row">
+          <label for="location">Location</label>
+          <input type="text" id="location" name="location" value="${escapeHtml(r.location || '')}">
+        </div>
+        <div class="form-row">
+          <label for="risk_level">Risk level</label>
+          <select id="risk_level" name="risk_level" required>${riskOptions}</select>
+        </div>
+
+        <div class="form-section-title">Activity / process</div>
+        <div class="form-row">
+          <label for="activity_process">What happens during this activity or process?</label>
+          <textarea id="activity_process" name="activity_process">${escapeHtml(r.activity_process || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="materials_used">Materials used</label>
+          <textarea id="materials_used" name="materials_used">${escapeHtml(r.materials_used || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="student_use">Student use</label>
+          <textarea id="student_use" name="student_use">${escapeHtml(r.student_use || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="operating_conditions">Operating conditions</label>
+          <textarea id="operating_conditions" name="operating_conditions">${escapeHtml(r.operating_conditions || '')}</textarea>
+        </div>
+
+        <div class="form-section-title">Hazards and control measures</div>
+        <p class="form-section-hint">Add, edit or remove hazard rows.</p>
+        <div id="hazard-rows">${hazardRowsHtml}</div>
+        <button type="button" class="btn btn-secondary" onclick="addHazardRow()" style="margin-bottom:20px;">+ Add hazard</button>
+        <template id="hazard-row-template">${renderHazardRow()}</template>
+
+        <div class="form-section-title">Supervision and training</div>
+        <div class="form-row">
+          <label for="supervision_details">Supervision required</label>
+          <textarea id="supervision_details" name="supervision_details">${escapeHtml(r.supervision_details || '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="training_competency">Training / competency required</label>
+          <textarea id="training_competency" name="training_competency">${escapeHtml(r.training_competency || '')}</textarea>
+        </div>
+
+        <div class="form-section-title">Consent</div>
+        <div class="form-row checkbox-row">
+          <input type="checkbox" id="consent_required" name="consent_required" value="true" ${r.consent_required ? 'checked' : ''}>
+          <label for="consent_required">Parent consent required</label>
+        </div>
+
+        <div class="form-section-title">Submitted by</div>
+        <div class="form-row">
+          <input type="text" id="submitted_by" name="submitted_by" value="${escapeHtml(r.submitted_by || '')}">
+        </div>
+
+        <div class="form-section-title">Change record</div>
+        <p class="form-section-hint">Your name will be recorded against this edit in the change history below.</p>
+        <div class="form-row">
+          <label for="edited_by">Your name</label>
+          <input type="text" id="edited_by" name="edited_by" required value="${escapeHtml(req.staffUser.name)}">
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save changes</button>
+          <a class="btn btn-secondary" href="/pera/${r.id}">Cancel</a>
+        </div>
+      </form>
+      ${HAZARD_BUILDER_SCRIPT}
+    `;
+
+    res.send(page({ title: `Edit — ${r.activity_name}`, active: 'pera', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/pera/:id/edit', async (req, res, next) => {
+  try {
+    let {
+      activity_name, class_unit, location, risk_level,
+      activity_process, materials_used, student_use, operating_conditions,
+      supervision_details, training_competency,
+      consent_required, submitted_by, edited_by,
+    } = req.body;
+
+    activity_name = normalizeText(activity_name);
+    class_unit = normalizeText(class_unit);
+    location = normalizeText(location);
+    activity_process = normalizeText(activity_process);
+    materials_used = normalizeText(materials_used);
+    student_use = normalizeText(student_use);
+    operating_conditions = normalizeText(operating_conditions);
+    supervision_details = normalizeText(supervision_details);
+    training_competency = normalizeText(training_competency);
+    submitted_by = normalizeText(submitted_by);
+
+    if (!activity_name || !RISK_LEVELS.includes(risk_level)) {
+      return res.status(400).send('Activity name and a valid risk level are required.');
+    }
+    if (!edited_by || !edited_by.trim()) {
+      return res.status(400).send('Your name is required to save an edit.');
+    }
+
+    const existingResult = await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id]);
+    if (existingResult.rows.length === 0) {
+      return res.status(404).send('PERA record not found.');
+    }
+    if (!canManageOwnRecord(req.staffUser, existingResult.rows[0])) {
+      return res.status(403).send('You can only edit PERA records you created yourself. <a href="/pera">Back to PERA Records</a>');
+    }
+    const before = existingResult.rows[0];
+
+    const newConsentRequired = consent_required === 'true';
+
+    const fields = [
+      ['activity_name', 'Activity name', activity_name],
+      ['class_unit', 'Class / unit', class_unit || null],
+      ['location', 'Location', location || null],
+      ['risk_level', 'Risk level', risk_level],
+      ['activity_process', 'Activity / process', activity_process || null],
+      ['materials_used', 'Materials used', materials_used || null],
+      ['student_use', 'Student use', student_use || null],
+      ['operating_conditions', 'Operating conditions', operating_conditions || null],
+      ['supervision_details', 'Supervision required', supervision_details || null],
+      ['training_competency', 'Training / competency', training_competency || null],
+      ['submitted_by', 'Submitted by', submitted_by || null],
+    ];
+
+    const displayValue = (v) => ((v === null || v === undefined || String(v).trim() === '') ? '(empty)' : String(v));
+
+    const changeLines = [];
+    const changedLabels = [];
+    for (const [key, label, newValue] of fields) {
+      const oldValue = before[key];
+      const oldStr = (oldValue === null || oldValue === undefined) ? '' : String(oldValue);
+      const newStr = (newValue === null || newValue === undefined) ? '' : String(newValue);
+      if (oldStr.trim() !== newStr.trim()) {
+        changeLines.push(`${label}: ${displayValue(oldValue)} → ${displayValue(newValue)}`);
+        changedLabels.push(label);
+      }
+    }
+    if (before.consent_required !== newConsentRequired) {
+      changeLines.push(`Parent consent required: ${before.consent_required ? 'Yes' : 'No'} → ${newConsentRequired ? 'Yes' : 'No'}`);
+      changedLabels.push('Parent consent required');
+    }
+
+    const descriptions = [].concat(req.body.hazard_description || []);
+    const categories = [].concat(req.body.hazard_category || []);
+    const hazardRiskLevels = [].concat(req.body.hazard_risk_level || []);
+    const hazardControlMeasures = [].concat(req.body.hazard_control_measure || []);
+    const controlTypes = [].concat(req.body.hazard_control_type || []);
+    const mandatoryFlags = [].concat(req.body.hazard_mandatory || []);
+    const appliesTos = [].concat(req.body.hazard_applies_to || []);
+
+    const existingHazardsResult = await pool.query('SELECT description FROM pera_hazards WHERE pera_id = $1 ORDER BY sort_order, id', [req.params.id]);
+    const afterHazardDescriptions = descriptions.map((d) => normalizeText(d || '').trim()).filter(Boolean);
+    if (JSON.stringify(existingHazardsResult.rows.map((h) => h.description)) !== JSON.stringify(afterHazardDescriptions)) {
+      changeLines.push(`Hazards: ${existingHazardsResult.rows.length} row(s) → ${afterHazardDescriptions.length} row(s)`);
+      changedLabels.push('Hazards');
+    }
+
+    if (changeLines.length === 0) {
+      return res.redirect(`/pera/${req.params.id}`);
+    }
+
+    const newVersion = before.version + 1;
+    const resetApproval = before.status !== 'Draft';
+
+    await pool.query(
+      `UPDATE pera_records SET
+         activity_name = $1, class_unit = $2, location = $3, risk_level = $4,
+         activity_process = $5, materials_used = $6, student_use = $7, operating_conditions = $8,
+         supervision_details = $9, training_competency = $10, consent_required = $11, submitted_by = $12,
+         version = $13,
+         ${resetApproval ? `status = 'Draft', approval_decision = NULL, approval_conditions = NULL, approver = NULL, approver_role = NULL, approved_at = NULL, next_review_date = NULL, review_notes = NULL,` : ''}
+         updated_at = now()
+       WHERE id = $14`,
+      [
+        activity_name, class_unit || null, location || null, risk_level,
+        activity_process || null, materials_used || null, student_use || null, operating_conditions || null,
+        supervision_details || null, training_competency || null, newConsentRequired, submitted_by || null,
+        newVersion,
+        req.params.id,
+      ]
+    );
+
+    await pool.query('DELETE FROM pera_hazards WHERE pera_id = $1', [req.params.id]);
+    for (let i = 0; i < descriptions.length; i++) {
+      const description = normalizeText(descriptions[i] || '').trim();
+      if (!description) continue;
+      await pool.query(
+        `INSERT INTO pera_hazards (pera_id, category, description, risk_level, control_measure, control_type, mandatory, applies_to, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          req.params.id, categories[i] || null, description, hazardRiskLevels[i] || null,
+          normalizeText(hazardControlMeasures[i]) || null, controlTypes[i] || null,
+          mandatoryFlags[i] === 'Yes', normalizeText(appliesTos[i]) || null, i,
+        ]
+      );
+    }
+
+    const briefSummary = summarizeChangedLabels(changedLabels);
+    await pool.query(
+      'INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1, $2, $3, $4, $5, $6)',
+      [req.params.id, edited_by.trim(), 'Edited', newVersion, changeLines.join('\n'), briefSummary]
+    );
+
+    res.redirect(`/pera/${req.params.id}`);
   } catch (err) {
     next(err);
   }
@@ -507,6 +948,158 @@ app.get('/pera/:id', async (req, res, next) => {
     }
     const r = result.rows[0];
 
+    const [hazardsResult, requirementsResult, documentsResult, reviewsResult, changeLogResult] = await Promise.all([
+      pool.query('SELECT * FROM pera_hazards WHERE pera_id = $1 ORDER BY sort_order, id', [req.params.id]),
+      pool.query('SELECT * FROM pera_min_requirements WHERE pera_id = $1 ORDER BY sort_order, id', [req.params.id]),
+      pool.query('SELECT * FROM pera_documents WHERE pera_id = $1 ORDER BY added_at DESC', [req.params.id]),
+      pool.query('SELECT * FROM pera_annual_reviews WHERE pera_id = $1 ORDER BY reviewed_at DESC', [req.params.id]),
+      pool.query('SELECT * FROM pera_change_log WHERE pera_id = $1 ORDER BY changed_at DESC', [req.params.id]),
+    ]);
+
+    const canEdit = canManageOwnRecord(req.staffUser, r);
+
+    let bannerHtml = '';
+    if (r.risk_level === 'High' || r.risk_level === 'Extreme') {
+      bannerHtml = r.status === 'Approved'
+        ? `<div class="risk-banner risk-banner-ok">✓ ${escapeHtml(r.risk_level)} risk — ${escapeHtml(r.approval_decision || 'Approved')}${r.approver ? ` by ${escapeHtml(r.approver)}` : ''}. Proceed only under the conditions recorded below.</div>`
+        : `<div class="risk-banner risk-banner-warning">⚠ ${escapeHtml(r.risk_level)} risk — not yet approved. Students must not proceed with this activity until it is approved.</div>`;
+    }
+
+    const summaryStripHtml = `
+      <div class="summary-strip">
+        <div class="summary-strip-item"><div class="detail-label">Plant / equipment</div><div class="detail-value">${escapeHtml(r.activity_name)}</div></div>
+        <div class="summary-strip-item"><div class="detail-label">Risk</div><div class="detail-value"><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></div></div>
+        <div class="summary-strip-item"><div class="detail-label">Status</div><div class="detail-value"><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></div></div>
+        <div class="summary-strip-item"><div class="detail-label">Location</div><div class="detail-value">${escapeHtml(r.location || '—')}</div></div>
+        <div class="summary-strip-item"><div class="detail-label">Class / unit</div><div class="detail-value">${escapeHtml(r.class_unit || '—')}</div></div>
+        <div class="summary-strip-item"><div class="detail-label">Assessed</div><div class="detail-value">${formatDate(r.created_at)}</div></div>
+        <div class="summary-strip-item"><div class="detail-label">Next review</div><div class="detail-value">${formatDate(r.next_review_date)}</div></div>
+      </div>
+    `;
+
+    let hazardsSectionHtml;
+    if (hazardsResult.rows.length) {
+      hazardsSectionHtml = `
+        <div class="card" style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr><th>Hazard</th><th>Category</th><th>Risk</th><th>Control measure</th><th>Type</th><th>Mandatory</th><th>Applies to</th></tr>
+            </thead>
+            <tbody>
+              ${hazardsResult.rows.map((h) => `
+                <tr>
+                  <td>${escapeHtml(h.description)}</td>
+                  <td>${escapeHtml(h.category || '—')}</td>
+                  <td>${h.risk_level ? `<span class="badge ${riskBadgeClass(h.risk_level)}">${escapeHtml(h.risk_level)}</span>` : '—'}</td>
+                  <td>${escapeHtml(h.control_measure || '—')}</td>
+                  <td>${escapeHtml(h.control_type || '—')}</td>
+                  <td>${h.mandatory ? 'Yes' : 'No'}</td>
+                  <td>${escapeHtml(h.applies_to || '—')}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    } else if (r.hazards || r.control_measures) {
+      hazardsSectionHtml = `
+        <div class="note-box" style="margin-bottom:12px;">Recorded before structured hazards existed — shown here as originally saved.</div>
+        <div class="detail-section"><div class="detail-label">Hazards identified</div><div class="detail-value">${escapeHtml(r.hazards || '—')}</div></div>
+        <div class="detail-section"><div class="detail-label">Control measures</div><div class="detail-value">${escapeHtml(r.control_measures || '—')}</div></div>
+      `;
+    } else {
+      hazardsSectionHtml = `<div class="empty-state">No hazards recorded yet.</div>`;
+    }
+
+    const requirementsHtml = requirementsResult.rows.length
+      ? `
+        <form method="post" action="/pera/${r.id}/requirements">
+          <div class="min-req-list">
+            ${requirementsResult.rows.map((item) => `
+              <div class="min-req-item">
+                <input type="checkbox" id="req_${item.id}" name="met_ids" value="${item.id}" ${item.met ? 'checked' : ''} ${canEdit ? '' : 'disabled'}>
+                <label for="req_${item.id}">${escapeHtml(item.requirement)}</label>
+                <input type="text" name="notes_${item.id}" value="${escapeHtml(item.notes || '')}" placeholder="Notes (optional)" ${canEdit ? '' : 'disabled'}>
+              </div>
+            `).join('')}
+          </div>
+          ${canEdit ? `<div class="form-actions"><button type="submit" class="btn btn-primary">Save checklist</button></div>` : ''}
+        </form>
+      `
+      : `<div class="empty-state">No checklist on this record.</div>`;
+
+    const documentsHtml = `
+      ${documentsResult.rows.length ? `
+        <div class="min-req-list" style="margin-bottom:16px;">
+          ${documentsResult.rows.map((d) => `
+            <div class="min-req-item" style="justify-content:space-between;">
+              <div>${d.url ? `<a href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.title)}</a>` : escapeHtml(d.title)}${d.notes ? ` — ${escapeHtml(d.notes)}` : ''}</div>
+              ${canEdit ? `
+                <form method="post" action="/pera/${r.id}/documents/${d.id}/delete" onsubmit="return confirm('Remove this document?');">
+                  <button type="submit" class="btn btn-secondary" style="padding:4px 10px;font-size:13px;">Remove</button>
+                </form>
+              ` : ''}
+            </div>
+          `).join('')}
+        </div>
+      ` : `<div class="empty-state" style="margin-bottom:16px;">No related documents yet.</div>`}
+      ${canEdit ? `
+        <form class="form-card" method="post" action="/pera/${r.id}/documents" style="max-width:520px;">
+          <div class="form-row"><label for="doc_title">Title</label><input type="text" id="doc_title" name="title" required placeholder="e.g. Manufacturer manual"></div>
+          <div class="form-row"><label for="doc_url">Link (optional)</label><input type="text" id="doc_url" name="url" placeholder="https://..."></div>
+          <div class="form-row"><label for="doc_notes">Notes (optional)</label><input type="text" id="doc_notes" name="notes"></div>
+          <div class="form-actions"><button type="submit" class="btn btn-secondary">Add document</button></div>
+        </form>
+      ` : ''}
+    `;
+
+    const reviewsHtml = `
+      ${reviewsResult.rows.length ? `
+        <div class="min-req-list" style="margin-bottom:16px;">
+          ${reviewsResult.rows.map((rv) => `
+            <div class="min-req-item">
+              <div><strong>${formatDate(rv.reviewed_at)}</strong> — ${escapeHtml(rv.outcome || '—')} by ${escapeHtml(rv.reviewed_by || 'unknown')}${rv.notes ? `: ${escapeHtml(rv.notes)}` : ''}</div>
+            </div>
+          `).join('')}
+        </div>
+      ` : `<div class="empty-state" style="margin-bottom:16px;">No annual reviews recorded yet.</div>`}
+      ${canEdit ? `
+        <form class="form-card" method="post" action="/pera/${r.id}/reviews" style="max-width:520px;">
+          <div class="form-row">
+            <label for="outcome">Outcome</label>
+            <select id="outcome" name="outcome" required>
+              <option value="Still current">Still current</option>
+              <option value="Updated">Updated</option>
+              <option value="Superseded">Superseded</option>
+            </select>
+          </div>
+          <div class="form-row"><label for="review_notes_field">Notes</label><textarea id="review_notes_field" name="notes"></textarea></div>
+          <div class="form-row"><label for="next_review_date">Next review date</label><input type="date" id="next_review_date" name="next_review_date"></div>
+          <div class="form-actions"><button type="submit" class="btn btn-secondary">Record review</button></div>
+        </form>
+      ` : ''}
+    `;
+
+    const changeLogByYear = groupChangeLogByYear(changeLogResult.rows);
+    const changeLogHtml = changeLogByYear.length
+      ? changeLogByYear.map(([year, entries], idx) => `
+          <details class="change-log-year"${idx === 0 ? ' open' : ''}>
+            <summary class="change-log-year-summary">${year} <span class="tool-picker-group-count">(${entries.length})</span></summary>
+            <div class="change-log">
+              ${entries.map((c) => `
+                <details class="change-log-entry">
+                  <summary class="change-log-summary">
+                    <span class="change-log-datetime">${formatDateTime(c.changed_at)} — ${escapeHtml(c.changed_by || 'Unknown')}</span>
+                    <span class="change-log-brief">${escapeHtml(c.action || 'Edited')}${c.version ? ` (v${c.version})` : ''} — ${escapeHtml(c.brief || '')}</span>
+                  </summary>
+                  <div class="change-log-detail">${escapeHtml(c.summary)}</div>
+                </details>
+              `).join('')}
+            </div>
+          </details>
+        `).join('')
+      : `<div class="empty-state">No history recorded yet.</div>`;
+
     let actionsHtml = '';
     if (r.status === 'Draft') {
       actionsHtml = `
@@ -515,27 +1108,42 @@ app.get('/pera/:id', async (req, res, next) => {
         </form>
       `;
     } else if (r.status === 'Pending approval' || r.status === 'Changes requested') {
+      const decisionOptions = APPROVAL_DECISIONS.map((d) => `<option value="${d}">${d}</option>`).join('');
       actionsHtml = `
-        <form method="post" action="/pera/${r.id}/approve" style="margin-bottom:10px;">
+        <form method="post" action="/pera/${r.id}/approve">
           <div class="form-row">
-            <label for="approver">Approved by</label>
+            <label for="decision">Decision</label>
+            <select id="decision" name="decision" required onchange="document.getElementById('conditions-field').style.display = this.value === 'Approved with conditions' ? '' : 'none';">${decisionOptions}</select>
+          </div>
+          <div class="form-row" id="conditions-field" style="display:none;">
+            <label for="approval_conditions">Conditions</label>
+            <textarea id="approval_conditions" name="approval_conditions" placeholder="What conditions must be met?"></textarea>
+          </div>
+          <div class="form-row">
+            <label for="approver">Approver name</label>
             <input type="text" id="approver" name="approver" placeholder="Name of approver" value="Workplace Health and Safety Officer" required>
           </div>
-          <button type="submit" class="btn btn-primary" style="width:100%;">Approve</button>
-        </form>
-        <form method="post" action="/pera/${r.id}/reject">
           <div class="form-row">
-            <label for="review_notes">Notes for changes requested</label>
+            <label for="approver_role">Approver role</label>
+            <input type="text" id="approver_role" name="approver_role" placeholder="e.g. WHS Officer, Principal, HOD">
+          </div>
+          <div class="form-row">
+            <label for="review_notes">Notes (required if not approved)</label>
             <textarea id="review_notes" name="review_notes" placeholder="What needs to change?"></textarea>
           </div>
-          <button type="submit" class="btn btn-secondary" style="width:100%;">Request changes</button>
+          <button type="submit" class="btn btn-primary" style="width:100%;">Save decision</button>
         </form>
       `;
     } else if (r.status === 'Approved') {
       actionsHtml = `
         <div class="detail-section">
+          <div class="detail-label">Decision</div>
+          <div class="detail-value"><span class="badge ${approvalDecisionBadgeClass(r.approval_decision)}">${escapeHtml(r.approval_decision || 'Approved')}</span></div>
+        </div>
+        ${r.approval_conditions ? `<div class="detail-section"><div class="detail-label">Conditions</div><div class="detail-value">${escapeHtml(r.approval_conditions)}</div></div>` : ''}
+        <div class="detail-section">
           <div class="detail-label">Approved by</div>
-          <div class="detail-value">${escapeHtml(r.approver || '—')} on ${formatDate(r.approved_at)}</div>
+          <div class="detail-value">${escapeHtml(r.approver || '—')}${r.approver_role ? ` (${escapeHtml(r.approver_role)})` : ''} on ${formatDate(r.approved_at)}</div>
         </div>
         <div class="detail-section">
           <div class="detail-label">Next review due</div>
@@ -552,35 +1160,60 @@ app.get('/pera/:id', async (req, res, next) => {
           <h1 class="page-title" style="margin-top:10px;">${escapeHtml(r.activity_name)}</h1>
           <p class="page-subtitle">Submitted by ${escapeHtml(r.submitted_by || 'unknown')}</p>
         </div>
-        <span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
+        <div style="display:flex;gap:10px;align-items:flex-start;">
+          <span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
+          ${canEdit ? `<a class="btn btn-secondary" href="/pera/${r.id}/edit">Edit</a>` : ''}
+        </div>
       </div>
+      ${bannerHtml}
+      ${summaryStripHtml}
       <div class="detail-grid">
         <div>
-          <div class="detail-section">
-            <div class="detail-label">Class / unit</div>
-            <div class="detail-value">${escapeHtml(r.class_unit || '—')}</div>
-          </div>
-          <div class="detail-section">
-            <div class="detail-label">Hazards identified</div>
-            <div class="detail-value">${escapeHtml(r.hazards || '—')}</div>
-          </div>
-          <div class="detail-section">
-            <div class="detail-label">Control measures</div>
-            <div class="detail-value">${escapeHtml(r.control_measures || '—')}</div>
-          </div>
-          <div class="detail-section">
-            <div class="detail-label">Required supervision</div>
-            <div class="detail-value">${escapeHtml(r.required_supervision || '—')}</div>
-          </div>
-          <div class="detail-section">
-            <div class="detail-label">Parent consent required</div>
-            <div class="detail-value">${r.consent_required ? 'Yes' : 'No'}</div>
-          </div>
+          <details class="content-section" open>
+            <summary class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;cursor:pointer;">Activity / process</summary>
+            <div class="detail-section"><div class="detail-label">Activity / process</div><div class="detail-value">${escapeHtml(r.activity_process || '—')}</div></div>
+            <div class="detail-section"><div class="detail-label">Materials used</div><div class="detail-value">${escapeHtml(r.materials_used || '—')}</div></div>
+            <div class="detail-section"><div class="detail-label">Student use</div><div class="detail-value">${escapeHtml(r.student_use || '—')}</div></div>
+            <div class="detail-section"><div class="detail-label">Operating conditions</div><div class="detail-value">${escapeHtml(r.operating_conditions || '—')}</div></div>
+            <div class="detail-section"><div class="detail-label">Parent consent required</div><div class="detail-value">${r.consent_required ? 'Yes' : 'No'}</div></div>
+          </details>
+
+          <details class="content-section" open>
+            <summary class="form-section-title" style="cursor:pointer;">Hazards and control measures</summary>
+            ${hazardsSectionHtml}
+          </details>
+
+          <details class="content-section" open>
+            <summary class="form-section-title" style="cursor:pointer;">Minimum Safety Requirements</summary>
+            ${requirementsHtml}
+          </details>
+
+          <details class="content-section">
+            <summary class="form-section-title" style="cursor:pointer;">Supervision and training</summary>
+            <div class="detail-section"><div class="detail-label">Supervision required</div><div class="detail-value">${escapeHtml(r.supervision_details || r.required_supervision || '—')}</div></div>
+            <div class="detail-section"><div class="detail-label">Training / competency required</div><div class="detail-value">${escapeHtml(r.training_competency || '—')}</div></div>
+          </details>
+
           ${r.review_notes ? `
           <div class="detail-section">
             <div class="detail-label">Last review notes</div>
             <div class="detail-value">${escapeHtml(r.review_notes)}</div>
           </div>` : ''}
+
+          <details class="content-section">
+            <summary class="form-section-title" style="cursor:pointer;">Related documents</summary>
+            ${documentsHtml}
+          </details>
+
+          <details class="content-section">
+            <summary class="form-section-title" style="cursor:pointer;">Annual review history</summary>
+            ${reviewsHtml}
+          </details>
+
+          <details class="content-section">
+            <summary class="form-section-title" style="cursor:pointer;">Change history</summary>
+            ${changeLogHtml}
+          </details>
         </div>
         <div class="card" style="padding:22px;">
           <div class="note-box">${approvalRequirement(r.risk_level)}</div>
@@ -599,10 +1232,17 @@ app.get('/pera/:id', async (req, res, next) => {
 
 app.post('/pera/:id/submit', async (req, res, next) => {
   try {
+    const existingResult = await pool.query('SELECT version FROM pera_records WHERE id = $1', [req.params.id]);
     await pool.query(
       "UPDATE pera_records SET status = 'Pending approval', updated_at = now() WHERE id = $1",
       [req.params.id]
     );
+    if (existingResult.rows.length) {
+      await pool.query(
+        `INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1,$2,'Submitted',$3,'Submitted for approval','Submitted for approval')`,
+        [req.params.id, req.staffUser ? req.staffUser.name : null, existingResult.rows[0].version]
+      );
+    }
     res.redirect(`/pera/${req.params.id}`);
   } catch (err) {
     next(err);
@@ -611,14 +1251,48 @@ app.post('/pera/:id/submit', async (req, res, next) => {
 
 app.post('/pera/:id/approve', requireRole('admin', 'approver'), async (req, res, next) => {
   try {
-    const { approver } = req.body;
-    await pool.query(
-      `UPDATE pera_records
-       SET status = 'Approved', approver = $1, approved_at = now(),
-           next_review_date = (now() + interval '1 year')::date, updated_at = now()
-       WHERE id = $2`,
-      [approver || null, req.params.id]
-    );
+    const { decision, approval_conditions, approver, approver_role, review_notes } = req.body;
+    const existingResult = await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id]);
+    if (existingResult.rows.length === 0) {
+      return res.status(404).send('PERA record not found.');
+    }
+    const before = existingResult.rows[0];
+
+    if (decision === 'Not approved') {
+      await pool.query(
+        `UPDATE pera_records
+         SET status = 'Changes requested', approval_decision = $1, approval_conditions = NULL,
+             review_notes = $2, updated_at = now()
+         WHERE id = $3`,
+        ['Not approved', normalizeText(review_notes) || null, req.params.id]
+      );
+      await pool.query(
+        `INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1,$2,'Not approved',$3,$4,'Not approved')`,
+        [req.params.id, normalizeText(approver) || req.staffUser.name, before.version, review_notes ? `Not approved: ${normalizeText(review_notes)}` : 'Not approved']
+      );
+    } else if (APPROVAL_DECISIONS.includes(decision)) {
+      await pool.query(
+        `UPDATE pera_records
+         SET status = 'Approved', approval_decision = $1, approval_conditions = $2,
+             approver = $3, approver_role = $4, approved_at = now(),
+             next_review_date = (now() + interval '1 year')::date, review_notes = NULL, updated_at = now()
+         WHERE id = $5`,
+        [
+          decision, decision === 'Approved with conditions' ? (normalizeText(approval_conditions) || null) : null,
+          normalizeText(approver) || null, normalizeText(approver_role) || null, req.params.id,
+        ]
+      );
+      const summary = decision === 'Approved with conditions'
+        ? `Approved with conditions: ${normalizeText(approval_conditions) || '(none stated)'}`
+        : decision;
+      await pool.query(
+        `INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1,$2,'Approved',$3,$4,$5)`,
+        [req.params.id, normalizeText(approver) || req.staffUser.name, before.version, summary, decision]
+      );
+    } else {
+      return res.status(400).send('A valid decision is required. <a href="/pera/' + req.params.id + '">Back</a>');
+    }
+
     res.redirect(`/pera/${req.params.id}`);
   } catch (err) {
     next(err);
@@ -628,11 +1302,116 @@ app.post('/pera/:id/approve', requireRole('admin', 'approver'), async (req, res,
 app.post('/pera/:id/reject', requireRole('admin', 'approver'), async (req, res, next) => {
   try {
     const { review_notes } = req.body;
+    const existingResult = await pool.query('SELECT version FROM pera_records WHERE id = $1', [req.params.id]);
     await pool.query(
       `UPDATE pera_records
-       SET status = 'Changes requested', review_notes = $1, updated_at = now()
+       SET status = 'Changes requested', approval_decision = 'Not approved', approval_conditions = NULL, review_notes = $1, updated_at = now()
        WHERE id = $2`,
       [review_notes || null, req.params.id]
+    );
+    if (existingResult.rows.length) {
+      await pool.query(
+        `INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1,$2,'Not approved',$3,$4,'Not approved')`,
+        [req.params.id, req.staffUser.name, existingResult.rows[0].version, review_notes ? `Not approved: ${normalizeText(review_notes)}` : 'Not approved']
+      );
+    }
+    res.redirect(`/pera/${req.params.id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- PERA: Minimum Safety Requirements checklist ----------
+
+app.post('/pera/:id/requirements', async (req, res, next) => {
+  try {
+    const recordResult = await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id]);
+    if (recordResult.rows.length === 0) {
+      return res.status(404).send('PERA record not found.');
+    }
+    if (!canManageOwnRecord(req.staffUser, recordResult.rows[0])) {
+      return res.status(403).send('You can only update the checklist on PERA records you created yourself. <a href="/pera/' + req.params.id + '">Back</a>');
+    }
+    const itemsResult = await pool.query('SELECT id FROM pera_min_requirements WHERE pera_id = $1', [req.params.id]);
+    const metIds = new Set([].concat(req.body.met_ids || []).map(String));
+    for (const item of itemsResult.rows) {
+      await pool.query(
+        'UPDATE pera_min_requirements SET met = $1, notes = $2 WHERE id = $3',
+        [metIds.has(String(item.id)), normalizeText(req.body[`notes_${item.id}`]) || null, item.id]
+      );
+    }
+    res.redirect(`/pera/${req.params.id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- PERA: related documents ----------
+
+app.post('/pera/:id/documents', async (req, res, next) => {
+  try {
+    const recordResult = await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id]);
+    if (recordResult.rows.length === 0) {
+      return res.status(404).send('PERA record not found.');
+    }
+    if (!canManageOwnRecord(req.staffUser, recordResult.rows[0])) {
+      return res.status(403).send('You can only add documents to PERA records you created yourself. <a href="/pera/' + req.params.id + '">Back</a>');
+    }
+    const normalizedTitle = normalizeText(req.body.title || '').trim();
+    if (!normalizedTitle) {
+      return res.status(400).send('A title is required. <a href="/pera/' + req.params.id + '">Back</a>');
+    }
+    await pool.query(
+      'INSERT INTO pera_documents (pera_id, title, url, notes, added_by) VALUES ($1,$2,$3,$4,$5)',
+      [req.params.id, normalizedTitle, normalizeText(req.body.url) || null, normalizeText(req.body.notes) || null, req.staffUser.name]
+    );
+    res.redirect(`/pera/${req.params.id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/pera/:id/documents/:docId/delete', async (req, res, next) => {
+  try {
+    const recordResult = await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id]);
+    if (recordResult.rows.length === 0) {
+      return res.status(404).send('PERA record not found.');
+    }
+    if (!canManageOwnRecord(req.staffUser, recordResult.rows[0])) {
+      return res.status(403).send('You can only remove documents from PERA records you created yourself. <a href="/pera/' + req.params.id + '">Back</a>');
+    }
+    await pool.query('DELETE FROM pera_documents WHERE id = $1 AND pera_id = $2', [req.params.docId, req.params.id]);
+    res.redirect(`/pera/${req.params.id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- PERA: annual review history ----------
+
+app.post('/pera/:id/reviews', async (req, res, next) => {
+  try {
+    const recordResult = await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id]);
+    if (recordResult.rows.length === 0) {
+      return res.status(404).send('PERA record not found.');
+    }
+    if (!canManageOwnRecord(req.staffUser, recordResult.rows[0])) {
+      return res.status(403).send('You can only record reviews on PERA records you created yourself. <a href="/pera/' + req.params.id + '">Back</a>');
+    }
+    const { outcome, notes, next_review_date } = req.body;
+    if (!['Still current', 'Updated', 'Superseded'].includes(outcome)) {
+      return res.status(400).send('A valid outcome is required. <a href="/pera/' + req.params.id + '">Back</a>');
+    }
+    await pool.query(
+      'INSERT INTO pera_annual_reviews (pera_id, reviewed_by, outcome, notes, next_review_date) VALUES ($1,$2,$3,$4,$5)',
+      [req.params.id, req.staffUser.name, outcome, normalizeText(notes) || null, next_review_date || null]
+    );
+    if (next_review_date) {
+      await pool.query('UPDATE pera_records SET next_review_date = $1, updated_at = now() WHERE id = $2', [next_review_date, req.params.id]);
+    }
+    await pool.query(
+      `INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1,$2,'Reviewed',$3,$4,'Annual review recorded')`,
+      [req.params.id, req.staffUser.name, recordResult.rows[0].version, `Annual review — outcome: ${outcome}${notes ? `; ${normalizeText(notes)}` : ''}`]
     );
     res.redirect(`/pera/${req.params.id}`);
   } catch (err) {

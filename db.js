@@ -312,6 +312,124 @@ async function migrate() {
   await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS created_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS created_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL;`);
   await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS created_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL;`);
+
+  // ---------------------------------------------------------------
+  // Structured PERA: turns the original handful of free-text fields
+  // (hazards / control_measures / required_supervision, still on
+  // pera_records above) into queryable structured data, following the
+  // Queensland Plant & Equipment Risk Assessment template. The three old
+  // free-text columns are deliberately kept and never written to by the new
+  // form -- they're shown as a read-only fallback on records saved before
+  // this change (see server.js), so nothing already on file is lost or
+  // silently rewritten.
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS activity_process TEXT;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS materials_used TEXT;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS student_use TEXT;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS operating_conditions TEXT;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS supervision_details TEXT;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS training_competency TEXT;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS approval_decision TEXT;`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'pera_records_approval_decision_check'
+      ) THEN
+        ALTER TABLE pera_records
+          ADD CONSTRAINT pera_records_approval_decision_check
+          CHECK (approval_decision IS NULL OR approval_decision IN ('Approved as submitted','Approved with conditions','Not approved'));
+      END IF;
+    END $$;
+  `);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS approval_conditions TEXT;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS approver_role TEXT;`);
+  // Bumped on every saved edit (see /pera/:id/edit in server.js) and stored
+  // against each pera_change_log row, so the change history can show "v4"
+  // etc. rather than relying on row order alone.
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;`);
+
+  // Structured hazard rows. A PERA can have any number of these; the old
+  // free-text "hazards"/"control_measures" columns above become the
+  // fallback display only for records that have none.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pera_hazards (
+      id SERIAL PRIMARY KEY,
+      pera_id INTEGER NOT NULL REFERENCES pera_records(id) ON DELETE CASCADE,
+      category TEXT,
+      description TEXT NOT NULL,
+      risk_level TEXT CHECK (risk_level IN ('Low','Medium','High','Extreme')),
+      control_measure TEXT,
+      control_type TEXT CHECK (control_type IN ('Engineering','Administrative','PPE','Procedural')),
+      mandatory BOOLEAN NOT NULL DEFAULT false,
+      applies_to TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Fixed Minimum Safety Requirements checklist, seeded from
+  // MIN_SAFETY_REQUIREMENTS (server.js) whenever a PERA is created. Kept as
+  // rows rather than a JSON blob so the tick/notes on each item survive
+  // independently of the seed list ever being edited later.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pera_min_requirements (
+      id SERIAL PRIMARY KEY,
+      pera_id INTEGER NOT NULL REFERENCES pera_records(id) ON DELETE CASCADE,
+      requirement TEXT NOT NULL,
+      met BOOLEAN NOT NULL DEFAULT false,
+      notes TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+
+  // Related documents -- a link/reference (e.g. to a SOP, manufacturer
+  // manual, or a file kept elsewhere), not an upload, so this needs no new
+  // dependency.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pera_documents (
+      id SERIAL PRIMARY KEY,
+      pera_id INTEGER NOT NULL REFERENCES pera_records(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      url TEXT,
+      notes TEXT,
+      added_by TEXT,
+      added_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Annual review history -- a PERA is approved with a next_review_date,
+  // and each time it's actually reviewed (whether or not anything changed)
+  // that gets its own row here, independent of pera_change_log (which is
+  // content edits, not review sign-offs).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pera_annual_reviews (
+      id SERIAL PRIMARY KEY,
+      pera_id INTEGER NOT NULL REFERENCES pera_records(id) ON DELETE CASCADE,
+      reviewed_by TEXT,
+      reviewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      outcome TEXT CHECK (outcome IN ('Still current','Updated','Superseded')),
+      notes TEXT,
+      next_review_date DATE
+    );
+  `);
+
+  // Full change history/audit trail for PERA edits and decisions -- same
+  // shape as cara_change_log (summary/brief), plus "action" and "version"
+  // so the change history tree on the PERA detail page can group entries by
+  // year and label each one (Created / Edited / Approved / Not approved /
+  // Reviewed).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pera_change_log (
+      id SERIAL PRIMARY KEY,
+      pera_id INTEGER NOT NULL REFERENCES pera_records(id) ON DELETE CASCADE,
+      changed_by TEXT,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      action TEXT NOT NULL DEFAULT 'Edited',
+      version INTEGER,
+      summary TEXT NOT NULL,
+      brief TEXT
+    );
+  `);
 }
 
 module.exports = { pool, migrate };
