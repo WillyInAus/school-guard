@@ -3496,14 +3496,6 @@ app.get('/equipment/new', async (req, res, next) => {
           <select id="pera_id" name="pera_id">${peraOptions}</select>
         </div>
         <div class="form-row">
-          <label for="last_inspected">Last inspected</label>
-          <input type="date" id="last_inspected" name="last_inspected">
-        </div>
-        <div class="form-row">
-          <label for="next_inspection_due">Next inspection due</label>
-          <input type="date" id="next_inspection_due" name="next_inspection_due">
-        </div>
-        <div class="form-row">
           <label for="inspection_frequency">Inspection frequency</label>
           <select id="inspection_frequency" name="inspection_frequency">
             <option value="">— None —</option>
@@ -3517,14 +3509,6 @@ app.get('/equipment/new', async (req, res, next) => {
             <option value="">— None —</option>
             ${equipmentFrequencyOptions('')}
           </select>
-        </div>
-        <div class="form-row">
-          <label for="last_maintained">Last maintained</label>
-          <input type="date" id="last_maintained" name="last_maintained">
-        </div>
-        <div class="form-row">
-          <label for="next_maintenance_due">Next maintenance due</label>
-          <input type="date" id="next_maintenance_due" name="next_maintenance_due">
         </div>
         ${criteriaPickerHtml('maintenance', maintenanceCategories, [])}
         <div class="form-row">
@@ -3549,8 +3533,8 @@ app.get('/equipment/new', async (req, res, next) => {
 app.post('/equipment', async (req, res, next) => {
   try {
     const {
-      name, category, location, status, pera_id, last_inspected, next_inspection_due, notes,
-      inspection_frequency, maintenance_frequency, last_maintained, next_maintenance_due,
+      name, category, location, status, pera_id, notes,
+      inspection_frequency, maintenance_frequency,
       maintenance_criteria_ids, new_maintenance_criteria, inspection_criteria_ids, new_inspection_criteria,
     } = req.body;
 
@@ -3560,16 +3544,20 @@ app.post('/equipment', async (req, res, next) => {
     const frequency = EQUIPMENT_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
     const maintFrequency = EQUIPMENT_FREQUENCIES.includes(maintenance_frequency) ? maintenance_frequency : null;
 
+    // last_inspected/next_inspection_due and last_maintained/next_maintenance_due
+    // are intentionally not set here -- a brand-new item has no check history
+    // yet, so these stay null until the first "Log an inspection"/"Log
+    // maintenance" actually happens on the detail page.
     const result = await pool.query(
       `INSERT INTO equipment_items
-        (name, category, location, status, pera_id, last_inspected, next_inspection_due, notes,
-         inspection_frequency, maintenance_frequency, last_maintained, next_maintenance_due, created_by_staff_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        (name, category, location, status, pera_id, notes,
+         inspection_frequency, maintenance_frequency, created_by_staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING id`,
       [
         normalizeText(name), normalizeText(category) || null, normalizeText(location) || null, status,
-        pera_id || null, last_inspected || null, next_inspection_due || null, normalizeText(notes) || null,
-        frequency, maintFrequency, last_maintained || null, next_maintenance_due || null, req.staffUser.id,
+        pera_id || null, normalizeText(notes) || null,
+        frequency, maintFrequency, req.staffUser.id,
       ]
     );
     const equipmentId = result.rows[0].id;
@@ -4881,14 +4869,6 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
           <select id="pera_id" name="pera_id">${peraOptions}</select>
         </div>
         <div class="form-row">
-          <label for="last_inspected">Last inspected</label>
-          <input type="date" id="last_inspected" name="last_inspected" value="${toDateInputValue(r.last_inspected)}">
-        </div>
-        <div class="form-row">
-          <label for="next_inspection_due">Next inspection due</label>
-          <input type="date" id="next_inspection_due" name="next_inspection_due" value="${toDateInputValue(r.next_inspection_due)}">
-        </div>
-        <div class="form-row">
           <label for="inspection_frequency">Inspection frequency</label>
           <select id="inspection_frequency" name="inspection_frequency">
             <option value="">— None —</option>
@@ -4902,14 +4882,6 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
             <option value="">— None —</option>
             ${equipmentFrequencyOptions(r.maintenance_frequency || '')}
           </select>
-        </div>
-        <div class="form-row">
-          <label for="last_maintained">Last maintained</label>
-          <input type="date" id="last_maintained" name="last_maintained" value="${toDateInputValue(r.last_maintained)}">
-        </div>
-        <div class="form-row">
-          <label for="next_maintenance_due">Next maintenance due</label>
-          <input type="date" id="next_maintenance_due" name="next_maintenance_due" value="${toDateInputValue(r.next_maintenance_due)}">
         </div>
         ${criteriaPickerHtml('maintenance', maintenanceCategories, selectedMaintenanceIds)}
         <div class="form-row">
@@ -4935,8 +4907,8 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
 app.post('/admin/equipment/:id', requireRole('admin'), async (req, res, next) => {
   try {
     const {
-      name, category, location, status, pera_id, last_inspected, next_inspection_due, notes,
-      inspection_frequency, maintenance_frequency, last_maintained, next_maintenance_due,
+      name, category, location, status, pera_id, notes,
+      inspection_frequency, maintenance_frequency,
       maintenance_criteria_ids, new_maintenance_criteria, inspection_criteria_ids, new_inspection_criteria,
     } = req.body;
 
@@ -4946,17 +4918,18 @@ app.post('/admin/equipment/:id', requireRole('admin'), async (req, res, next) =>
     const frequency = EQUIPMENT_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
     const maintFrequency = EQUIPMENT_FREQUENCIES.includes(maintenance_frequency) ? maintenance_frequency : null;
 
+    // last_inspected/next_inspection_due and last_maintained/next_maintenance_due
+    // are intentionally left alone here -- they're no longer editable by hand,
+    // only ever set by actually logging an inspection/maintenance check.
     await pool.query(
       `UPDATE equipment_items SET
          name = $1, category = $2, location = $3, status = $4, pera_id = $5,
-         last_inspected = $6, next_inspection_due = $7, notes = $8,
-         inspection_frequency = $9, maintenance_frequency = $10, last_maintained = $11,
-         next_maintenance_due = $12, updated_at = now()
-       WHERE id = $13`,
+         notes = $6, inspection_frequency = $7, maintenance_frequency = $8, updated_at = now()
+       WHERE id = $9`,
       [
         normalizeText(name), normalizeText(category) || null, normalizeText(location) || null, status,
-        pera_id || null, last_inspected || null, next_inspection_due || null, normalizeText(notes) || null,
-        frequency, maintFrequency, last_maintained || null, next_maintenance_due || null,
+        pera_id || null, normalizeText(notes) || null,
+        frequency, maintFrequency,
         req.params.id,
       ]
     );
