@@ -33,20 +33,26 @@ const STAFF_ROLES = ['admin', 'approver', 'submitter'];
 const HAZARD_CATEGORIES = ['Mechanical', 'Electrical', 'Chemical', 'Noise', 'Manual handling', 'Fire', 'Ergonomic', 'Environmental', 'Other'];
 const CONTROL_TYPES = ['Engineering', 'Administrative', 'PPE', 'Procedural'];
 const APPROVAL_DECISIONS = ['Approved as submitted', 'Approved with conditions', 'Not approved'];
+const APPROVAL_REQUIRED_LEVELS = ['Principal', 'Delegate', 'HOD', 'WHS Officer'];
+const HAZARD_APPLIES_TO = ['Staff', 'Students', 'Both'];
+const MIN_REQUIREMENT_STATUSES = ['Current', 'Required', 'Due Soon', 'Missing'];
+const DOCUMENT_CATEGORIES = ['SOP', 'Manufacturer manual', 'Equipment Maintenance Record', 'Student induction record', 'Staff competency record', 'Previous risk assessment', 'Other'];
 
 // Seeded onto every new PERA as pera_min_requirements rows (see POST /pera
-// below). Editing this list only changes what future PERAs are seeded with
-// -- it never touches rows already saved against existing records.
+// below), each starting at status 'Required' until someone marks it
+// Current/Due Soon/Missing. Editing this list only changes what future
+// PERAs are seeded with -- it never touches rows already saved against
+// existing records.
 const MIN_SAFETY_REQUIREMENTS = [
-  'Machine guards fitted and in place',
-  'Emergency stop / isolation switch accessible',
-  'PPE available and worn as required',
-  'Work area free of trip, slip and fire hazards',
-  'First aid kit accessible',
-  'Fire extinguisher or fire blanket accessible and appropriate for the hazard',
-  'Operator has received induction/training on this equipment',
-  'Supervision ratio appropriate to the risk level',
-  'SOP / Safe Work Method Statement displayed or accessible',
+  'Competent teacher/operator',
+  'Student induction',
+  'SOP available',
+  'Guards checked',
+  'Safe working zone',
+  'Required PPE available',
+  'Equipment maintenance record current',
+  'Electrical inspection/tagging current where applicable',
+  'Emergency stop operational where applicable',
 ];
 
 // ---------- Staff auth (individual accounts, roles) ----------
@@ -282,6 +288,15 @@ function approvalDecisionBadgeClass(decision) {
   }[decision] || 'badge-draft';
 }
 
+function minRequirementStatusBadgeClass(status) {
+  return {
+    'Current': 'badge-approved',
+    'Required': 'badge-draft',
+    'Due Soon': 'badge-pending',
+    'Missing': 'badge-changes',
+  }[status] || 'badge-draft';
+}
+
 // Renders one hazard row for the PERA new/edit forms -- called once per
 // existing hazard when pre-filling an edit form, and once with no argument
 // for the empty <template> row that "+ Add hazard" clones. All fields
@@ -336,7 +351,10 @@ function renderHazardRow(h = {}) {
       </div>
       <div class="form-row">
         <label>Applies to</label>
-        <input type="text" name="hazard_applies_to" value="${escapeHtml(h.applies_to || '')}" placeholder="e.g. All students, operator only">
+        <select name="hazard_applies_to">
+          <option value="" ${!h.applies_to ? 'selected' : ''}>Select…</option>
+          ${HAZARD_APPLIES_TO.map((a) => `<option value="${a}" ${h.applies_to === a ? 'selected' : ''}>${a}</option>`).join('')}
+        </select>
       </div>
     </div>
   `;
@@ -350,6 +368,49 @@ const HAZARD_BUILDER_SCRIPT = `
     }
   </script>
 `;
+
+// Shared "Supervision & student use" + "Training & competency" block for
+// the PERA new/edit forms. Called with no argument (all blank/unchecked)
+// on the new form, and with the existing record on the edit form.
+function renderSupervisionTrainingFields(r = {}) {
+  return `
+    <div class="form-section-title">Supervision &amp; student use</div>
+    <div class="form-row">
+      <label for="supervision_level">Supervision level</label>
+      <input type="text" id="supervision_level" name="supervision_level" value="${escapeHtml(r.supervision_level || '')}" placeholder="e.g. Direct 1:1, Direct — same room, Indirect">
+    </div>
+    <div class="form-row">
+      <label for="supervisor_competency">Required supervisor qualification / competency</label>
+      <input type="text" id="supervisor_competency" name="supervisor_competency" value="${escapeHtml(r.supervisor_competency || '')}" placeholder="e.g. Adult with Design and Technologies qualification, current first aid/CPR">
+    </div>
+    <div class="form-row">
+      <label for="max_operators">Maximum number of operators</label>
+      <input type="number" id="max_operators" name="max_operators" min="0" value="${r.max_operators != null ? r.max_operators : ''}">
+    </div>
+    <div class="form-row checkbox-row">
+      <input type="checkbox" id="student_induction_required" name="student_induction_required" value="true" ${r.student_induction_required ? 'checked' : ''}>
+      <label for="student_induction_required">Student induction required</label>
+    </div>
+    <div class="form-row checkbox-row">
+      <input type="checkbox" id="competency_demonstration_required" name="competency_demonstration_required" value="true" ${r.competency_demonstration_required ? 'checked' : ''}>
+      <label for="competency_demonstration_required">Competency demonstration required</label>
+    </div>
+    <div class="form-row checkbox-row">
+      <input type="checkbox" id="safe_working_zone_required" name="safe_working_zone_required" value="true" ${r.safe_working_zone_required ? 'checked' : ''}>
+      <label for="safe_working_zone_required">Safe working zone required</label>
+    </div>
+
+    <div class="form-section-title">Training &amp; competency</div>
+    <div class="form-row">
+      <label for="staff_training">Staff — training/induction/competency required before use</label>
+      <textarea id="staff_training" name="staff_training">${escapeHtml(r.staff_training || '')}</textarea>
+    </div>
+    <div class="form-row">
+      <label for="student_training">Students — training/induction/competency required before use</label>
+      <textarea id="student_training" name="student_training">${escapeHtml(r.student_training || '')}</textarea>
+    </div>
+  `;
+}
 
 // Fallback brief label for change-log rows saved before the "brief" column
 // existed. Can only reliably recover the first changed field's label (text
@@ -565,6 +626,10 @@ app.get('/pera/new', (req, res) => {
         <label for="student_use">Student use</label>
         <textarea id="student_use" name="student_use" placeholder="How and when do students use this equipment?"></textarea>
       </div>
+      <div class="form-row checkbox-row">
+        <input type="checkbox" id="student_use_permitted" name="student_use_permitted" value="true">
+        <label for="student_use_permitted">Student use permitted</label>
+      </div>
       <div class="form-row">
         <label for="operating_conditions">Operating conditions</label>
         <textarea id="operating_conditions" name="operating_conditions"></textarea>
@@ -576,15 +641,7 @@ app.get('/pera/new', (req, res) => {
       <button type="button" class="btn btn-secondary" onclick="addHazardRow()" style="margin-bottom:20px;">+ Add hazard</button>
       <template id="hazard-row-template">${renderHazardRow()}</template>
 
-      <div class="form-section-title">Supervision and training</div>
-      <div class="form-row">
-        <label for="supervision_details">Supervision required</label>
-        <textarea id="supervision_details" name="supervision_details" placeholder="e.g. Adult with Design and Technologies qualification, current first aid/CPR"></textarea>
-      </div>
-      <div class="form-row">
-        <label for="training_competency">Training / competency required</label>
-        <textarea id="training_competency" name="training_competency"></textarea>
-      </div>
+      ${renderSupervisionTrainingFields()}
 
       <div class="form-section-title">Consent and submission</div>
       <div class="form-row checkbox-row">
@@ -612,8 +669,10 @@ app.post('/pera', async (req, res, next) => {
   try {
     const {
       activity_name, class_unit, location, risk_level,
-      activity_process, materials_used, student_use, operating_conditions,
-      supervision_details, training_competency,
+      activity_process, materials_used, student_use, student_use_permitted, operating_conditions,
+      supervision_level, supervisor_competency, max_operators,
+      student_induction_required, competency_demonstration_required, safe_working_zone_required,
+      staff_training, student_training,
       consent_required, submitted_by,
     } = req.body;
 
@@ -629,18 +688,24 @@ app.post('/pera', async (req, res, next) => {
     const mandatoryFlags = [].concat(req.body.hazard_mandatory || []);
     const appliesTos = [].concat(req.body.hazard_applies_to || []);
 
+    const maxOperatorsValue = max_operators !== undefined && max_operators !== '' ? parseInt(max_operators, 10) : null;
+
     const result = await pool.query(
       `INSERT INTO pera_records
         (activity_name, class_unit, location, risk_level,
-         activity_process, materials_used, student_use, operating_conditions,
-         supervision_details, training_competency,
+         activity_process, materials_used, student_use, student_use_permitted, operating_conditions,
+         supervision_level, supervisor_competency, max_operators,
+         student_induction_required, competency_demonstration_required, safe_working_zone_required,
+         staff_training, student_training,
          consent_required, submitted_by, created_by_staff_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
        RETURNING id`,
       [
         normalizeText(activity_name), normalizeText(class_unit) || null, normalizeText(location) || null, risk_level,
-        normalizeText(activity_process) || null, normalizeText(materials_used) || null, normalizeText(student_use) || null, normalizeText(operating_conditions) || null,
-        normalizeText(supervision_details) || null, normalizeText(training_competency) || null,
+        normalizeText(activity_process) || null, normalizeText(materials_used) || null, normalizeText(student_use) || null, student_use_permitted === 'true', normalizeText(operating_conditions) || null,
+        normalizeText(supervision_level) || null, normalizeText(supervisor_competency) || null, Number.isInteger(maxOperatorsValue) ? maxOperatorsValue : null,
+        student_induction_required === 'true', competency_demonstration_required === 'true', safe_working_zone_required === 'true',
+        normalizeText(staff_training) || null, normalizeText(student_training) || null,
         consent_required === 'true', normalizeText(submitted_by) || null, req.staffUser.id,
       ]
     );
@@ -748,6 +813,10 @@ app.get('/pera/:id/edit', async (req, res, next) => {
           <label for="student_use">Student use</label>
           <textarea id="student_use" name="student_use">${escapeHtml(r.student_use || '')}</textarea>
         </div>
+        <div class="form-row checkbox-row">
+          <input type="checkbox" id="student_use_permitted" name="student_use_permitted" value="true" ${r.student_use_permitted ? 'checked' : ''}>
+          <label for="student_use_permitted">Student use permitted</label>
+        </div>
         <div class="form-row">
           <label for="operating_conditions">Operating conditions</label>
           <textarea id="operating_conditions" name="operating_conditions">${escapeHtml(r.operating_conditions || '')}</textarea>
@@ -759,15 +828,7 @@ app.get('/pera/:id/edit', async (req, res, next) => {
         <button type="button" class="btn btn-secondary" onclick="addHazardRow()" style="margin-bottom:20px;">+ Add hazard</button>
         <template id="hazard-row-template">${renderHazardRow()}</template>
 
-        <div class="form-section-title">Supervision and training</div>
-        <div class="form-row">
-          <label for="supervision_details">Supervision required</label>
-          <textarea id="supervision_details" name="supervision_details">${escapeHtml(r.supervision_details || '')}</textarea>
-        </div>
-        <div class="form-row">
-          <label for="training_competency">Training / competency required</label>
-          <textarea id="training_competency" name="training_competency">${escapeHtml(r.training_competency || '')}</textarea>
-        </div>
+        ${renderSupervisionTrainingFields(r)}
 
         <div class="form-section-title">Consent</div>
         <div class="form-row checkbox-row">
@@ -806,8 +867,11 @@ app.post('/pera/:id/edit', async (req, res, next) => {
     let {
       activity_name, class_unit, location, risk_level,
       activity_process, materials_used, student_use, operating_conditions,
-      supervision_details, training_competency,
-      consent_required, submitted_by, edited_by,
+      supervision_level, supervisor_competency, max_operators,
+      staff_training, student_training,
+      consent_required, student_use_permitted, student_induction_required,
+      competency_demonstration_required, safe_working_zone_required,
+      submitted_by, edited_by,
     } = req.body;
 
     activity_name = normalizeText(activity_name);
@@ -817,8 +881,10 @@ app.post('/pera/:id/edit', async (req, res, next) => {
     materials_used = normalizeText(materials_used);
     student_use = normalizeText(student_use);
     operating_conditions = normalizeText(operating_conditions);
-    supervision_details = normalizeText(supervision_details);
-    training_competency = normalizeText(training_competency);
+    supervision_level = normalizeText(supervision_level);
+    supervisor_competency = normalizeText(supervisor_competency);
+    staff_training = normalizeText(staff_training);
+    student_training = normalizeText(student_training);
     submitted_by = normalizeText(submitted_by);
 
     if (!activity_name || !RISK_LEVELS.includes(risk_level)) {
@@ -838,6 +904,12 @@ app.post('/pera/:id/edit', async (req, res, next) => {
     const before = existingResult.rows[0];
 
     const newConsentRequired = consent_required === 'true';
+    const newStudentUsePermitted = student_use_permitted === 'true';
+    const newStudentInductionRequired = student_induction_required === 'true';
+    const newCompetencyDemonstrationRequired = competency_demonstration_required === 'true';
+    const newSafeWorkingZoneRequired = safe_working_zone_required === 'true';
+    const maxOperatorsValue = max_operators !== undefined && max_operators !== '' ? parseInt(max_operators, 10) : null;
+    const newMaxOperators = Number.isInteger(maxOperatorsValue) ? maxOperatorsValue : null;
 
     const fields = [
       ['activity_name', 'Activity name', activity_name],
@@ -848,8 +920,10 @@ app.post('/pera/:id/edit', async (req, res, next) => {
       ['materials_used', 'Materials used', materials_used || null],
       ['student_use', 'Student use', student_use || null],
       ['operating_conditions', 'Operating conditions', operating_conditions || null],
-      ['supervision_details', 'Supervision required', supervision_details || null],
-      ['training_competency', 'Training / competency', training_competency || null],
+      ['supervision_level', 'Supervision level', supervision_level || null],
+      ['supervisor_competency', 'Required supervisor qualification / competency', supervisor_competency || null],
+      ['staff_training', 'Staff training/competency', staff_training || null],
+      ['student_training', 'Student training/competency', student_training || null],
       ['submitted_by', 'Submitted by', submitted_by || null],
     ];
 
@@ -866,9 +940,22 @@ app.post('/pera/:id/edit', async (req, res, next) => {
         changedLabels.push(label);
       }
     }
-    if (before.consent_required !== newConsentRequired) {
-      changeLines.push(`Parent consent required: ${before.consent_required ? 'Yes' : 'No'} → ${newConsentRequired ? 'Yes' : 'No'}`);
-      changedLabels.push('Parent consent required');
+    const boolFields = [
+      ['consent_required', 'Parent consent required', before.consent_required, newConsentRequired],
+      ['student_use_permitted', 'Student use permitted', before.student_use_permitted, newStudentUsePermitted],
+      ['student_induction_required', 'Student induction required', before.student_induction_required, newStudentInductionRequired],
+      ['competency_demonstration_required', 'Competency demonstration required', before.competency_demonstration_required, newCompetencyDemonstrationRequired],
+      ['safe_working_zone_required', 'Safe working zone required', before.safe_working_zone_required, newSafeWorkingZoneRequired],
+    ];
+    for (const [, label, oldValue, newValue] of boolFields) {
+      if (Boolean(oldValue) !== newValue) {
+        changeLines.push(`${label}: ${oldValue ? 'Yes' : 'No'} → ${newValue ? 'Yes' : 'No'}`);
+        changedLabels.push(label);
+      }
+    }
+    if ((before.max_operators || null) !== newMaxOperators) {
+      changeLines.push(`Maximum number of operators: ${before.max_operators != null ? before.max_operators : '(empty)'} → ${newMaxOperators != null ? newMaxOperators : '(empty)'}`);
+      changedLabels.push('Maximum number of operators');
     }
 
     const descriptions = [].concat(req.body.hazard_description || []);
@@ -896,16 +983,22 @@ app.post('/pera/:id/edit', async (req, res, next) => {
     await pool.query(
       `UPDATE pera_records SET
          activity_name = $1, class_unit = $2, location = $3, risk_level = $4,
-         activity_process = $5, materials_used = $6, student_use = $7, operating_conditions = $8,
-         supervision_details = $9, training_competency = $10, consent_required = $11, submitted_by = $12,
-         version = $13,
-         ${resetApproval ? `status = 'Draft', approval_decision = NULL, approval_conditions = NULL, approver = NULL, approver_role = NULL, approved_at = NULL, next_review_date = NULL, review_notes = NULL,` : ''}
+         activity_process = $5, materials_used = $6, student_use = $7, student_use_permitted = $8, operating_conditions = $9,
+         supervision_level = $10, supervisor_competency = $11, max_operators = $12,
+         student_induction_required = $13, competency_demonstration_required = $14, safe_working_zone_required = $15,
+         staff_training = $16, student_training = $17,
+         consent_required = $18, submitted_by = $19,
+         version = $20,
+         ${resetApproval ? `status = 'Draft', approval_decision = NULL, approval_conditions = NULL, approval_required_level = NULL, approver = NULL, approver_role = NULL, approved_at = NULL, next_review_date = NULL, review_notes = NULL,` : ''}
          updated_at = now()
-       WHERE id = $14`,
+       WHERE id = $21`,
       [
         activity_name, class_unit || null, location || null, risk_level,
-        activity_process || null, materials_used || null, student_use || null, operating_conditions || null,
-        supervision_details || null, training_competency || null, newConsentRequired, submitted_by || null,
+        activity_process || null, materials_used || null, student_use || null, newStudentUsePermitted, operating_conditions || null,
+        supervision_level || null, supervisor_competency || null, newMaxOperators,
+        newStudentInductionRequired, newCompetencyDemonstrationRequired, newSafeWorkingZoneRequired,
+        staff_training || null, student_training || null,
+        newConsentRequired, submitted_by || null,
         newVersion,
         req.params.id,
       ]
@@ -961,8 +1054,8 @@ app.get('/pera/:id', async (req, res, next) => {
     let bannerHtml = '';
     if (r.risk_level === 'High' || r.risk_level === 'Extreme') {
       bannerHtml = r.status === 'Approved'
-        ? `<div class="risk-banner risk-banner-ok">✓ ${escapeHtml(r.risk_level)} risk — ${escapeHtml(r.approval_decision || 'Approved')}${r.approver ? ` by ${escapeHtml(r.approver)}` : ''}. Proceed only under the conditions recorded below.</div>`
-        : `<div class="risk-banner risk-banner-warning">⚠ ${escapeHtml(r.risk_level)} risk — not yet approved. Students must not proceed with this activity until it is approved.</div>`;
+        ? `<div class="risk-banner risk-banner-ok">HIGH-RISK ACTIVITY — approval complete: ${escapeHtml(r.approval_decision || 'Approved')}${r.approver ? ` by ${escapeHtml(r.approver)}${r.approver_role ? ` (${escapeHtml(r.approver_role)})` : ''}` : ''}. Proceed only under the conditions recorded below.</div>`
+        : `<div class="risk-banner risk-banner-warning">HIGH-RISK ACTIVITY — Principal/delegate approval required before student participation. This has not yet been approved.</div>`;
     }
 
     const summaryStripHtml = `
@@ -1017,8 +1110,11 @@ app.get('/pera/:id', async (req, res, next) => {
           <div class="min-req-list">
             ${requirementsResult.rows.map((item) => `
               <div class="min-req-item">
-                <input type="checkbox" id="req_${item.id}" name="met_ids" value="${item.id}" ${item.met ? 'checked' : ''} ${canEdit ? '' : 'disabled'}>
-                <label for="req_${item.id}">${escapeHtml(item.requirement)}</label>
+                <span class="badge ${minRequirementStatusBadgeClass(item.status)}" style="flex:0 0 auto;">${escapeHtml(item.status)}</span>
+                <label for="req_${item.id}" style="flex:1 1 220px;">${escapeHtml(item.requirement)}</label>
+                <select id="req_${item.id}" name="status_${item.id}" ${canEdit ? '' : 'disabled'}>
+                  ${MIN_REQUIREMENT_STATUSES.map((s) => `<option value="${s}" ${item.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+                </select>
                 <input type="text" name="notes_${item.id}" value="${escapeHtml(item.notes || '')}" placeholder="Notes (optional)" ${canEdit ? '' : 'disabled'}>
               </div>
             `).join('')}
@@ -1033,7 +1129,7 @@ app.get('/pera/:id', async (req, res, next) => {
         <div class="min-req-list" style="margin-bottom:16px;">
           ${documentsResult.rows.map((d) => `
             <div class="min-req-item" style="justify-content:space-between;">
-              <div>${d.url ? `<a href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.title)}</a>` : escapeHtml(d.title)}${d.notes ? ` — ${escapeHtml(d.notes)}` : ''}</div>
+              <div><span class="badge badge-draft">${escapeHtml(d.category || 'Other')}</span> ${d.url ? `<a href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.title)}</a>` : escapeHtml(d.title)}${d.notes ? ` — ${escapeHtml(d.notes)}` : ''}</div>
               ${canEdit ? `
                 <form method="post" action="/pera/${r.id}/documents/${d.id}/delete" onsubmit="return confirm('Remove this document?');">
                   <button type="submit" class="btn btn-secondary" style="padding:4px 10px;font-size:13px;">Remove</button>
@@ -1045,7 +1141,13 @@ app.get('/pera/:id', async (req, res, next) => {
       ` : `<div class="empty-state" style="margin-bottom:16px;">No related documents yet.</div>`}
       ${canEdit ? `
         <form class="form-card" method="post" action="/pera/${r.id}/documents" style="max-width:520px;">
-          <div class="form-row"><label for="doc_title">Title</label><input type="text" id="doc_title" name="title" required placeholder="e.g. Manufacturer manual"></div>
+          <div class="form-row">
+            <label for="doc_category">Type</label>
+            <select id="doc_category" name="category" required>
+              ${DOCUMENT_CATEGORIES.map((c) => `<option value="${c}">${c}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-row"><label for="doc_title">Title</label><input type="text" id="doc_title" name="title" required placeholder="e.g. Bench grinder manual"></div>
           <div class="form-row"><label for="doc_url">Link (optional)</label><input type="text" id="doc_url" name="url" placeholder="https://..."></div>
           <div class="form-row"><label for="doc_notes">Notes (optional)</label><input type="text" id="doc_notes" name="notes"></div>
           <div class="form-actions"><button type="submit" class="btn btn-secondary">Add document</button></div>
@@ -1058,22 +1160,31 @@ app.get('/pera/:id', async (req, res, next) => {
         <div class="min-req-list" style="margin-bottom:16px;">
           ${reviewsResult.rows.map((rv) => `
             <div class="min-req-item">
-              <div><strong>${formatDate(rv.reviewed_at)}</strong> — ${escapeHtml(rv.outcome || '—')} by ${escapeHtml(rv.reviewed_by || 'unknown')}${rv.notes ? `: ${escapeHtml(rv.notes)}` : ''}</div>
+              <div>
+                <strong>${formatDate(rv.reviewed_at)}</strong> — ${escapeHtml(rv.outcome || '—')} by ${escapeHtml(rv.reviewed_by || 'unknown')}${rv.reviewer_designation ? ` (${escapeHtml(rv.reviewer_designation)})` : ''}
+                <br><span style="color:#6B6659;font-size:13px;">Risk unchanged: ${rv.risk_unchanged === null ? '—' : rv.risk_unchanged ? 'Yes' : 'No'} · Controls unchanged: ${rv.controls_unchanged === null ? '—' : rv.controls_unchanged ? 'Yes' : 'No'} · Staffing/competency unchanged: ${rv.staffing_unchanged === null ? '—' : rv.staffing_unchanged ? 'Yes' : 'No'}</span>
+                ${rv.notes ? `<br>${escapeHtml(rv.notes)}` : ''}
+              </div>
             </div>
           `).join('')}
         </div>
       ` : `<div class="empty-state" style="margin-bottom:16px;">No annual reviews recorded yet.</div>`}
       ${canEdit ? `
         <form class="form-card" method="post" action="/pera/${r.id}/reviews" style="max-width:520px;">
-          <div class="form-row">
-            <label for="outcome">Outcome</label>
-            <select id="outcome" name="outcome" required>
-              <option value="Still current">Still current</option>
-              <option value="Updated">Updated</option>
-              <option value="Superseded">Superseded</option>
-            </select>
+          <div class="form-row checkbox-row">
+            <input type="checkbox" id="risk_unchanged" name="risk_unchanged" value="true" checked>
+            <label for="risk_unchanged">Risk levels unchanged</label>
           </div>
-          <div class="form-row"><label for="review_notes_field">Notes</label><textarea id="review_notes_field" name="notes"></textarea></div>
+          <div class="form-row checkbox-row">
+            <input type="checkbox" id="controls_unchanged" name="controls_unchanged" value="true" checked>
+            <label for="controls_unchanged">Controls unchanged</label>
+          </div>
+          <div class="form-row checkbox-row">
+            <input type="checkbox" id="staffing_unchanged" name="staffing_unchanged" value="true" checked>
+            <label for="staffing_unchanged">Staffing/competency arrangements unchanged</label>
+          </div>
+          <div class="form-row"><label for="review_notes_field">Review comments</label><textarea id="review_notes_field" name="notes"></textarea></div>
+          <div class="form-row"><label for="reviewer_designation">Your designation</label><input type="text" id="reviewer_designation" name="reviewer_designation" placeholder="e.g. WHS Officer, HOD"></div>
           <div class="form-row"><label for="next_review_date">Next review date</label><input type="date" id="next_review_date" name="next_review_date"></div>
           <div class="form-actions"><button type="submit" class="btn btn-secondary">Record review</button></div>
         </form>
@@ -1109,6 +1220,7 @@ app.get('/pera/:id', async (req, res, next) => {
       `;
     } else if (r.status === 'Pending approval' || r.status === 'Changes requested') {
       const decisionOptions = APPROVAL_DECISIONS.map((d) => `<option value="${d}">${d}</option>`).join('');
+      const requiredLevelOptions = APPROVAL_REQUIRED_LEVELS.map((lvl) => `<option value="${lvl}" ${r.approval_required_level === lvl ? 'selected' : ''}>${lvl}</option>`).join('');
       actionsHtml = `
         <form method="post" action="/pera/${r.id}/approve">
           <div class="form-row">
@@ -1128,6 +1240,13 @@ app.get('/pera/:id', async (req, res, next) => {
             <input type="text" id="approver_role" name="approver_role" placeholder="e.g. WHS Officer, Principal, HOD">
           </div>
           <div class="form-row">
+            <label for="approval_required_level">Approval requirement</label>
+            <select id="approval_required_level" name="approval_required_level">
+              <option value="">— Not set —</option>
+              ${requiredLevelOptions}
+            </select>
+          </div>
+          <div class="form-row">
             <label for="review_notes">Notes (required if not approved)</label>
             <textarea id="review_notes" name="review_notes" placeholder="What needs to change?"></textarea>
           </div>
@@ -1145,6 +1264,7 @@ app.get('/pera/:id', async (req, res, next) => {
           <div class="detail-label">Approved by</div>
           <div class="detail-value">${escapeHtml(r.approver || '—')}${r.approver_role ? ` (${escapeHtml(r.approver_role)})` : ''} on ${formatDate(r.approved_at)}</div>
         </div>
+        ${r.approval_required_level ? `<div class="detail-section"><div class="detail-label">Approval requirement</div><div class="detail-value">${escapeHtml(r.approval_required_level)}</div></div>` : ''}
         <div class="detail-section">
           <div class="detail-label">Next review due</div>
           <div class="detail-value">${formatDate(r.next_review_date)}</div>
@@ -1174,6 +1294,7 @@ app.get('/pera/:id', async (req, res, next) => {
             <div class="detail-section"><div class="detail-label">Activity / process</div><div class="detail-value">${escapeHtml(r.activity_process || '—')}</div></div>
             <div class="detail-section"><div class="detail-label">Materials used</div><div class="detail-value">${escapeHtml(r.materials_used || '—')}</div></div>
             <div class="detail-section"><div class="detail-label">Student use</div><div class="detail-value">${escapeHtml(r.student_use || '—')}</div></div>
+            <div class="detail-section"><div class="detail-label">Student use permitted</div><div class="detail-value">${r.student_use_permitted === null || r.student_use_permitted === undefined ? '—' : (r.student_use_permitted ? 'Yes' : 'No')}</div></div>
             <div class="detail-section"><div class="detail-label">Operating conditions</div><div class="detail-value">${escapeHtml(r.operating_conditions || '—')}</div></div>
             <div class="detail-section"><div class="detail-label">Parent consent required</div><div class="detail-value">${r.consent_required ? 'Yes' : 'No'}</div></div>
           </details>
@@ -1189,9 +1310,23 @@ app.get('/pera/:id', async (req, res, next) => {
           </details>
 
           <details class="content-section">
-            <summary class="form-section-title" style="cursor:pointer;">Supervision and training</summary>
-            <div class="detail-section"><div class="detail-label">Supervision required</div><div class="detail-value">${escapeHtml(r.supervision_details || r.required_supervision || '—')}</div></div>
-            <div class="detail-section"><div class="detail-label">Training / competency required</div><div class="detail-value">${escapeHtml(r.training_competency || '—')}</div></div>
+            <summary class="form-section-title" style="cursor:pointer;">Supervision &amp; student use</summary>
+            ${(r.supervision_level || r.supervisor_competency || r.max_operators != null || r.student_induction_required !== null || r.competency_demonstration_required !== null || r.safe_working_zone_required !== null) ? `
+            <div class="detail-section"><div class="detail-label">Supervision level</div><div class="detail-value">${escapeHtml(r.supervision_level || '—')}</div></div>
+            <div class="detail-section"><div class="detail-label">Required supervisor qualification / competency</div><div class="detail-value">${escapeHtml(r.supervisor_competency || '—')}</div></div>
+            <div class="detail-section"><div class="detail-label">Maximum number of operators</div><div class="detail-value">${r.max_operators != null ? escapeHtml(String(r.max_operators)) : '—'}</div></div>
+            <div class="detail-section"><div class="detail-label">Student induction required</div><div class="detail-value">${r.student_induction_required === null || r.student_induction_required === undefined ? '—' : (r.student_induction_required ? 'Yes' : 'No')}</div></div>
+            <div class="detail-section"><div class="detail-label">Competency demonstration required</div><div class="detail-value">${r.competency_demonstration_required === null || r.competency_demonstration_required === undefined ? '—' : (r.competency_demonstration_required ? 'Yes' : 'No')}</div></div>
+            <div class="detail-section"><div class="detail-label">Safe working zone required</div><div class="detail-value">${r.safe_working_zone_required === null || r.safe_working_zone_required === undefined ? '—' : (r.safe_working_zone_required ? 'Yes' : 'No')}</div></div>
+            ` : `<div class="detail-section"><div class="detail-label">Supervision required (legacy)</div><div class="detail-value">${escapeHtml(r.supervision_details || r.required_supervision || '—')}</div></div>`}
+          </details>
+
+          <details class="content-section">
+            <summary class="form-section-title" style="cursor:pointer;">Training &amp; competency</summary>
+            ${(r.staff_training || r.student_training) ? `
+            <div class="detail-section"><div class="detail-label">Staff training required</div><div class="detail-value">${escapeHtml(r.staff_training || '—')}</div></div>
+            <div class="detail-section"><div class="detail-label">Student training required</div><div class="detail-value">${escapeHtml(r.student_training || '—')}</div></div>
+            ` : `<div class="detail-section"><div class="detail-label">Training / competency required (legacy)</div><div class="detail-value">${escapeHtml(r.training_competency || '—')}</div></div>`}
           </details>
 
           ${r.review_notes ? `
@@ -1251,20 +1386,21 @@ app.post('/pera/:id/submit', async (req, res, next) => {
 
 app.post('/pera/:id/approve', requireRole('admin', 'approver'), async (req, res, next) => {
   try {
-    const { decision, approval_conditions, approver, approver_role, review_notes } = req.body;
+    const { decision, approval_conditions, approver, approver_role, review_notes, approval_required_level } = req.body;
     const existingResult = await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id]);
     if (existingResult.rows.length === 0) {
       return res.status(404).send('PERA record not found.');
     }
     const before = existingResult.rows[0];
+    const requiredLevel = APPROVAL_REQUIRED_LEVELS.includes(approval_required_level) ? approval_required_level : null;
 
     if (decision === 'Not approved') {
       await pool.query(
         `UPDATE pera_records
          SET status = 'Changes requested', approval_decision = $1, approval_conditions = NULL,
-             review_notes = $2, updated_at = now()
-         WHERE id = $3`,
-        ['Not approved', normalizeText(review_notes) || null, req.params.id]
+             review_notes = $2, approval_required_level = COALESCE($3, approval_required_level), updated_at = now()
+         WHERE id = $4`,
+        ['Not approved', normalizeText(review_notes) || null, requiredLevel, req.params.id]
       );
       await pool.query(
         `INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1,$2,'Not approved',$3,$4,'Not approved')`,
@@ -1275,11 +1411,12 @@ app.post('/pera/:id/approve', requireRole('admin', 'approver'), async (req, res,
         `UPDATE pera_records
          SET status = 'Approved', approval_decision = $1, approval_conditions = $2,
              approver = $3, approver_role = $4, approved_at = now(),
+             approval_required_level = COALESCE($5, approval_required_level),
              next_review_date = (now() + interval '1 year')::date, review_notes = NULL, updated_at = now()
-         WHERE id = $5`,
+         WHERE id = $6`,
         [
           decision, decision === 'Approved with conditions' ? (normalizeText(approval_conditions) || null) : null,
-          normalizeText(approver) || null, normalizeText(approver_role) || null, req.params.id,
+          normalizeText(approver) || null, normalizeText(approver_role) || null, requiredLevel, req.params.id,
         ]
       );
       const summary = decision === 'Approved with conditions'
@@ -1333,11 +1470,12 @@ app.post('/pera/:id/requirements', async (req, res, next) => {
       return res.status(403).send('You can only update the checklist on PERA records you created yourself. <a href="/pera/' + req.params.id + '">Back</a>');
     }
     const itemsResult = await pool.query('SELECT id FROM pera_min_requirements WHERE pera_id = $1', [req.params.id]);
-    const metIds = new Set([].concat(req.body.met_ids || []).map(String));
     for (const item of itemsResult.rows) {
+      const rawStatus = req.body[`status_${item.id}`];
+      const status = MIN_REQUIREMENT_STATUSES.includes(rawStatus) ? rawStatus : 'Required';
       await pool.query(
-        'UPDATE pera_min_requirements SET met = $1, notes = $2 WHERE id = $3',
-        [metIds.has(String(item.id)), normalizeText(req.body[`notes_${item.id}`]) || null, item.id]
+        'UPDATE pera_min_requirements SET status = $1, met = $2, notes = $3 WHERE id = $4',
+        [status, status === 'Current', normalizeText(req.body[`notes_${item.id}`]) || null, item.id]
       );
     }
     res.redirect(`/pera/${req.params.id}`);
@@ -1361,9 +1499,10 @@ app.post('/pera/:id/documents', async (req, res, next) => {
     if (!normalizedTitle) {
       return res.status(400).send('A title is required. <a href="/pera/' + req.params.id + '">Back</a>');
     }
+    const category = DOCUMENT_CATEGORIES.includes(req.body.category) ? req.body.category : 'Other';
     await pool.query(
-      'INSERT INTO pera_documents (pera_id, title, url, notes, added_by) VALUES ($1,$2,$3,$4,$5)',
-      [req.params.id, normalizedTitle, normalizeText(req.body.url) || null, normalizeText(req.body.notes) || null, req.staffUser.name]
+      'INSERT INTO pera_documents (pera_id, title, url, notes, added_by, category) VALUES ($1,$2,$3,$4,$5,$6)',
+      [req.params.id, normalizedTitle, normalizeText(req.body.url) || null, normalizeText(req.body.notes) || null, req.staffUser.name, category]
     );
     res.redirect(`/pera/${req.params.id}`);
   } catch (err) {
@@ -1398,13 +1537,19 @@ app.post('/pera/:id/reviews', async (req, res, next) => {
     if (!canManageOwnRecord(req.staffUser, recordResult.rows[0])) {
       return res.status(403).send('You can only record reviews on PERA records you created yourself. <a href="/pera/' + req.params.id + '">Back</a>');
     }
-    const { outcome, notes, next_review_date } = req.body;
-    if (!['Still current', 'Updated', 'Superseded'].includes(outcome)) {
-      return res.status(400).send('A valid outcome is required. <a href="/pera/' + req.params.id + '">Back</a>');
-    }
+    const { notes, next_review_date, reviewer_designation } = req.body;
+    const riskUnchanged = req.body.risk_unchanged === 'on' || req.body.risk_unchanged === 'true';
+    const controlsUnchanged = req.body.controls_unchanged === 'on' || req.body.controls_unchanged === 'true';
+    const staffingUnchanged = req.body.staffing_unchanged === 'on' || req.body.staffing_unchanged === 'true';
+    const outcome = (riskUnchanged && controlsUnchanged && staffingUnchanged) ? 'Still current' : 'Updated';
     await pool.query(
-      'INSERT INTO pera_annual_reviews (pera_id, reviewed_by, outcome, notes, next_review_date) VALUES ($1,$2,$3,$4,$5)',
-      [req.params.id, req.staffUser.name, outcome, normalizeText(notes) || null, next_review_date || null]
+      `INSERT INTO pera_annual_reviews
+        (pera_id, reviewed_by, outcome, notes, next_review_date, risk_unchanged, controls_unchanged, staffing_unchanged, reviewer_designation)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        req.params.id, req.staffUser.name, outcome, normalizeText(notes) || null, next_review_date || null,
+        riskUnchanged, controlsUnchanged, staffingUnchanged, normalizeText(reviewer_designation) || null
+      ]
     );
     if (next_review_date) {
       await pool.query('UPDATE pera_records SET next_review_date = $1, updated_at = now() WHERE id = $2', [next_review_date, req.params.id]);

@@ -430,6 +430,111 @@ async function migrate() {
       brief TEXT
     );
   `);
+
+  // ---------------------------------------------------------------
+  // Structured PERA, round two -- brings the fields in line with what the
+  // source Queensland P&ERA template actually asks for: structured
+  // supervision (not one free-text paragraph), training split by staff vs
+  // students, a Current/Required/Due Soon/Missing status per minimum
+  // requirement (not just a tick), a category on each related document, and
+  // explicit unchanged/changed flags on each annual review. The first round
+  // of structured-PERA columns (supervision_details, training_competency)
+  // are left in place but no longer written to by the form -- same
+  // never-rewrite-old-data approach as the original free-text fallback.
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS student_use_permitted BOOLEAN;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS supervision_level TEXT;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS supervisor_competency TEXT;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS student_induction_required BOOLEAN;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS competency_demonstration_required BOOLEAN;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS max_operators INTEGER;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS safe_working_zone_required BOOLEAN;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS staff_training TEXT;`);
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS student_training TEXT;`);
+  // What level of sign-off this activity's risk requires (Principal /
+  // Delegate / HOD / WHS Officer) -- distinct from approver/approver_role,
+  // which record who actually signed it and their own title.
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS approval_required_level TEXT;`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'pera_records_approval_required_level_check'
+      ) THEN
+        ALTER TABLE pera_records
+          ADD CONSTRAINT pera_records_approval_required_level_check
+          CHECK (approval_required_level IS NULL OR approval_required_level IN ('Principal','Delegate','HOD','WHS Officer'));
+      END IF;
+    END $$;
+  `);
+
+  // Status per checklist item, replacing the plain tick. "met" is kept
+  // (unused by the form going forward) so nothing breaks for any row saved
+  // by the first round of this feature before "status" existed.
+  await pool.query(`ALTER TABLE pera_min_requirements ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'Required';`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'pera_min_requirements_status_check'
+      ) THEN
+        ALTER TABLE pera_min_requirements
+          ADD CONSTRAINT pera_min_requirements_status_check
+          CHECK (status IN ('Current','Required','Due Soon','Missing'));
+      END IF;
+    END $$;
+  `);
+
+  // Which staff/students/both a hazard's control applies to. The very
+  // first round of this feature let "applies to" be free text, so before
+  // locking it down to a fixed set of values, map anything already saved
+  // that isn't one of them onto the closest match (defaulting to "Both"
+  // for anything mentioning students, since that's the safer assumption)
+  // rather than letting the migration fail on real data.
+  await pool.query(`
+    UPDATE pera_hazards
+    SET applies_to = CASE
+      WHEN applies_to ILIKE '%staff%' AND applies_to ILIKE '%student%' THEN 'Both'
+      WHEN applies_to ILIKE '%staff%' THEN 'Staff'
+      WHEN applies_to ILIKE '%student%' THEN 'Students'
+      ELSE NULL
+    END
+    WHERE applies_to IS NOT NULL AND applies_to NOT IN ('Staff','Students','Both');
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'pera_hazards_applies_to_check'
+      ) THEN
+        ALTER TABLE pera_hazards
+          ADD CONSTRAINT pera_hazards_applies_to_check
+          CHECK (applies_to IS NULL OR applies_to IN ('Staff','Students','Both'));
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`ALTER TABLE pera_documents ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'Other';`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'pera_documents_category_check'
+      ) THEN
+        ALTER TABLE pera_documents
+          ADD CONSTRAINT pera_documents_category_check
+          CHECK (category IN ('SOP','Manufacturer manual','Equipment Maintenance Record','Student induction record','Staff competency record','Previous risk assessment','Other'));
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`ALTER TABLE pera_annual_reviews ADD COLUMN IF NOT EXISTS risk_unchanged BOOLEAN;`);
+  await pool.query(`ALTER TABLE pera_annual_reviews ADD COLUMN IF NOT EXISTS controls_unchanged BOOLEAN;`);
+  await pool.query(`ALTER TABLE pera_annual_reviews ADD COLUMN IF NOT EXISTS staffing_unchanged BOOLEAN;`);
+  await pool.query(`ALTER TABLE pera_annual_reviews ADD COLUMN IF NOT EXISTS reviewer_designation TEXT;`);
+  // outcome was previously chosen directly on the form; it's now derived
+  // from the three unchanged flags above (see server.js), so make it
+  // optional for new rows while leaving old ones exactly as they were.
+  await pool.query(`ALTER TABLE pera_annual_reviews ALTER COLUMN outcome DROP NOT NULL;`);
 }
 
 module.exports = { pool, migrate };
