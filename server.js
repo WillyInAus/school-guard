@@ -2816,23 +2816,11 @@ app.post('/admin/setup', async (req, res, next) => {
 // ---------- Admin: records list ----------
 
 // The admin area is a set of sibling tabs (Manage Staff / PERA / CARA /
-// Equipment), each its own page/URL rather than one long scrolling page.
-// adminTabs() renders the shared tab bar; adminHeader() the shared
-// title-plus-sign-out-button row that sits above it on every tab.
-function adminTabs(activeTab) {
-  const tabs = [
-    { key: 'staff', href: '/admin/staff', label: 'Manage Staff' },
-    { key: 'pera', href: '/admin/pera', label: 'PERA' },
-    { key: 'cara', href: '/admin/cara', label: 'CARA' },
-    { key: 'equipment', href: '/admin/equipment', label: 'Equipment' },
-  ];
-  return `
-    <div class="admin-tabs">
-      ${tabs.map((t) => `<a href="${t.href}" class="admin-tab${t.key === activeTab ? ' active' : ''}">${escapeHtml(t.label)}</a>`).join('')}
-    </div>
-  `;
-}
-
+// Equipment), each its own page/URL. The tab navigation itself now lives in
+// the left sidebar (see views/layout.js — it appears under "Admin" whenever
+// active === 'admin', highlighting whichever adminTab is current);
+// adminHeader() just renders the shared title-plus-sign-out-button row that
+// sits above the content on every admin tab.
 function adminHeader(title, subtitle) {
   return `
     <div class="page-header">
@@ -2867,7 +2855,6 @@ app.get('/admin/pera', requireRole('admin'), async (req, res, next) => {
 
     const body = `
       ${adminHeader('PERA records', 'Click any record to edit or delete it.')}
-      ${adminTabs('pera')}
       <div class="card">
         <table>
           <thead>
@@ -2884,7 +2871,7 @@ app.get('/admin/pera', requireRole('admin'), async (req, res, next) => {
       </div>
     `;
 
-    res.send(page({ title: 'PERA records', active: 'admin', body }));
+    res.send(page({ title: 'PERA records', active: 'admin', adminTab: 'pera', body }));
   } catch (err) {
     next(err);
   }
@@ -2906,7 +2893,6 @@ app.get('/admin/cara', requireRole('admin'), async (req, res, next) => {
 
     const body = `
       ${adminHeader('CARA records', 'Click any record to edit or delete it.')}
-      ${adminTabs('cara')}
       <div class="card">
         <table>
           <thead>
@@ -2923,7 +2909,7 @@ app.get('/admin/cara', requireRole('admin'), async (req, res, next) => {
       </div>
     `;
 
-    res.send(page({ title: 'CARA records', active: 'admin', body }));
+    res.send(page({ title: 'CARA records', active: 'admin', adminTab: 'cara', body }));
   } catch (err) {
     next(err);
   }
@@ -2944,7 +2930,6 @@ app.get('/admin/equipment', requireRole('admin'), async (req, res, next) => {
 
     const body = `
       ${adminHeader('Equipment', 'Click any item to edit or delete it.')}
-      ${adminTabs('equipment')}
       <div class="card">
         <table>
           <thead>
@@ -2960,7 +2945,7 @@ app.get('/admin/equipment', requireRole('admin'), async (req, res, next) => {
       </div>
     `;
 
-    res.send(page({ title: 'Equipment', active: 'admin', body }));
+    res.send(page({ title: 'Equipment', active: 'admin', adminTab: 'equipment', body }));
   } catch (err) {
     next(err);
   }
@@ -2997,7 +2982,6 @@ app.get('/admin/staff', requireRole('admin'), async (req, res, next) => {
 
     const body = `
       ${adminHeader('Staff', 'Click any staff member to change their role, disable them, or reset their password.')}
-      ${adminTabs('staff')}
       <div class="card">
         <table>
           <thead>
@@ -3041,7 +3025,7 @@ app.get('/admin/staff', requireRole('admin'), async (req, res, next) => {
       </form>
     `;
 
-    res.send(page({ title: 'Staff', active: 'admin', body }));
+    res.send(page({ title: 'Staff', active: 'admin', adminTab: 'staff', body }));
   } catch (err) {
     next(err);
   }
@@ -3126,7 +3110,7 @@ app.get('/admin/staff/:id/edit', requireRole('admin'), async (req, res, next) =>
       </form>` : ''}
     `;
 
-    res.send(page({ title: s.name, active: 'admin', body }));
+    res.send(page({ title: s.name, active: 'admin', adminTab: 'staff', body }));
   } catch (err) {
     next(err);
   }
@@ -3286,7 +3270,7 @@ app.get('/admin/pera/:id/edit', requireRole('admin'), async (req, res, next) => 
       </form>
     `;
 
-    res.send(page({ title: `Edit — ${r.activity_name}`, active: 'admin', body }));
+    res.send(page({ title: `Edit — ${r.activity_name}`, active: 'admin', adminTab: 'pera', body }));
   } catch (err) {
     next(err);
   }
@@ -3440,7 +3424,7 @@ app.get('/admin/cara/:id/edit', requireRole('admin'), async (req, res, next) => 
       </form>
     `;
 
-    res.send(page({ title: `Edit — ${r.activity_name}`, active: 'admin', body }));
+    res.send(page({ title: `Edit — ${r.activity_name}`, active: 'admin', adminTab: 'cara', body }));
   } catch (err) {
     next(err);
   }
@@ -3577,7 +3561,7 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
       </form>
     `;
 
-    res.send(page({ title: `Edit — ${r.name}`, active: 'admin', body }));
+    res.send(page({ title: `Edit — ${r.name}`, active: 'admin', adminTab: 'equipment', body }));
   } catch (err) {
     next(err);
   }
