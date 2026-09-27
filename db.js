@@ -282,6 +282,36 @@ async function migrate() {
   await pool.query(`ALTER TABLE equipment_checks ADD COLUMN IF NOT EXISTS checked_by TEXT;`);
   await pool.query(`ALTER TABLE equipment_checks ADD COLUMN IF NOT EXISTS completed_items JSONB NOT NULL DEFAULT '[]'::jsonb;`);
   await pool.query(`ALTER TABLE equipment_checks ADD COLUMN IF NOT EXISTS notes TEXT;`);
+
+  // ---------------------------------------------------------------
+  // Staff accounts (individual logins with a role) -- replaces the old
+  // single shared ADMIN_PASSWORD. Three roles:
+  //   admin     - everything, including managing other staff accounts
+  //   approver  - everything a submitter can do, plus approve/reject
+  //               PERA and CARA records
+  //   submitter - create records and edit their own; can't approve
+  // password_hash is "salt:hash" (both hex), produced by crypto.scrypt --
+  // see hashPassword()/verifyPassword() in server.js. No extra npm
+  // dependency needed for this (Node's built-in crypto module covers it).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_users (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('admin','approver','submitter')),
+      disabled BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Who created each record, so a submitter can be limited to editing their
+  // own work. Nullable and ON DELETE SET NULL so removing a staff account
+  // later never breaks or deletes the records they created.
+  await pool.query(`ALTER TABLE pera_records ADD COLUMN IF NOT EXISTS created_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS created_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS created_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL;`);
 }
 
 module.exports = { pool, migrate };
