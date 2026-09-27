@@ -3773,42 +3773,54 @@ app.get('/equipment/:id', async (req, res, next) => {
             <div class="note-box">Keep this record up to date after every inspection or service — it's what the equipment register relies on to flag what needs attention.</div>
             <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-top:14px;">Edit this item</a>
           </div>
-          <div class="card" style="padding:22px;margin-bottom:20px;">
-            <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Log an inspection</div>
-            <form method="post" action="/equipment/${r.id}/inspection-check">
-              ${inspectionChecklistHtml}
-              <div class="form-row" style="margin-top:12px;">
-                <label for="inspected_by">Checked by</label>
-                <input type="text" id="inspected_by" name="performed_by" placeholder="Your name">
-              </div>
-              <div class="form-row">
-                <label for="inspection_notes">Notes</label>
-                <textarea id="inspection_notes" name="notes" placeholder="Anything noticed during this inspection..."></textarea>
-              </div>
-              <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Log inspection</button>
-              </div>
-            </form>
-          </div>
           <div class="card" style="padding:22px;">
-            <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Log maintenance</div>
-            <form method="post" action="/equipment/${r.id}/maintenance-check">
-              ${maintenanceChecklistHtml}
-              <div class="form-row" style="margin-top:12px;">
-                <label for="maintained_by">Serviced by</label>
-                <input type="text" id="maintained_by" name="performed_by" placeholder="Your name">
-              </div>
-              <div class="form-row">
-                <label for="maintenance_notes">Notes</label>
-                <textarea id="maintenance_notes" name="notes" placeholder="Anything done or noticed during this service..."></textarea>
-              </div>
-              <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Log maintenance</button>
-              </div>
-            </form>
+            <div class="section-tabs">
+              <button type="button" class="section-tab active" id="log-tab-inspection" onclick="showLogPanel('inspection')">Log an inspection</button>
+              <button type="button" class="section-tab" id="log-tab-maintenance" onclick="showLogPanel('maintenance')">Log maintenance</button>
+            </div>
+            <div id="log-panel-inspection">
+              <form method="post" action="/equipment/${r.id}/inspection-check">
+                ${inspectionChecklistHtml}
+                <div class="form-row" style="margin-top:12px;">
+                  <label for="inspected_by">Checked by</label>
+                  <input type="text" id="inspected_by" name="performed_by" placeholder="Your name">
+                </div>
+                <div class="form-row">
+                  <label for="inspection_notes">Notes</label>
+                  <textarea id="inspection_notes" name="notes" placeholder="Anything noticed during this inspection..."></textarea>
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="btn btn-primary">Log inspection</button>
+                </div>
+              </form>
+            </div>
+            <div id="log-panel-maintenance" style="display:none;">
+              <form method="post" action="/equipment/${r.id}/maintenance-check">
+                ${maintenanceChecklistHtml}
+                <div class="form-row" style="margin-top:12px;">
+                  <label for="maintained_by">Serviced by</label>
+                  <input type="text" id="maintained_by" name="performed_by" placeholder="Your name">
+                </div>
+                <div class="form-row">
+                  <label for="maintenance_notes">Notes</label>
+                  <textarea id="maintenance_notes" name="notes" placeholder="Anything done or noticed during this service..."></textarea>
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="btn btn-primary">Log maintenance</button>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       </div>
+      <script>
+        function showLogPanel(which) {
+          document.getElementById('log-panel-inspection').style.display = which === 'inspection' ? '' : 'none';
+          document.getElementById('log-panel-maintenance').style.display = which === 'maintenance' ? '' : 'none';
+          document.getElementById('log-tab-inspection').classList.toggle('active', which === 'inspection');
+          document.getElementById('log-tab-maintenance').classList.toggle('active', which === 'maintenance');
+        }
+      </script>
     `;
 
     res.send(page({ title: r.name, active: 'equipment', body }));

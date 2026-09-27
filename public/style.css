@@ -295,6 +295,41 @@ h1.page-title {
   border-bottom-color: #1B5E52;
 }
 
+/* Same look as .admin-tabs, but for switching between panels on the same
+   page (e.g. Log an inspection / Log maintenance on the equipment detail
+   page) instead of navigating to a different URL. */
+.section-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #E4DFD3;
+}
+
+.section-tab {
+  display: inline-block;
+  padding: 8px 4px;
+  margin-right: 20px;
+  font-size: 13px;
+  font-family: inherit;
+  font-weight: 600;
+  color: #6B6659;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.section-tab:hover {
+  color: #1A1D1B;
+}
+
+.section-tab.active {
+  color: #1B5E52;
+  border-bottom-color: #1B5E52;
+}
+
 table {
   border-collapse: collapse;
   width: 100%;
