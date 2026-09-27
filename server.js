@@ -3807,6 +3807,7 @@ app.get('/admin/pera', requireRole('admin'), async (req, res, next) => {
 
     const rows = result.rows.map((r) => `
       <tr class="row-link" onclick="window.location='/admin/pera/${r.id}/edit'">
+        <td style="width:1%;" onclick="event.stopPropagation();"><input type="checkbox" name="ids" value="${r.id}" form="admin-pera-archive-form" onchange="document.getElementById('admin-archive-selected-btn').disabled = !document.querySelectorAll('#admin-pera-archive-form input[name=ids]:checked').length;"></td>
         <td>${escapeHtml(r.activity_name)}</td>
         <td>${escapeHtml(r.class_unit || '—')}</td>
         <td><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
@@ -3816,12 +3817,17 @@ app.get('/admin/pera', requireRole('admin'), async (req, res, next) => {
     `).join('');
 
     const body = `
-      ${adminHeader('PERA records', 'Click any record to edit or delete it.')}
+      ${adminHeader('PERA records', 'Click any record to edit or delete it. Tick one or more and use "Archive selected" to move them to the PERA Archive without deleting them.')}
       ${adminTabs('pera')}
+      <form id="admin-pera-archive-form" method="post" action="/admin/pera/archive" onsubmit="return confirm('Archive the selected PERA record(s)? They will be hidden from the main PERA list but can be restored anytime from the PERA Archive.');" style="margin-bottom:10px;">
+        <input type="hidden" name="redirect_to" value="/admin/pera">
+        <button type="submit" id="admin-archive-selected-btn" class="btn btn-secondary" disabled>Archive selected</button>
+      </form>
       <div class="card">
         <table>
           <thead>
             <tr>
+              <th style="width:1%;"><input type="checkbox" onchange="document.querySelectorAll('#admin-pera-archive-form input[name=ids]').forEach((cb) => cb.checked = this.checked); document.getElementById('admin-archive-selected-btn').disabled = !this.checked;"></th>
               <th>Activity</th>
               <th>Class / unit</th>
               <th>Risk</th>
@@ -3829,7 +3835,7 @@ app.get('/admin/pera', requireRole('admin'), async (req, res, next) => {
               <th>Approver</th>
             </tr>
           </thead>
-          <tbody>${rows || '<tr><td colspan="5" style="text-align:center;color:#6B6659;padding:24px;">No PERA records yet.</td></tr>'}</tbody>
+          <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:#6B6659;padding:24px;">No PERA records yet.</td></tr>'}</tbody>
         </table>
       </div>
     `;
