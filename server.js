@@ -3303,8 +3303,12 @@ async function saveEquipmentCriteria(kind, equipmentId, existingIdsRaw, newDescr
   }
 }
 
-// Renders the ticked-by-default checklist for "Log a maintenance/inspection"
-// on the equipment detail page, grouped by category for readability.
+// Renders the pass/fail/N-A checklist for "Log a maintenance/inspection" on
+// the equipment detail page, grouped by category. Each criterion gets a
+// tick (pass) / cross (fail) / N/A control -- defaulting to pass -- instead
+// of a plain checkbox, so a log records an actual result per item rather
+// than just "was this looked at". Category names are bold headings; item
+// text stays regular weight, per Sean's reference-screenshot request.
 function criteriaLogChecklistHtml(kind, items, equipmentId) {
   if (!items.length) {
     return `<div class="form-section-hint" style="margin:0 0 12px 0;">No ${kind} criteria set for this item — <a href="/admin/equipment/${equipmentId}/edit" style="color:#1B5E52;font-weight:600;">add some</a> so a log has something to tick off.</div>`;
@@ -3316,14 +3320,29 @@ function criteriaLogChecklistHtml(kind, items, equipmentId) {
   }
   let html = '';
   for (const [categoryName, criteria] of groups) {
-    html += `<div style="font-size:11px;font-weight:600;color:#6B6659;text-transform:uppercase;letter-spacing:0.03em;margin:10px 0 4px;">${escapeHtml(categoryName)}</div>`;
+    html += `<div class="criteria-category-header">${escapeHtml(categoryName)}</div>`;
     html += criteria.map((item) => `
-      <div class="checkbox-row" style="margin-bottom:6px;">
-        <input type="checkbox" id="${kind}_ci_${item.id}" name="completed_criteria" value="${escapeHtml(item.description)}" checked>
-        <label for="${kind}_ci_${item.id}">${escapeHtml(item.description)}</label>
+      <div class="criteria-row">
+        <div class="criteria-row-label">${escapeHtml(item.description)}</div>
+        <div class="criteria-status-group" id="status-group-${kind}-${item.id}">
+          <input type="hidden" name="criteria_status_${item.id}" id="status-input-${kind}-${item.id}" value="yes">
+          <button type="button" class="criteria-status-btn status-yes active" title="Pass" onclick="setCriteriaStatus('${kind}', ${item.id}, 'yes')">✓</button>
+          <button type="button" class="criteria-status-btn status-no" title="Fail" onclick="setCriteriaStatus('${kind}', ${item.id}, 'no')">✕</button>
+          <button type="button" class="criteria-status-btn status-na" title="N/A" onclick="setCriteriaStatus('${kind}', ${item.id}, 'na')">N/A</button>
+        </div>
       </div>
     `).join('');
   }
+  html += `
+    <script>
+      function setCriteriaStatus(kind, id, status) {
+        document.getElementById('status-input-' + kind + '-' + id).value = status;
+        var group = document.getElementById('status-group-' + kind + '-' + id);
+        group.querySelectorAll('.criteria-status-btn').forEach(function(btn) { btn.classList.remove('active'); });
+        group.querySelector('.status-' + status).classList.add('active');
+      }
+    </script>
+  `;
   return html;
 }
 
@@ -3714,15 +3733,23 @@ app.get('/equipment/:id', async (req, res, next) => {
     const maintenanceChecklistHtml = criteriaLogChecklistHtml('maintenance', maintenanceItems, r.id);
     const inspectionChecklistHtml = criteriaLogChecklistHtml('inspection', inspectionItems, r.id);
 
+    // completed_criteria is an array of {description, status} objects (see
+    // the inspection-check/maintenance-check routes) as of this change, but
+    // older log rows saved before it stored plain description strings (just
+    // "this one was ticked") -- render both shapes so old history doesn't break.
+    const criteriaStatusIcon = { yes: '✓', no: '✕', na: 'N/A' };
     const logHistoryHtml = (logs) => logs.length
       ? logs.map((c) => `
           <div class="detail-section">
             <div class="detail-label">${formatDateTime(c.performed_at)}${c.performed_by ? ` · ${escapeHtml(c.performed_by)}` : ''}</div>
             <div class="detail-value">${
               (Array.isArray(c.completed_criteria) && c.completed_criteria.length)
-                ? escapeHtml(c.completed_criteria.join(', '))
+                ? c.completed_criteria.map((item) => (typeof item === 'string'
+                    ? `✓ ${escapeHtml(item)}`
+                    : `${criteriaStatusIcon[item.status] || '✓'} ${escapeHtml(item.description)}`
+                  )).join('<br>')
                 : 'No criteria recorded'
-            }${c.notes ? `<br>${escapeHtml(c.notes)}` : ''}</div>
+            }${c.notes ? `<br><em>${escapeHtml(c.notes)}</em>` : ''}</div>
           </div>
         `).join('')
       : '<div class="form-section-hint" style="margin:0;">None logged yet.</div>';
@@ -3840,19 +3867,18 @@ app.post('/equipment/:id/inspection-check', async (req, res, next) => {
     }
     const r = result.rows[0];
 
-    // The full "Log an inspection" form on the detail page submits
-    // completed_criteria (only the boxes left ticked) plus performed_by/
-    // notes. The one-click "Log inspection" button on the by-room page
-    // submits none of these — treat that as "the whole checklist was done,
-    // no name/notes recorded".
-    const formSubmitted = 'completed_criteria' in req.body || 'performed_by' in req.body || 'notes' in req.body;
-    let completedCriteria;
-    if (formSubmitted) {
-      completedCriteria = toArray(req.body.completed_criteria).map((v) => normalizeText(v));
-    } else {
-      const items = await fetchEquipmentCriteria('inspection', r.id);
-      completedCriteria = items.map((item) => item.description);
-    }
+    // The full "Log an inspection" form on the detail page submits a
+    // criteria_status_<id>=yes|no|na field per criterion (from the tick/
+    // cross/N-A buttons) plus performed_by/notes. The one-click "Log
+    // inspection" button on the by-room page submits none of these — treat
+    // that as "the whole checklist passed, no name/notes recorded".
+    const formSubmitted = 'performed_by' in req.body || 'notes' in req.body;
+    const items = await fetchEquipmentCriteria('inspection', r.id);
+    const completedCriteria = items.map((item) => {
+      const submittedStatus = req.body[`criteria_status_${item.id}`];
+      const status = formSubmitted && ['yes', 'no', 'na'].includes(submittedStatus) ? submittedStatus : 'yes';
+      return { id: item.id, description: item.description, category: item.category_name, status };
+    });
     const performedBy = formSubmitted ? (normalizeText(req.body.performed_by) || null) : null;
     const notes = formSubmitted ? (normalizeText(req.body.notes) || null) : null;
 
@@ -3883,7 +3909,15 @@ app.post('/equipment/:id/maintenance-check', async (req, res, next) => {
     }
     const r = result.rows[0];
 
-    const completedCriteria = toArray(req.body.completed_criteria).map((v) => normalizeText(v));
+    // Maintenance is only ever logged via the full form (no by-room
+    // quick-check equivalent), so every criterion always has a submitted
+    // criteria_status_<id> field -- default to "yes" only as a fallback.
+    const items = await fetchEquipmentCriteria('maintenance', r.id);
+    const completedCriteria = items.map((item) => {
+      const submittedStatus = req.body[`criteria_status_${item.id}`];
+      const status = ['yes', 'no', 'na'].includes(submittedStatus) ? submittedStatus : 'yes';
+      return { id: item.id, description: item.description, category: item.category_name, status };
+    });
     const performedBy = normalizeText(req.body.performed_by) || null;
     const notes = normalizeText(req.body.notes) || null;
 

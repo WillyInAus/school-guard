@@ -330,6 +330,81 @@ h1.page-title {
   border-bottom-color: #1B5E52;
 }
 
+/* Log an inspection/maintenance checklist: bold category headings, regular-
+   weight criterion text, and a tick/cross/N-A control per item (green for
+   pass, red for fail) instead of a plain checkbox. */
+.criteria-category-header {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1A1D1B;
+  background: #F3F0E8;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin: 16px 0 6px;
+}
+
+.criteria-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 4px;
+  border-bottom: 1px solid #E4DFD3;
+}
+
+.criteria-row-label {
+  font-size: 13px;
+  font-weight: 400;
+  color: #1A1D1B;
+  flex: 1;
+}
+
+.criteria-status-group {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.criteria-status-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 6px;
+  border-radius: 15px;
+  border: 1.5px solid #E4DFD3;
+  background: #FFFFFF;
+  color: #B0AA9A;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.criteria-status-btn:hover {
+  border-color: #6B6659;
+  color: #1A1D1B;
+}
+
+.criteria-status-btn.status-yes.active {
+  background: #2F7D5A;
+  border-color: #2F7D5A;
+  color: #FFFFFF;
+}
+
+.criteria-status-btn.status-no.active {
+  background: #C0392B;
+  border-color: #C0392B;
+  color: #FFFFFF;
+}
+
+.criteria-status-btn.status-na.active {
+  background: #6B6659;
+  border-color: #6B6659;
+  color: #FFFFFF;
+}
+
 table {
   border-collapse: collapse;
   width: 100%;
