@@ -3796,34 +3796,30 @@ app.get('/equipment/:id', async (req, res, next) => {
       : '';
 
     // Once an item is out of "Operational", the only way back is this form
-    // -- see the /equipment/:id/return-to-service route comment. Shown only
-    // when it's actually needed, so the normal case (an operational item)
-    // doesn't carry a form for a status change that isn't available.
-    const returnToServiceHtml = r.status !== 'Operational' ? `
-      <div class="card" style="padding:22px;margin-bottom:20px;border:1px solid #B3261E;">
-        <div class="form-section-title" style="margin-top:0;">Return to service</div>
-        <div class="note-box">This item is currently marked "${escapeHtml(r.status)}". Describe what was done to fix or check it before putting it back into service — that note is kept as part of this item's record.</div>
-        <form method="post" action="/equipment/${r.id}/return-to-service" style="margin-top:14px;">
-          <div class="form-row">
-            <label for="service_performed_by">Restored by</label>
-            <input type="text" id="service_performed_by" name="performed_by" placeholder="Your name">
-          </div>
-          <div class="form-row">
-            <label for="service_note">What was done <span style="color:#B3261E;">*</span></label>
-            <textarea id="service_note" name="note" required placeholder="e.g. Replaced the guillotine's damaged blade guard and tested it against all inspection criteria."></textarea>
-          </div>
-          <div class="form-actions">
-            <button type="submit" class="btn btn-primary">Mark as Operational</button>
-          </div>
-        </form>
-        ${serviceHistoryHtml ? `
-        <div class="form-section-title">Previous return-to-service notes</div>
-        ${serviceHistoryHtml}` : ''}
-      </div>` : (serviceHistoryHtml ? `
-      <div class="card" style="padding:22px;margin-bottom:20px;">
-        <div class="form-section-title" style="margin-top:0;">Service history</div>
-        ${serviceHistoryHtml}
-      </div>` : '');
+    // -- see the /equipment/:id/return-to-service route comment. Lives in
+    // its own "Service" tab alongside Inspection/Maintenance (rather than
+    // a standalone card above them) so the page reads as one tabbed record
+    // instead of a stack of separate boxes.
+    const returnToServiceFormHtml = r.status !== 'Operational' ? `
+      <div class="note-box" style="border-color:#B3261E;">This item is currently marked "${escapeHtml(r.status)}". Describe what was done to fix or check it before putting it back into service — that note is kept as part of this item's record.</div>
+      <form method="post" action="/equipment/${r.id}/return-to-service" style="margin-top:14px;">
+        <div class="form-row">
+          <label for="service_performed_by">Restored by</label>
+          <input type="text" id="service_performed_by" name="performed_by" placeholder="Your name">
+        </div>
+        <div class="form-row">
+          <label for="service_note">What was done <span style="color:#B3261E;">*</span></label>
+          <textarea id="service_note" name="note" required placeholder="e.g. Replaced the guillotine's damaged blade guard and tested it against all inspection criteria."></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Mark as Operational</button>
+        </div>
+      </form>
+    ` : '';
+    // Which tab opens by default: an item needing action opens straight on
+    // Service (same "flag what needs attention" intent the old standalone
+    // card had), otherwise Inspection as before.
+    const defaultEquipmentTab = r.status !== 'Operational' ? 'service' : 'inspection';
 
     const body = `
       <a class="back-link" href="/equipment">← Back to Equipment</a>
@@ -3845,17 +3841,17 @@ app.get('/equipment/:id', async (req, res, next) => {
           <div class="detail-value">${escapeHtml(r.notes)}</div>
         </div>` : ''}
       </div>
-      ${returnToServiceHtml}
       <div class="card" style="padding:22px;margin-bottom:20px;">
         <div class="note-box">Keep this record up to date after every inspection or service — it's what the equipment register relies on to flag what needs attention.</div>
         <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-top:14px;">Edit this item</a>
       </div>
       <div class="card" style="padding:22px;">
         <div class="section-tabs">
-          <button type="button" class="section-tab active" id="eq-tab-inspection" onclick="showEquipmentPanel('inspection')">Inspection</button>
-          <button type="button" class="section-tab" id="eq-tab-maintenance" onclick="showEquipmentPanel('maintenance')">Maintenance</button>
+          <button type="button" class="section-tab${defaultEquipmentTab === 'inspection' ? ' active' : ''}" id="eq-tab-inspection" onclick="showEquipmentPanel('inspection')">Inspection</button>
+          <button type="button" class="section-tab${defaultEquipmentTab === 'maintenance' ? ' active' : ''}" id="eq-tab-maintenance" onclick="showEquipmentPanel('maintenance')">Maintenance</button>
+          <button type="button" class="section-tab${defaultEquipmentTab === 'service' ? ' active' : ''}" id="eq-tab-service" onclick="showEquipmentPanel('service')">Service${r.status !== 'Operational' ? ' <span style="color:#B3261E;">⚠</span>' : ''}</button>
         </div>
-        <div id="eq-panel-inspection">
+        <div id="eq-panel-inspection" style="display:${defaultEquipmentTab === 'inspection' ? '' : 'none'};">
           <div class="detail-section" style="box-shadow:none;padding:0;margin-bottom:12px;">
             <div class="detail-label">Last inspected</div>
             <div class="detail-value">${formatDate(r.last_inspected)}</div>
@@ -3882,7 +3878,7 @@ app.get('/equipment/:id', async (req, res, next) => {
             </div>
           </form>
         </div>
-        <div id="eq-panel-maintenance" style="display:none;">
+        <div id="eq-panel-maintenance" style="display:${defaultEquipmentTab === 'maintenance' ? '' : 'none'};">
           <div class="detail-section" style="box-shadow:none;padding:0;margin-bottom:12px;">
             <div class="detail-label">Last maintained</div>
             <div class="detail-value">${formatDate(r.last_maintained)}</div>
@@ -3909,13 +3905,21 @@ app.get('/equipment/:id', async (req, res, next) => {
             </div>
           </form>
         </div>
+        <div id="eq-panel-service" style="display:${defaultEquipmentTab === 'service' ? '' : 'none'};">
+          ${returnToServiceFormHtml}
+          ${serviceHistoryHtml
+            ? `<div class="form-section-title" style="margin-top:${returnToServiceFormHtml ? '24px' : '0'};">Service history</div>${serviceHistoryHtml}`
+            : (returnToServiceFormHtml ? '' : '<div class="form-section-hint" style="margin:0;">Nothing logged yet.</div>')}
+        </div>
       </div>
       <script>
         function showEquipmentPanel(which) {
           document.getElementById('eq-panel-inspection').style.display = which === 'inspection' ? '' : 'none';
           document.getElementById('eq-panel-maintenance').style.display = which === 'maintenance' ? '' : 'none';
+          document.getElementById('eq-panel-service').style.display = which === 'service' ? '' : 'none';
           document.getElementById('eq-tab-inspection').classList.toggle('active', which === 'inspection');
           document.getElementById('eq-tab-maintenance').classList.toggle('active', which === 'maintenance');
+          document.getElementById('eq-tab-service').classList.toggle('active', which === 'service');
         }
       </script>
     `;
