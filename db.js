@@ -773,6 +773,41 @@ async function migrate() {
     FROM rooms rm
     WHERE e.room_id IS NULL AND e.location IS NOT NULL AND trim(e.location) = rm.name;
   `);
+
+  // Same fix as rooms above, for equipment's "Category" -- it used to just
+  // reuse the PERA activity-name list (so the category shown was often a
+  // whole risk-assessment title like "Thicknesser — Safe Operating Risk
+  // Assessment", duplicating "Linked PERA" right below it) instead of
+  // having its own short, purpose-built list. equipment_categories is
+  // named distinctly from the existing maintenance_categories/
+  // inspection_categories tables (unrelated -- those are criteria
+  // libraries, not this).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_categories (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      archived BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES equipment_categories(id) ON DELETE SET NULL;`);
+
+  // One-off backfill, same pattern as rooms: whatever text was already in
+  // "category" (today, always a PERA activity name) becomes a real
+  // category, and the item is linked to it -- nothing changes on screen
+  // until Sean renames one in Admin > Categories to something shorter.
+  await pool.query(`
+    INSERT INTO equipment_categories (name)
+    SELECT DISTINCT trim(category) FROM equipment_items
+    WHERE category_id IS NULL AND category IS NOT NULL AND trim(category) <> ''
+    ON CONFLICT (name) DO NOTHING;
+  `);
+  await pool.query(`
+    UPDATE equipment_items e
+    SET category_id = ec.id
+    FROM equipment_categories ec
+    WHERE e.category_id IS NULL AND e.category IS NOT NULL AND trim(e.category) = ec.name;
+  `);
 }
 
 module.exports = { pool, migrate };
