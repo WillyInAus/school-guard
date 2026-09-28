@@ -776,6 +776,22 @@ tr.row-link:hover {
   white-space: pre-line;
 }
 
+/* Equipment Inspection/Maintenance history reuses .change-log above --
+   these two are the only additions it needed: a failed-check brief line
+   stands out the same red as the tick/cross icons, and a note attached to
+   a check (or a return-to-service note) reads as a positive, resolved
+   comment rather than plain body text. */
+.change-log-brief.log-brief-fail {
+  color: #C0392B;
+  font-weight: 600;
+}
+
+.log-note-positive {
+  color: #2F7D5A;
+  font-style: italic;
+  margin-top: 8px;
+}
+
 .tool-chip-list {
   display: flex;
   flex-wrap: wrap;

@@ -3752,27 +3752,45 @@ app.get('/equipment/:id', async (req, res, next) => {
     const criteriaStatusIcon = { yes: '✓', no: '✕', na: 'N/A' };
     const logStatusIconHtml = (status) =>
       `<span class="log-status-icon log-status-${status || 'yes'}">${escapeHtml(criteriaStatusIcon[status] || '✓')}</span>`;
+    // Each entry collapses to one summary line (date/who + a pass/fail
+    // count) via <details>/<summary>, reusing the same .change-log tree
+    // markup/CSS the PERA change history already uses (public/style.css)
+    // -- so a long Inspection/Maintenance history doesn't force-expand
+    // every criterion for every past check, and it looks/behaves like the
+    // one collapsible history the app already has.
     const logHistoryHtml = (logs) => logs.length
-      ? logs.map((c) => `
-          <div class="detail-section">
-            <div class="detail-label">${formatDateTime(c.performed_at)}${c.performed_by ? ` · ${escapeHtml(c.performed_by)}` : ''}</div>
-            <div class="detail-value">${
-              (Array.isArray(c.completed_criteria) && c.completed_criteria.length)
-                ? c.completed_criteria.map((item) => (typeof item === 'string'
-                    ? `${logStatusIconHtml('yes')} ${escapeHtml(item)}`
-                    : `${logStatusIconHtml(item.status)} ${escapeHtml(item.description)}`
-                  )).join('<br>')
-                : 'No criteria recorded'
-            }${c.notes ? `<br><em>${escapeHtml(c.notes)}</em>` : ''}</div>
-          </div>
-        `).join('')
+      ? `<div class="change-log">${logs.map((c) => {
+          const criteria = Array.isArray(c.completed_criteria) ? c.completed_criteria : [];
+          const failCount = criteria.filter((item) => typeof item !== 'string' && item.status === 'no').length;
+          const naCount = criteria.filter((item) => typeof item !== 'string' && item.status === 'na').length;
+          const passCount = criteria.length - failCount - naCount;
+          const briefText = !criteria.length ? 'No criteria recorded' : failCount
+            ? `${failCount} failed`
+            : `${passCount} passed${naCount ? `, ${naCount} N/A` : ''}`;
+          return `
+            <details class="change-log-entry">
+              <summary class="change-log-summary">
+                <span class="change-log-datetime">${formatDateTime(c.performed_at)}${c.performed_by ? ` · ${escapeHtml(c.performed_by)}` : ''}</span>
+                <span class="change-log-brief${failCount ? ' log-brief-fail' : ''}">${briefText}</span>
+              </summary>
+              <div class="change-log-detail">${
+                criteria.length
+                  ? criteria.map((item) => (typeof item === 'string'
+                      ? `${logStatusIconHtml('yes')} ${escapeHtml(item)}`
+                      : `${logStatusIconHtml(item.status)} ${escapeHtml(item.description)}`
+                    )).join('<br>')
+                  : 'No criteria recorded'
+              }${c.notes ? `<div class="log-note-positive">${escapeHtml(c.notes)}</div>` : ''}</div>
+            </details>
+          `;
+        }).join('')}</div>`
       : '<div class="form-section-hint" style="margin:0;">None logged yet.</div>';
 
     const serviceHistoryHtml = serviceLogsResult.rows.length
       ? serviceLogsResult.rows.map((s) => `
           <div class="detail-section">
             <div class="detail-label">${formatDateTime(s.performed_at)}${s.performed_by ? ` · ${escapeHtml(s.performed_by)}` : ''}${s.previous_status ? ` · back from ${escapeHtml(s.previous_status)}` : ''}</div>
-            <div class="detail-value">${escapeHtml(s.note)}</div>
+            <div class="log-note-positive">${escapeHtml(s.note)}</div>
           </div>
         `).join('')
       : '';
