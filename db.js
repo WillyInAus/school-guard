@@ -737,6 +737,42 @@ async function migrate() {
       }
     }
   }
+
+  // A canonical list of rooms so equipment's "Location" is picked from a
+  // dropdown instead of free-typed -- free text let "Workshop A" / "IDT
+  // Workshop A" / a typo all count as different rooms on the Equipment >
+  // By room page. archived hides a room from new selections without
+  // touching equipment that already used it. equipment_items keeps its
+  // old location TEXT column too (untouched, for anything that still
+  // reads it), but room_id is now the source of truth going forward --
+  // that's what lets renaming a room here actually change what every
+  // item using it shows, which plain text never could.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS rooms (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      archived BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL;`);
+
+  // One-off backfill: turn whatever free-text locations already exist into
+  // real rooms, and link each item to its matching room. Safe to run on
+  // every startup -- ON CONFLICT/room_id IS NULL make it a no-op once a
+  // name's room exists and every matching item is already linked.
+  await pool.query(`
+    INSERT INTO rooms (name)
+    SELECT DISTINCT trim(location) FROM equipment_items
+    WHERE room_id IS NULL AND location IS NOT NULL AND trim(location) <> ''
+    ON CONFLICT (name) DO NOTHING;
+  `);
+  await pool.query(`
+    UPDATE equipment_items e
+    SET room_id = rm.id
+    FROM rooms rm
+    WHERE e.room_id IS NULL AND e.location IS NOT NULL AND trim(e.location) = rm.name;
+  `);
 }
 
 module.exports = { pool, migrate };
