@@ -3736,89 +3736,87 @@ app.get('/equipment/:id', async (req, res, next) => {
         </div>
         <span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
       </div>
-      <div class="detail-grid">
-        <div>
-          <div class="detail-section">
-            <div class="detail-label">Linked PERA</div>
-            <div class="detail-value">${r.pera_id ? `<a href="/pera/${r.pera_id}" style="color:#1B5E52;font-weight:600;">${escapeHtml(r.pera_name)}</a>` : 'None'}</div>
-          </div>
-          <div class="detail-section">
+      <div class="card" style="padding:22px;margin-bottom:20px;">
+        <div class="detail-section" style="margin-bottom:0;box-shadow:none;padding:0;">
+          <div class="detail-label">Linked PERA</div>
+          <div class="detail-value">${r.pera_id ? `<a href="/pera/${r.pera_id}" style="color:#1B5E52;font-weight:600;">${escapeHtml(r.pera_name)}</a>` : 'None'}</div>
+        </div>
+        ${r.notes ? `
+        <div class="detail-section" style="margin-bottom:0;margin-top:16px;box-shadow:none;padding:0;">
+          <div class="detail-label">Notes</div>
+          <div class="detail-value">${escapeHtml(r.notes)}</div>
+        </div>` : ''}
+      </div>
+      <div class="card" style="padding:22px;margin-bottom:20px;">
+        <div class="note-box">Keep this record up to date after every inspection or service — it's what the equipment register relies on to flag what needs attention.</div>
+        <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-top:14px;">Edit this item</a>
+      </div>
+      <div class="card" style="padding:22px;">
+        <div class="section-tabs">
+          <button type="button" class="section-tab active" id="eq-tab-inspection" onclick="showEquipmentPanel('inspection')">Inspection</button>
+          <button type="button" class="section-tab" id="eq-tab-maintenance" onclick="showEquipmentPanel('maintenance')">Maintenance</button>
+        </div>
+        <div id="eq-panel-inspection">
+          <div class="detail-section" style="box-shadow:none;padding:0;margin-bottom:12px;">
             <div class="detail-label">Last inspected</div>
             <div class="detail-value">${formatDate(r.last_inspected)}</div>
           </div>
-          <div class="detail-section">
+          <div class="detail-section" style="box-shadow:none;padding:0;margin-bottom:0;">
             <div class="detail-label">Next inspection due</div>
             <div class="detail-value">${formatDate(r.next_inspection_due)}${r.inspection_frequency ? ` (checked every ${escapeHtml(r.inspection_frequency)})` : ''}</div>
           </div>
-          <div class="detail-section">
+          <div class="form-section-title" style="margin-top:24px;">Inspection history</div>
+          ${logHistoryHtml(inspectionLogsResult.rows)}
+          <div class="form-section-title">Log an inspection</div>
+          <form method="post" action="/equipment/${r.id}/inspection-check">
+            ${inspectionChecklistHtml}
+            <div class="form-row" style="margin-top:12px;">
+              <label for="inspected_by">Checked by</label>
+              <input type="text" id="inspected_by" name="performed_by" placeholder="Your name">
+            </div>
+            <div class="form-row">
+              <label for="inspection_notes">Notes</label>
+              <textarea id="inspection_notes" name="notes" placeholder="Anything noticed during this inspection..."></textarea>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Log inspection</button>
+            </div>
+          </form>
+        </div>
+        <div id="eq-panel-maintenance" style="display:none;">
+          <div class="detail-section" style="box-shadow:none;padding:0;margin-bottom:12px;">
             <div class="detail-label">Last maintained</div>
             <div class="detail-value">${formatDate(r.last_maintained)}</div>
           </div>
-          <div class="detail-section">
+          <div class="detail-section" style="box-shadow:none;padding:0;margin-bottom:0;">
             <div class="detail-label">Next maintenance due</div>
             <div class="detail-value">${formatDate(r.next_maintenance_due)}${r.maintenance_frequency ? ` (serviced every ${escapeHtml(r.maintenance_frequency)})` : ''}</div>
           </div>
-          ${r.notes ? `
-          <div class="detail-section">
-            <div class="detail-label">Notes</div>
-            <div class="detail-value">${escapeHtml(r.notes)}</div>
-          </div>` : ''}
-          <div class="form-section-title" style="margin-top:32px;">Inspection history</div>
-          ${logHistoryHtml(inspectionLogsResult.rows)}
-          <div class="form-section-title">Maintenance history</div>
+          <div class="form-section-title" style="margin-top:24px;">Maintenance history</div>
           ${logHistoryHtml(maintenanceLogsResult.rows)}
-        </div>
-        <div>
-          <div class="card" style="padding:22px;margin-bottom:20px;">
-            <div class="note-box">Keep this record up to date after every inspection or service — it's what the equipment register relies on to flag what needs attention.</div>
-            <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-top:14px;">Edit this item</a>
-          </div>
-          <div class="card" style="padding:22px;">
-            <div class="section-tabs">
-              <button type="button" class="section-tab active" id="log-tab-inspection" onclick="showLogPanel('inspection')">Log an inspection</button>
-              <button type="button" class="section-tab" id="log-tab-maintenance" onclick="showLogPanel('maintenance')">Log maintenance</button>
+          <div class="form-section-title">Log maintenance</div>
+          <form method="post" action="/equipment/${r.id}/maintenance-check">
+            ${maintenanceChecklistHtml}
+            <div class="form-row" style="margin-top:12px;">
+              <label for="maintained_by">Serviced by</label>
+              <input type="text" id="maintained_by" name="performed_by" placeholder="Your name">
             </div>
-            <div id="log-panel-inspection">
-              <form method="post" action="/equipment/${r.id}/inspection-check">
-                ${inspectionChecklistHtml}
-                <div class="form-row" style="margin-top:12px;">
-                  <label for="inspected_by">Checked by</label>
-                  <input type="text" id="inspected_by" name="performed_by" placeholder="Your name">
-                </div>
-                <div class="form-row">
-                  <label for="inspection_notes">Notes</label>
-                  <textarea id="inspection_notes" name="notes" placeholder="Anything noticed during this inspection..."></textarea>
-                </div>
-                <div class="form-actions">
-                  <button type="submit" class="btn btn-primary">Log inspection</button>
-                </div>
-              </form>
+            <div class="form-row">
+              <label for="maintenance_notes">Notes</label>
+              <textarea id="maintenance_notes" name="notes" placeholder="Anything done or noticed during this service..."></textarea>
             </div>
-            <div id="log-panel-maintenance" style="display:none;">
-              <form method="post" action="/equipment/${r.id}/maintenance-check">
-                ${maintenanceChecklistHtml}
-                <div class="form-row" style="margin-top:12px;">
-                  <label for="maintained_by">Serviced by</label>
-                  <input type="text" id="maintained_by" name="performed_by" placeholder="Your name">
-                </div>
-                <div class="form-row">
-                  <label for="maintenance_notes">Notes</label>
-                  <textarea id="maintenance_notes" name="notes" placeholder="Anything done or noticed during this service..."></textarea>
-                </div>
-                <div class="form-actions">
-                  <button type="submit" class="btn btn-primary">Log maintenance</button>
-                </div>
-              </form>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Log maintenance</button>
             </div>
-          </div>
+          </form>
         </div>
       </div>
       <script>
-        function showLogPanel(which) {
-          document.getElementById('log-panel-inspection').style.display = which === 'inspection' ? '' : 'none';
-          document.getElementById('log-panel-maintenance').style.display = which === 'maintenance' ? '' : 'none';
-          document.getElementById('log-tab-inspection').classList.toggle('active', which === 'inspection');
-          document.getElementById('log-tab-maintenance').classList.toggle('active', which === 'maintenance');
+        function showEquipmentPanel(which) {
+          document.getElementById('eq-panel-inspection').style.display = which === 'inspection' ? '' : 'none';
+          document.getElementById('eq-panel-maintenance').style.display = which === 'maintenance' ? '' : 'none';
+          document.getElementById('eq-tab-inspection').classList.toggle('active', which === 'inspection');
+          document.getElementById('eq-tab-maintenance').classList.toggle('active', which === 'maintenance');
         }
       </script>
     `;
