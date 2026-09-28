@@ -3911,7 +3911,6 @@ app.get('/equipment/:id', async (req, res, next) => {
               <button type="submit" class="btn btn-primary">Log inspection</button>
             </div>
           </form>
-          ${historyTileHtml('Inspection history', logHistoryHtml(inspectionLogsResult.rows))}
         </div>
         <div id="eq-panel-maintenance" style="display:none;">
           <div class="detail-section" style="box-shadow:none;padding:0;margin-bottom:12px;">
@@ -3940,7 +3939,12 @@ app.get('/equipment/:id', async (req, res, next) => {
           ${historyTileHtml('Maintenance history', logHistoryHtml(maintenanceLogsResult.rows))}
         </div>
       </div>
-      ${historyTileHtml('Service history', serviceHistoryTreeHtml)}
+      ${historyTileHtml('Inspection & Service history', `
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Inspection</div>
+        ${logHistoryHtml(inspectionLogsResult.rows)}
+        <div class="form-section-title">Service</div>
+        ${serviceHistoryTreeHtml}
+      `)}
       <script>
         function showEquipmentPanel(which) {
           document.getElementById('eq-panel-inspection').style.display = which === 'inspection' ? '' : 'none';
