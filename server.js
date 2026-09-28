@@ -3786,23 +3786,41 @@ app.get('/equipment/:id', async (req, res, next) => {
         }).join('')}</div>`
       : '<div class="form-section-hint" style="margin:0;">None logged yet.</div>';
 
-    const serviceHistoryHtml = serviceLogsResult.rows.length
-      ? serviceLogsResult.rows.map((s) => `
-          <div class="detail-section">
-            <div class="detail-label">${formatDateTime(s.performed_at)}${s.performed_by ? ` · ${escapeHtml(s.performed_by)}` : ''}${s.previous_status ? ` · back from ${escapeHtml(s.previous_status)}` : ''}</div>
-            <div class="log-note-positive">${escapeHtml(s.note)}</div>
-          </div>
-        `).join('')
-      : '';
+    // Collapsed one-liner-per-entry tree, same pattern as logHistoryHtml,
+    // so a long service history doesn't push the more-important "last
+    // service" summary (below) down the page.
+    const serviceHistoryTreeHtml = serviceLogsResult.rows.length
+      ? `<div class="change-log">${serviceLogsResult.rows.map((s) => `
+          <details class="change-log-entry">
+            <summary class="change-log-summary">
+              <span class="change-log-datetime">${formatDateTime(s.performed_at)}${s.performed_by ? ` · ${escapeHtml(s.performed_by)}` : ''}</span>
+              <span class="change-log-brief">${s.previous_status ? `Back from ${escapeHtml(s.previous_status)}` : 'Service logged'}</span>
+            </summary>
+            <div class="change-log-detail"><div class="log-note-positive">${escapeHtml(s.note)}</div></div>
+          </details>
+        `).join('')}</div>`
+      : '<div class="form-section-hint" style="margin:0;">Nothing logged yet.</div>';
+
+    // Headline summary -- last service date plus whatever note was recorded
+    // (e.g. "SOP replaced") -- so this shows up front without opening the
+    // history tree above.
+    const lastServiceLog = serviceLogsResult.rows[0];
+    const lastServiceSummaryHtml = lastServiceLog ? `
+      <div class="detail-section" style="box-shadow:none;padding:0;margin-bottom:16px;">
+        <div class="detail-label">Last service</div>
+        <div class="detail-value">${formatDateTime(lastServiceLog.performed_at)}${lastServiceLog.performed_by ? ` · ${escapeHtml(lastServiceLog.performed_by)}` : ''}</div>
+        <div class="log-note-positive" style="margin-top:4px;">${escapeHtml(lastServiceLog.note)}</div>
+      </div>
+    ` : '<div class="form-section-hint" style="margin:0 0 16px;">No service recorded yet.</div>';
 
     // Once an item is out of "Operational", the only way back is this form
-    // -- see the /equipment/:id/return-to-service route comment. Lives in
-    // its own "Service" tab alongside Inspection/Maintenance (rather than
-    // a standalone card above them) so the page reads as one tabbed record
-    // instead of a stack of separate boxes.
+    // -- see the /equipment/:id/return-to-service route comment. This whole
+    // Service card sits near the top of the page (not tabbed alongside
+    // Inspection/Maintenance) since it's the thing most worth seeing at a
+    // glance: whether the item needs attention, and what was last done.
     const returnToServiceFormHtml = r.status !== 'Operational' ? `
       <div class="note-box" style="border-color:#B3261E;">This item is currently marked "${escapeHtml(r.status)}". Describe what was done to fix or check it before putting it back into service — that note is kept as part of this item's record.</div>
-      <form method="post" action="/equipment/${r.id}/return-to-service" style="margin-top:14px;">
+      <form method="post" action="/equipment/${r.id}/return-to-service" style="margin-top:14px;margin-bottom:20px;">
         <div class="form-row">
           <label for="service_performed_by">Restored by</label>
           <input type="text" id="service_performed_by" name="performed_by" placeholder="Your name">
@@ -3816,10 +3834,6 @@ app.get('/equipment/:id', async (req, res, next) => {
         </div>
       </form>
     ` : '';
-    // Which tab opens by default: an item needing action opens straight on
-    // Service (same "flag what needs attention" intent the old standalone
-    // card had), otherwise Inspection as before.
-    const defaultEquipmentTab = r.status !== 'Operational' ? 'service' : 'inspection';
 
     const body = `
       <a class="back-link" href="/equipment">← Back to Equipment</a>
@@ -3842,16 +3856,22 @@ app.get('/equipment/:id', async (req, res, next) => {
         </div>` : ''}
       </div>
       <div class="card" style="padding:22px;margin-bottom:20px;">
+        <div class="form-section-title" style="margin-top:0;">Service${r.status !== 'Operational' ? ' <span style="color:#B3261E;">⚠</span>' : ''}</div>
+        ${returnToServiceFormHtml}
+        ${lastServiceSummaryHtml}
+        <div class="form-section-title">Service history</div>
+        ${serviceHistoryTreeHtml}
+      </div>
+      <div class="card" style="padding:22px;margin-bottom:20px;">
         <div class="note-box">Keep this record up to date after every inspection or service — it's what the equipment register relies on to flag what needs attention.</div>
         <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-top:14px;">Edit this item</a>
       </div>
       <div class="card" style="padding:22px;">
         <div class="section-tabs">
-          <button type="button" class="section-tab${defaultEquipmentTab === 'inspection' ? ' active' : ''}" id="eq-tab-inspection" onclick="showEquipmentPanel('inspection')">Inspection</button>
-          <button type="button" class="section-tab${defaultEquipmentTab === 'maintenance' ? ' active' : ''}" id="eq-tab-maintenance" onclick="showEquipmentPanel('maintenance')">Maintenance</button>
-          <button type="button" class="section-tab${defaultEquipmentTab === 'service' ? ' active' : ''}" id="eq-tab-service" onclick="showEquipmentPanel('service')">Service${r.status !== 'Operational' ? ' <span style="color:#B3261E;">⚠</span>' : ''}</button>
+          <button type="button" class="section-tab active" id="eq-tab-inspection" onclick="showEquipmentPanel('inspection')">Inspection</button>
+          <button type="button" class="section-tab" id="eq-tab-maintenance" onclick="showEquipmentPanel('maintenance')">Maintenance</button>
         </div>
-        <div id="eq-panel-inspection" style="display:${defaultEquipmentTab === 'inspection' ? '' : 'none'};">
+        <div id="eq-panel-inspection" style="display:;">
           <div class="detail-section" style="box-shadow:none;padding:0;margin-bottom:12px;">
             <div class="detail-label">Last inspected</div>
             <div class="detail-value">${formatDate(r.last_inspected)}</div>
@@ -3878,7 +3898,7 @@ app.get('/equipment/:id', async (req, res, next) => {
             </div>
           </form>
         </div>
-        <div id="eq-panel-maintenance" style="display:${defaultEquipmentTab === 'maintenance' ? '' : 'none'};">
+        <div id="eq-panel-maintenance" style="display:none;">
           <div class="detail-section" style="box-shadow:none;padding:0;margin-bottom:12px;">
             <div class="detail-label">Last maintained</div>
             <div class="detail-value">${formatDate(r.last_maintained)}</div>
@@ -3905,21 +3925,13 @@ app.get('/equipment/:id', async (req, res, next) => {
             </div>
           </form>
         </div>
-        <div id="eq-panel-service" style="display:${defaultEquipmentTab === 'service' ? '' : 'none'};">
-          ${returnToServiceFormHtml}
-          ${serviceHistoryHtml
-            ? `<div class="form-section-title" style="margin-top:${returnToServiceFormHtml ? '24px' : '0'};">Service history</div>${serviceHistoryHtml}`
-            : (returnToServiceFormHtml ? '' : '<div class="form-section-hint" style="margin:0;">Nothing logged yet.</div>')}
-        </div>
       </div>
       <script>
         function showEquipmentPanel(which) {
           document.getElementById('eq-panel-inspection').style.display = which === 'inspection' ? '' : 'none';
           document.getElementById('eq-panel-maintenance').style.display = which === 'maintenance' ? '' : 'none';
-          document.getElementById('eq-panel-service').style.display = which === 'service' ? '' : 'none';
           document.getElementById('eq-tab-inspection').classList.toggle('active', which === 'inspection');
           document.getElementById('eq-tab-maintenance').classList.toggle('active', which === 'maintenance');
-          document.getElementById('eq-tab-service').classList.toggle('active', which === 'service');
         }
       </script>
     `;
