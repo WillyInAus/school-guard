@@ -405,6 +405,23 @@ h1.page-title {
   color: #FFFFFF;
 }
 
+.log-status-icon {
+  display: inline-block;
+  font-weight: 700;
+}
+
+.log-status-icon.log-status-yes {
+  color: #2F7D5A;
+}
+
+.log-status-icon.log-status-no {
+  color: #C0392B;
+}
+
+.log-status-icon.log-status-na {
+  color: #6B6659;
+}
+
 table {
   border-collapse: collapse;
   width: 100%;

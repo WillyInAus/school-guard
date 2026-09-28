@@ -3738,6 +3738,8 @@ app.get('/equipment/:id', async (req, res, next) => {
     // older log rows saved before it stored plain description strings (just
     // "this one was ticked") -- render both shapes so old history doesn't break.
     const criteriaStatusIcon = { yes: '✓', no: '✕', na: 'N/A' };
+    const logStatusIconHtml = (status) =>
+      `<span class="log-status-icon log-status-${status || 'yes'}">${escapeHtml(criteriaStatusIcon[status] || '✓')}</span>`;
     const logHistoryHtml = (logs) => logs.length
       ? logs.map((c) => `
           <div class="detail-section">
@@ -3745,8 +3747,8 @@ app.get('/equipment/:id', async (req, res, next) => {
             <div class="detail-value">${
               (Array.isArray(c.completed_criteria) && c.completed_criteria.length)
                 ? c.completed_criteria.map((item) => (typeof item === 'string'
-                    ? `✓ ${escapeHtml(item)}`
-                    : `${criteriaStatusIcon[item.status] || '✓'} ${escapeHtml(item.description)}`
+                    ? `${logStatusIconHtml('yes')} ${escapeHtml(item)}`
+                    : `${logStatusIconHtml(item.status)} ${escapeHtml(item.description)}`
                   )).join('<br>')
                 : 'No criteria recorded'
             }${c.notes ? `<br><em>${escapeHtml(c.notes)}</em>` : ''}</div>
