@@ -3794,7 +3794,7 @@ app.get('/equipment/:id', async (req, res, next) => {
     // live below the "Log an inspection/maintenance" form and start
     // collapsed behind their own summary, rather than sitting between the
     // due-date info and the form where they'd compete for attention.
-    const historyTileHtml = (title, logs) => `
+    const historyTileHtml = (title, bodyHtml) => `
       <div class="card" style="padding:0;margin-top:20px;overflow:hidden;">
         <details>
           <summary class="change-log-summary" style="padding:14px 16px 14px 34px;">
@@ -3802,7 +3802,7 @@ app.get('/equipment/:id', async (req, res, next) => {
             <span class="change-log-brief">Reference only — past checks</span>
           </summary>
           <div style="padding:0 16px 16px 16px;">
-            ${logHistoryHtml(logs)}
+            ${bodyHtml}
           </div>
         </details>
       </div>
@@ -3861,7 +3861,10 @@ app.get('/equipment/:id', async (req, res, next) => {
           <h1 class="page-title">${escapeHtml(r.name)}</h1>
           <p class="page-subtitle">${escapeHtml(r.category || 'Equipment')}${r.location ? ` · ${escapeHtml(r.location)}` : ''}</p>
         </div>
-        <span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px;">
+          <span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
+          <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit" style="padding:8px 14px;">Edit this item</a>
+        </div>
       </div>
       <div class="card" style="padding:22px;margin-bottom:20px;">
         <div class="detail-section" style="margin-bottom:0;box-shadow:none;padding:0;">
@@ -3878,12 +3881,6 @@ app.get('/equipment/:id', async (req, res, next) => {
         <div class="form-section-title" style="margin-top:0;">Service${r.status !== 'Operational' ? ' <span style="color:#B3261E;">⚠</span>' : ''}</div>
         ${returnToServiceFormHtml}
         ${lastServiceSummaryHtml}
-        <div class="form-section-title">Service history</div>
-        ${serviceHistoryTreeHtml}
-      </div>
-      <div class="card" style="padding:22px;margin-bottom:20px;">
-        <div class="note-box">Keep this record up to date after every inspection or service — it's what the equipment register relies on to flag what needs attention.</div>
-        <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-top:14px;">Edit this item</a>
       </div>
       <div class="card" style="padding:22px;">
         <div class="section-tabs">
@@ -3914,7 +3911,7 @@ app.get('/equipment/:id', async (req, res, next) => {
               <button type="submit" class="btn btn-primary">Log inspection</button>
             </div>
           </form>
-          ${historyTileHtml('Inspection history', inspectionLogsResult.rows)}
+          ${historyTileHtml('Inspection history', logHistoryHtml(inspectionLogsResult.rows))}
         </div>
         <div id="eq-panel-maintenance" style="display:none;">
           <div class="detail-section" style="box-shadow:none;padding:0;margin-bottom:12px;">
@@ -3940,9 +3937,10 @@ app.get('/equipment/:id', async (req, res, next) => {
               <button type="submit" class="btn btn-primary">Log maintenance</button>
             </div>
           </form>
-          ${historyTileHtml('Maintenance history', maintenanceLogsResult.rows)}
+          ${historyTileHtml('Maintenance history', logHistoryHtml(maintenanceLogsResult.rows))}
         </div>
       </div>
+      ${historyTileHtml('Service history', serviceHistoryTreeHtml)}
       <script>
         function showEquipmentPanel(which) {
           document.getElementById('eq-panel-inspection').style.display = which === 'inspection' ? '' : 'none';
