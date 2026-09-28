@@ -3789,6 +3789,25 @@ app.get('/equipment/:id', async (req, res, next) => {
     // Collapsed one-liner-per-entry tree, same pattern as logHistoryHtml,
     // so a long service history doesn't push the more-important "last
     // service" summary (below) down the page.
+    // A separate, visually quieter tile for the Inspection/Maintenance
+    // history trees -- these are only for reference if needed, so they
+    // live below the "Log an inspection/maintenance" form and start
+    // collapsed behind their own summary, rather than sitting between the
+    // due-date info and the form where they'd compete for attention.
+    const historyTileHtml = (title, logs) => `
+      <div class="card" style="padding:0;margin-top:20px;overflow:hidden;">
+        <details>
+          <summary class="change-log-summary" style="padding:14px 16px 14px 34px;">
+            <span class="change-log-datetime">${title}</span>
+            <span class="change-log-brief">Reference only — past checks</span>
+          </summary>
+          <div style="padding:0 16px 16px 16px;">
+            ${logHistoryHtml(logs)}
+          </div>
+        </details>
+      </div>
+    `;
+
     const serviceHistoryTreeHtml = serviceLogsResult.rows.length
       ? `<div class="change-log">${serviceLogsResult.rows.map((s) => `
           <details class="change-log-entry">
@@ -3880,9 +3899,7 @@ app.get('/equipment/:id', async (req, res, next) => {
             <div class="detail-label">Next inspection due</div>
             <div class="detail-value">${formatDate(r.next_inspection_due)}${r.inspection_frequency ? ` (checked every ${escapeHtml(r.inspection_frequency)})` : ''}</div>
           </div>
-          <div class="form-section-title" style="margin-top:24px;">Inspection history</div>
-          ${logHistoryHtml(inspectionLogsResult.rows)}
-          <div class="form-section-title">Log an inspection</div>
+          <div class="form-section-title" style="margin-top:24px;">Log an inspection</div>
           <form method="post" action="/equipment/${r.id}/inspection-check">
             ${inspectionChecklistHtml}
             <div class="form-row" style="margin-top:12px;">
@@ -3897,6 +3914,7 @@ app.get('/equipment/:id', async (req, res, next) => {
               <button type="submit" class="btn btn-primary">Log inspection</button>
             </div>
           </form>
+          ${historyTileHtml('Inspection history', inspectionLogsResult.rows)}
         </div>
         <div id="eq-panel-maintenance" style="display:none;">
           <div class="detail-section" style="box-shadow:none;padding:0;margin-bottom:12px;">
@@ -3907,9 +3925,7 @@ app.get('/equipment/:id', async (req, res, next) => {
             <div class="detail-label">Next maintenance due</div>
             <div class="detail-value">${formatDate(r.next_maintenance_due)}${r.maintenance_frequency ? ` (serviced every ${escapeHtml(r.maintenance_frequency)})` : ''}</div>
           </div>
-          <div class="form-section-title" style="margin-top:24px;">Maintenance history</div>
-          ${logHistoryHtml(maintenanceLogsResult.rows)}
-          <div class="form-section-title">Log maintenance</div>
+          <div class="form-section-title" style="margin-top:24px;">Log maintenance</div>
           <form method="post" action="/equipment/${r.id}/maintenance-check">
             ${maintenanceChecklistHtml}
             <div class="form-row" style="margin-top:12px;">
@@ -3924,6 +3940,7 @@ app.get('/equipment/:id', async (req, res, next) => {
               <button type="submit" class="btn btn-primary">Log maintenance</button>
             </div>
           </form>
+          ${historyTileHtml('Maintenance history', maintenanceLogsResult.rows)}
         </div>
       </div>
       <script>
