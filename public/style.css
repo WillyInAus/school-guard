@@ -747,9 +747,10 @@ tr.row-link:hover {
   content: '▸';
   position: absolute;
   left: 12px;
-  top: 14px;
-  font-size: 10px;
-  color: #A8A296;
+  top: 13px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #6B6659;
   transition: transform 0.15s ease;
 }
 

@@ -28,6 +28,15 @@ function bottomNavLink(href, label, iconSvg, active) {
     </a>`;
 }
 
+// style.css is served with a long browser cache lifetime (see public/
+// style.css's Express default), which is good for normal traffic but means
+// a CSS-only change can look like it "didn't deploy" -- the new HTML shows
+// up (pages aren't cached) but the browser keeps using its old cached
+// stylesheet for hours. Tagging the link with a version that changes every
+// time the app process starts (i.e. every deploy) forces a fresh fetch
+// after each redeploy, without giving up caching in between deploys.
+const ASSET_VERSION = Date.now();
+
 const ICONS = {
   dashboard: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="6.5" height="6.5" rx="1.3"/><rect x="11" y="2.5" width="6.5" height="6.5" rx="1.3"/><rect x="2.5" y="11" width="6.5" height="6.5" rx="1.3"/><rect x="11" y="11" width="6.5" height="6.5" rx="1.3"/></svg>',
   risk: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="12" height="14" rx="2"/><path d="M7.5 3.5h5v1.6a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1V3.5Z"/><path d="M7.3 11.2l1.8 1.8 3.6-4"/></svg>',
@@ -44,7 +53,7 @@ function page({ title, active, body }) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)} — School Guard</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=${ASSET_VERSION}">
 </head>
 <body>
 <div class="app-shell">
