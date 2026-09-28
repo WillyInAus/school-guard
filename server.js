@@ -3734,11 +3734,12 @@ app.get('/equipment/:id', async (req, res, next) => {
     }
     const r = result.rows[0];
 
-    const [maintenanceItems, inspectionItems, maintenanceLogsResult, inspectionLogsResult] = await Promise.all([
+    const [maintenanceItems, inspectionItems, maintenanceLogsResult, inspectionLogsResult, serviceLogsResult] = await Promise.all([
       fetchEquipmentCriteria('maintenance', r.id),
       fetchEquipmentCriteria('inspection', r.id),
       pool.query('SELECT * FROM equipment_maintenance_logs WHERE equipment_id = $1 ORDER BY performed_at DESC LIMIT 10', [r.id]),
       pool.query('SELECT * FROM equipment_inspection_logs WHERE equipment_id = $1 ORDER BY performed_at DESC LIMIT 10', [r.id]),
+      pool.query('SELECT * FROM equipment_service_logs WHERE equipment_id = $1 ORDER BY performed_at DESC LIMIT 10', [r.id]),
     ]);
 
     const maintenanceChecklistHtml = criteriaLogChecklistHtml('maintenance', maintenanceItems, r.id);
@@ -3767,6 +3768,45 @@ app.get('/equipment/:id', async (req, res, next) => {
         `).join('')
       : '<div class="form-section-hint" style="margin:0;">None logged yet.</div>';
 
+    const serviceHistoryHtml = serviceLogsResult.rows.length
+      ? serviceLogsResult.rows.map((s) => `
+          <div class="detail-section">
+            <div class="detail-label">${formatDateTime(s.performed_at)}${s.performed_by ? ` · ${escapeHtml(s.performed_by)}` : ''}${s.previous_status ? ` · back from ${escapeHtml(s.previous_status)}` : ''}</div>
+            <div class="detail-value">${escapeHtml(s.note)}</div>
+          </div>
+        `).join('')
+      : '';
+
+    // Once an item is out of "Operational", the only way back is this form
+    // -- see the /equipment/:id/return-to-service route comment. Shown only
+    // when it's actually needed, so the normal case (an operational item)
+    // doesn't carry a form for a status change that isn't available.
+    const returnToServiceHtml = r.status !== 'Operational' ? `
+      <div class="card" style="padding:22px;margin-bottom:20px;border:1px solid #B3261E;">
+        <div class="form-section-title" style="margin-top:0;">Return to service</div>
+        <div class="note-box">This item is currently marked "${escapeHtml(r.status)}". Describe what was done to fix or check it before putting it back into service — that note is kept as part of this item's record.</div>
+        <form method="post" action="/equipment/${r.id}/return-to-service" style="margin-top:14px;">
+          <div class="form-row">
+            <label for="service_performed_by">Restored by</label>
+            <input type="text" id="service_performed_by" name="performed_by" placeholder="Your name">
+          </div>
+          <div class="form-row">
+            <label for="service_note">What was done <span style="color:#B3261E;">*</span></label>
+            <textarea id="service_note" name="note" required placeholder="e.g. Replaced the guillotine's damaged blade guard and tested it against all inspection criteria."></textarea>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Mark as Operational</button>
+          </div>
+        </form>
+        ${serviceHistoryHtml ? `
+        <div class="form-section-title">Previous return-to-service notes</div>
+        ${serviceHistoryHtml}` : ''}
+      </div>` : (serviceHistoryHtml ? `
+      <div class="card" style="padding:22px;margin-bottom:20px;">
+        <div class="form-section-title" style="margin-top:0;">Service history</div>
+        ${serviceHistoryHtml}
+      </div>` : '');
+
     const body = `
       <a class="back-link" href="/equipment">← Back to Equipment</a>
       <div class="page-header">
@@ -3787,6 +3827,7 @@ app.get('/equipment/:id', async (req, res, next) => {
           <div class="detail-value">${escapeHtml(r.notes)}</div>
         </div>` : ''}
       </div>
+      ${returnToServiceHtml}
       <div class="card" style="padding:22px;margin-bottom:20px;">
         <div class="note-box">Keep this record up to date after every inspection or service — it's what the equipment register relies on to flag what needs attention.</div>
         <a class="btn btn-secondary" href="/admin/equipment/${r.id}/edit" style="width:100%;display:block;text-align:center;box-sizing:border-box;margin-top:14px;">Edit this item</a>
@@ -3963,6 +4004,44 @@ app.post('/equipment/:id/maintenance-check', async (req, res, next) => {
     if (hasFailure) {
       await pool.query(`UPDATE equipment_items SET status = 'Out of service', updated_at = now() WHERE id = $1`, [r.id]);
     }
+
+    res.redirect(`/equipment/${r.id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Equipment: return to service ----------
+// The only way an item's status can move back to "Operational" once it's
+// "Needs repair"/"Out of service" -- requires a note saying what was done,
+// so the record always shows why it's considered safe to use again. The
+// admin edit form deliberately can't offer "Operational" as an option
+// while an item is in either non-operational state, to stop that note
+// requirement being bypassed (see the edit-form routes below).
+app.post('/equipment/:id/return-to-service', async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM equipment_items WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).send('Equipment item not found.');
+    }
+    const r = result.rows[0];
+
+    if (r.status === 'Operational') {
+      return res.redirect(`/equipment/${r.id}`);
+    }
+
+    const note = normalizeText(req.body.note);
+    if (!note) {
+      return res.status(400).send('A note describing what was done to return this item to service is required. <a href="/equipment/' + r.id + '">Back</a>');
+    }
+    const performedBy = normalizeText(req.body.performed_by) || null;
+
+    await pool.query(
+      `INSERT INTO equipment_service_logs (equipment_id, performed_by, previous_status, note)
+       VALUES ($1,$2,$3,$4)`,
+      [r.id, performedBy, r.status, note]
+    );
+    await pool.query(`UPDATE equipment_items SET status = 'Operational', updated_at = now() WHERE id = $1`, [r.id]);
 
     res.redirect(`/equipment/${r.id}`);
   } catch (err) {
@@ -4905,7 +4984,15 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
     ]);
 
     const peraResult = await pool.query('SELECT id, activity_name FROM pera_records WHERE archived = false OR id = $1 ORDER BY activity_name ASC', [r.pera_id]);
-    const statusOptions = EQUIPMENT_STATUSES.map((s) => `<option value="${s}" ${s === r.status ? 'selected' : ''}>${s}</option>`).join('');
+    // "Operational" is deliberately left off this list whenever the item
+    // isn't already Operational -- going back into service requires a note
+    // on what was done, which only the dedicated "Return to service" form
+    // (on the equipment detail page) collects. This form can still move an
+    // Operational item to "Needs repair"/"Out of service", and can still
+    // move between those two, just never back the other way.
+    const editableStatuses = r.status === 'Operational' ? EQUIPMENT_STATUSES : EQUIPMENT_STATUSES.filter((s) => s !== 'Operational');
+    const statusOptions = editableStatuses.map((s) => `<option value="${s}" ${s === r.status ? 'selected' : ''}>${s}</option>`).join('');
+    const statusHint = r.status !== 'Operational' ? '<div class="form-section-hint">To mark this item Operational again, use "Return to service" on the equipment page instead — it requires a note on what was done.</div>' : '';
     const peraOptions = [
       '<option value="">— None —</option>',
       ...peraResult.rows.map((p) => `<option value="${p.id}" ${p.id === r.pera_id ? 'selected' : ''}>${escapeHtml(p.activity_name)}</option>`),
@@ -4937,6 +5024,7 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
         <div class="form-row">
           <label for="status">Status</label>
           <select id="status" name="status" required>${statusOptions}</select>
+          ${statusHint}
         </div>
         <div class="form-row">
           <label for="pera_id">Linked PERA</label>
@@ -4989,6 +5077,20 @@ app.post('/admin/equipment/:id', requireRole('admin'), async (req, res, next) =>
     if (!name || !EQUIPMENT_STATUSES.includes(status)) {
       return res.status(400).send('Name and a valid status are required.');
     }
+
+    // Server-side backstop for the same rule the edit form's status dropdown
+    // enforces (by leaving "Operational" out of its options): this route
+    // can never be the thing that puts an item back into service, even if
+    // posted to directly, because that always needs the note collected by
+    // the dedicated /equipment/:id/return-to-service flow.
+    const currentResult = await pool.query('SELECT status FROM equipment_items WHERE id = $1', [req.params.id]);
+    if (currentResult.rows.length === 0) {
+      return res.status(404).send('Equipment item not found.');
+    }
+    if (status === 'Operational' && currentResult.rows[0].status !== 'Operational') {
+      return res.status(400).send('Use "Return to service" on the equipment page to mark an item Operational again -- it requires a note on what was done. <a href="/admin/equipment/' + req.params.id + '/edit">Back</a>');
+    }
+
     const frequency = EQUIPMENT_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
     const maintFrequency = EQUIPMENT_FREQUENCIES.includes(maintenance_frequency) ? maintenance_frequency : null;
 

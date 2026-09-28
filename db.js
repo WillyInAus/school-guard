@@ -632,6 +632,25 @@ async function migrate() {
     );
   `);
 
+  // A failed inspection/maintenance check (or a manual edit) can take an
+  // item to "Needs repair"/"Out of service". Moving it back to
+  // "Operational" is a deliberate, visible decision -- see the
+  // hasFailure comment on the inspection-check/maintenance-check routes
+  // -- so it only ever happens through the dedicated "Return to service"
+  // flow, which requires a note saying what was done. This table is that
+  // flow's history, separate from the inspection/maintenance logs above
+  // since it records a status change rather than a routine check.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_service_logs (
+      id SERIAL PRIMARY KEY,
+      equipment_id INTEGER NOT NULL REFERENCES equipment_items(id) ON DELETE CASCADE,
+      performed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      performed_by TEXT,
+      previous_status TEXT,
+      note TEXT NOT NULL
+    );
+  `);
+
   // equipment_items already has inspection_frequency/last_inspected/
   // next_inspection_due; Maintenance gets its own matching set so the two
   // can be due on different schedules (e.g. inspected weekly, serviced
