@@ -3388,7 +3388,11 @@ function equipmentChipClass(status) {
 
 function toDateInputValue(d) {
   if (!d) return '';
-  return new Date(d).toISOString().slice(0, 10);
+  const date = new Date(d);
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 // ---- Rooms (equipment's "Location" picker) -------------------------------
@@ -3445,50 +3449,6 @@ async function resolveRoomIdFromInput(roomId, newRoomName) {
   return Number.isInteger(parsed) ? parsed : null;
 }
 
-// ---- Categories (equipment's "Category" picker) ---------------------------
-// Same idea and same fix as Rooms just above -- see the equipment_categories
-// comment in db.js for why. Kept as separate functions (rather than
-// generalising over "rooms" and "categories") since the two pickers'
-// wording differs and there's only one of each.
-
-async function fetchActiveCategories() {
-  return fetchCategoriesForSelect(null);
-}
-
-async function fetchCategoriesForSelect(currentCategoryId) {
-  const { rows } = await pool.query(
-    'SELECT * FROM equipment_categories WHERE archived = false OR id = $1 ORDER BY archived ASC, name ASC',
-    [currentCategoryId || null]
-  );
-  return rows;
-}
-
-function categorySelectHtml(categories, selectedCategoryId) {
-  const options = categories.map((cat) => `<option value="${cat.id}" ${String(cat.id) === String(selectedCategoryId) ? 'selected' : ''}>${escapeHtml(cat.name)}${cat.archived ? ' (archived)' : ''}</option>`).join('');
-  return `
-    <select id="category_id" name="category_id" onchange="document.getElementById('category_id_new').style.display = this.value === '__new__' ? '' : 'none';">
-      <option value="">— None —</option>
-      ${options}
-      <option value="__new__">+ Add a new category…</option>
-    </select>
-    <input type="text" id="category_id_new" name="new_category_name" placeholder="New category name" style="display:none;margin-top:8px;">
-  `;
-}
-
-async function resolveCategoryIdFromInput(categoryId, newCategoryName) {
-  if (categoryId === '__new__') {
-    const name = normalizeText(newCategoryName);
-    if (!name) return null;
-    const result = await pool.query(
-      'INSERT INTO equipment_categories (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id',
-      [name]
-    );
-    return result.rows[0].id;
-  }
-  const parsed = parseInt(categoryId, 10);
-  return Number.isInteger(parsed) ? parsed : null;
-}
-
 // ---------- Equipment: list ----------
 
 app.get('/equipment', async (req, res, next) => {
@@ -3508,11 +3468,10 @@ app.get('/equipment', async (req, res, next) => {
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const result = await pool.query(
-      `SELECT e.*, p.activity_name AS pera_name, rm.name AS room_name, ec.name AS category_name
+      `SELECT e.*, p.activity_name AS pera_name, rm.name AS room_name
        FROM equipment_items e
        LEFT JOIN pera_records p ON p.id = e.pera_id
        LEFT JOIN rooms rm ON rm.id = e.room_id
-       LEFT JOIN equipment_categories ec ON ec.id = e.category_id
        ${where}
        ORDER BY e.name ASC`,
       params
@@ -3532,7 +3491,6 @@ app.get('/equipment', async (req, res, next) => {
       const rows = result.rows.map((r) => `
         <tr class="row-link" onclick="window.location='/equipment/${r.id}'">
           <td>${escapeHtml(r.name)}</td>
-          <td>${escapeHtml(r.category_name || '—')}</td>
           <td>${escapeHtml(r.room_name || '—')}</td>
           <td><span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
           <td>${formatDate(r.next_inspection_due)}</td>
@@ -3543,7 +3501,6 @@ app.get('/equipment', async (req, res, next) => {
           <thead>
             <tr>
               <th>Name</th>
-              <th>Category</th>
               <th>Location</th>
               <th>Status</th>
               <th>Next inspection</th>
@@ -3583,11 +3540,10 @@ app.get('/equipment', async (req, res, next) => {
 app.get('/equipment/new', async (req, res, next) => {
   try {
     const peraResult = await pool.query('SELECT id, activity_name FROM pera_records WHERE archived = false ORDER BY activity_name ASC');
-    const [maintenanceCategories, inspectionCategories, rooms, categories] = await Promise.all([
+    const [maintenanceCategories, inspectionCategories, rooms] = await Promise.all([
       fetchCriteriaLibrary('maintenance'),
       fetchCriteriaLibrary('inspection'),
       fetchActiveRooms(),
-      fetchActiveCategories(),
     ]);
     const statusOptions = EQUIPMENT_STATUSES.map((s) => `<option value="${s}" ${s === 'Operational' ? 'selected' : ''}>${s}</option>`).join('');
     const peraOptions = [
@@ -3605,8 +3561,24 @@ app.get('/equipment/new', async (req, res, next) => {
           <input type="text" id="name" name="name" required placeholder="e.g. Guillotine — light sheet metal (Workshop A)">
         </div>
         <div class="form-row">
-          <label for="category_id">Category</label>
-          ${categorySelectHtml(categories, null)}
+          <label for="make">Make</label>
+          <input type="text" id="make" name="make" placeholder="e.g. Hafco">
+        </div>
+        <div class="form-row">
+          <label for="model">Model</label>
+          <input type="text" id="model" name="model" placeholder="e.g. PT-254">
+        </div>
+        <div class="form-row">
+          <label for="serial_number">Serial number</label>
+          <input type="text" id="serial_number" name="serial_number">
+        </div>
+        <div class="form-row">
+          <label for="supplier">Supplier</label>
+          <input type="text" id="supplier" name="supplier">
+        </div>
+        <div class="form-row">
+          <label for="purchase_date">Purchase date</label>
+          <input type="date" id="purchase_date" name="purchase_date">
         </div>
         <div class="form-row">
           <label for="room_id">Location</label>
@@ -3638,7 +3610,7 @@ app.get('/equipment/new', async (req, res, next) => {
         ${criteriaPickerHtml('maintenance', maintenanceCategories, [])}
         <div class="form-row">
           <label for="notes">Notes</label>
-          <textarea id="notes" name="notes" placeholder="Serial number, maintenance history, anything else worth recording..."></textarea>
+          <textarea id="notes" name="notes" placeholder="Maintenance history, anything else worth recording..."></textarea>
         </div>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">Save equipment</button>
@@ -3658,7 +3630,7 @@ app.get('/equipment/new', async (req, res, next) => {
 app.post('/equipment', async (req, res, next) => {
   try {
     const {
-      name, category_id, new_category_name, room_id, new_room_name, status, pera_id, notes,
+      name, make, model, serial_number, supplier, purchase_date, room_id, new_room_name, status, pera_id, notes,
       inspection_frequency, maintenance_frequency,
       maintenance_criteria_ids, new_maintenance_criteria, inspection_criteria_ids, new_inspection_criteria,
     } = req.body;
@@ -3669,7 +3641,6 @@ app.post('/equipment', async (req, res, next) => {
     const frequency = EQUIPMENT_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
     const maintFrequency = EQUIPMENT_FREQUENCIES.includes(maintenance_frequency) ? maintenance_frequency : null;
     const resolvedRoomId = await resolveRoomIdFromInput(room_id, new_room_name);
-    const resolvedCategoryId = await resolveCategoryIdFromInput(category_id, new_category_name);
 
     // last_inspected/next_inspection_due and last_maintained/next_maintenance_due
     // are intentionally not set here -- a brand-new item has no check history
@@ -3677,12 +3648,14 @@ app.post('/equipment', async (req, res, next) => {
     // maintenance" actually happens on the detail page.
     const result = await pool.query(
       `INSERT INTO equipment_items
-        (name, category_id, room_id, status, pera_id, notes,
+        (name, make, model, serial_number, supplier, purchase_date, room_id, status, pera_id, notes,
          inspection_frequency, maintenance_frequency, created_by_staff_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING id`,
       [
-        normalizeText(name), resolvedCategoryId, resolvedRoomId, status,
+        normalizeText(name), normalizeText(make) || null, normalizeText(model) || null,
+        normalizeText(serial_number) || null, normalizeText(supplier) || null, purchase_date || null,
+        resolvedRoomId, status,
         pera_id || null, normalizeText(notes) || null,
         frequency, maintFrequency, req.staffUser.id,
       ]
@@ -3825,11 +3798,10 @@ app.get('/equipment/by-room', async (req, res, next) => {
 app.get('/equipment/:id', async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT e.*, p.activity_name AS pera_name, rm.name AS room_name, ec.name AS category_name
+      `SELECT e.*, p.activity_name AS pera_name, rm.name AS room_name
        FROM equipment_items e
        LEFT JOIN pera_records p ON p.id = e.pera_id
        LEFT JOIN rooms rm ON rm.id = e.room_id
-       LEFT JOIN equipment_categories ec ON ec.id = e.category_id
        WHERE e.id = $1`,
       [req.params.id]
     );
@@ -3963,7 +3935,7 @@ app.get('/equipment/:id', async (req, res, next) => {
       <div class="page-header">
         <div>
           <h1 class="page-title">${escapeHtml(r.name)}</h1>
-          <p class="page-subtitle">${escapeHtml(r.category_name || 'Equipment')}${r.room_name ? ` · ${escapeHtml(r.room_name)}` : ''}</p>
+          <p class="page-subtitle">${r.room_name ? escapeHtml(r.room_name) : 'Equipment'}</p>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px;">
           <span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
@@ -3980,6 +3952,31 @@ app.get('/equipment/:id', async (req, res, next) => {
           <div class="detail-label">Notes</div>
           <div class="detail-value">${escapeHtml(r.notes)}</div>
         </div>` : ''}
+      </div>
+      <div class="card" style="padding:22px;margin-bottom:20px;">
+        <div class="form-section-title" style="margin-top:0;">Asset details</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+          <div class="detail-section" style="margin-bottom:0;box-shadow:none;padding:0;">
+            <div class="detail-label">Make</div>
+            <div class="detail-value">${escapeHtml(r.make || '—')}</div>
+          </div>
+          <div class="detail-section" style="margin-bottom:0;box-shadow:none;padding:0;">
+            <div class="detail-label">Model</div>
+            <div class="detail-value">${escapeHtml(r.model || '—')}</div>
+          </div>
+          <div class="detail-section" style="margin-bottom:0;box-shadow:none;padding:0;">
+            <div class="detail-label">Serial number</div>
+            <div class="detail-value">${escapeHtml(r.serial_number || '—')}</div>
+          </div>
+          <div class="detail-section" style="margin-bottom:0;box-shadow:none;padding:0;">
+            <div class="detail-label">Supplier</div>
+            <div class="detail-value">${escapeHtml(r.supplier || '—')}</div>
+          </div>
+          <div class="detail-section" style="margin-bottom:0;box-shadow:none;padding:0;">
+            <div class="detail-label">Purchase date</div>
+            <div class="detail-value">${formatDate(r.purchase_date)}</div>
+          </div>
+        </div>
       </div>
       <div class="card" style="padding:22px;margin-bottom:20px;">
         <div class="form-section-title" style="margin-top:0;">Service${r.status !== 'Operational' ? ' <span style="color:#B3261E;">⚠</span>' : ''}</div>
@@ -4355,7 +4352,6 @@ function adminTabs(activeTab) {
     { key: 'cara', href: '/admin/cara', label: 'CARA' },
     { key: 'equipment', href: '/admin/equipment', label: 'Equipment' },
     { key: 'rooms', href: '/admin/rooms', label: 'Rooms' },
-    { key: 'categories', href: '/admin/categories', label: 'Categories' },
   ];
   return `
     <div class="admin-tabs">
@@ -4558,17 +4554,15 @@ app.get('/admin/cara', requireRole('admin'), async (req, res, next) => {
 app.get('/admin/equipment', requireRole('admin'), async (req, res, next) => {
   try {
     const equipmentResult = await pool.query(`
-      SELECT e.*, rm.name AS room_name, ec.name AS category_name
+      SELECT e.*, rm.name AS room_name
       FROM equipment_items e
       LEFT JOIN rooms rm ON rm.id = e.room_id
-      LEFT JOIN equipment_categories ec ON ec.id = e.category_id
       ORDER BY e.name ASC
     `);
 
     const equipmentRows = equipmentResult.rows.map((r) => `
       <tr class="row-link" onclick="window.location='/admin/equipment/${r.id}/edit'">
         <td>${escapeHtml(r.name)}</td>
-        <td>${escapeHtml(r.category_name || '—')}</td>
         <td>${escapeHtml(r.room_name || '—')}</td>
         <td><span class="badge ${equipmentBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
       </tr>
@@ -4582,12 +4576,11 @@ app.get('/admin/equipment', requireRole('admin'), async (req, res, next) => {
           <thead>
             <tr>
               <th>Name</th>
-              <th>Category</th>
               <th>Location</th>
               <th>Status</th>
             </tr>
           </thead>
-          <tbody>${equipmentRows || '<tr><td colspan="4" style="text-align:center;color:#6B6659;padding:24px;">No equipment recorded yet.</td></tr>'}</tbody>
+          <tbody>${equipmentRows || '<tr><td colspan="3" style="text-align:center;color:#6B6659;padding:24px;">No equipment recorded yet.</td></tr>'}</tbody>
         </table>
       </div>
     `;
@@ -4739,130 +4732,6 @@ app.post('/admin/rooms/:id/restore', requireRole('admin'), async (req, res, next
   try {
     await pool.query('UPDATE rooms SET archived = false WHERE id = $1', [req.params.id]);
     res.redirect('/admin/rooms');
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ---------- Admin: Categories ----------
-// Same pattern as Admin > Rooms just above -- see the equipment_categories
-// comment in db.js for why equipment's Category needed this instead of
-// reusing the PERA activity-name list.
-
-app.get('/admin/categories', requireRole('admin'), async (req, res, next) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM equipment_categories ORDER BY archived ASC, name ASC');
-    const activeCategories = rows.filter((cat) => !cat.archived);
-    const archivedCategories = rows.filter((cat) => cat.archived);
-
-    const activeRowsHtml = activeCategories.map((cat) => `
-      <tr>
-        <td>
-          <form method="post" action="/admin/categories/${cat.id}" style="display:flex;gap:8px;align-items:center;">
-            <input type="text" name="name" value="${escapeHtml(cat.name)}" required style="flex:1;padding:6px 8px;border:1px solid #E4DFD3;border-radius:6px;font-size:13px;">
-            <button type="submit" class="btn btn-secondary" style="padding:6px 12px;flex-shrink:0;">Save</button>
-          </form>
-        </td>
-        <td style="width:1%;white-space:nowrap;">
-          <form method="post" action="/admin/categories/${cat.id}/archive">
-            <button type="submit" class="btn btn-secondary" style="padding:6px 12px;">Archive</button>
-          </form>
-        </td>
-      </tr>
-    `).join('');
-
-    const archivedHtml = archivedCategories.length ? `
-      <div class="form-section-title">Archived categories</div>
-      <div class="form-section-hint" style="margin:0 0 12px 0;">Hidden from the category picker on equipment, but any item already using one keeps showing it.</div>
-      <div class="card">
-        <table>
-          <tbody>
-            ${archivedCategories.map((cat) => `
-              <tr>
-                <td>${escapeHtml(cat.name)}</td>
-                <td style="width:1%;white-space:nowrap;">
-                  <form method="post" action="/admin/categories/${cat.id}/restore">
-                    <button type="submit" class="btn btn-secondary" style="padding:6px 12px;">Restore</button>
-                  </form>
-                </td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-    ` : '';
-
-    const body = `
-      ${adminHeader('Categories', 'The categories equipment can be tagged with. Rename or archive one here rather than retyping it on every item.')}
-      ${adminTabs('categories')}
-      <div class="card">
-        <table>
-          <thead><tr><th>Category</th><th></th></tr></thead>
-          <tbody>${activeRowsHtml || '<tr><td colspan="2" style="text-align:center;color:#6B6659;padding:24px;">No categories yet.</td></tr>'}</tbody>
-        </table>
-      </div>
-
-      <div class="form-section-title">Add a category</div>
-      <form class="form-card" method="post" action="/admin/categories" style="max-width:480px;">
-        <div class="form-row">
-          <label for="name">Category name</label>
-          <input type="text" id="name" name="name" required placeholder="e.g. Machinery — Wood">
-        </div>
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary">Add category</button>
-        </div>
-      </form>
-      ${archivedHtml}
-    `;
-
-    res.send(page({ title: 'Categories', active: 'admin', body }));
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/admin/categories', requireRole('admin'), async (req, res, next) => {
-  try {
-    const name = normalizeText(req.body.name);
-    if (!name) {
-      return res.status(400).send('A category name is required. <a href="/admin/categories">Back</a>');
-    }
-    await pool.query('INSERT INTO equipment_categories (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET archived = false', [name]);
-    res.redirect('/admin/categories');
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/admin/categories/:id', requireRole('admin'), async (req, res, next) => {
-  try {
-    const name = normalizeText(req.body.name);
-    if (!name) {
-      return res.status(400).send('A category name is required. <a href="/admin/categories">Back</a>');
-    }
-    await pool.query('UPDATE equipment_categories SET name = $1 WHERE id = $2', [name, req.params.id]);
-    res.redirect('/admin/categories');
-  } catch (err) {
-    if (err && err.code === '23505') {
-      return res.status(400).send('A category with that name already exists. <a href="/admin/categories">Back</a>');
-    }
-    next(err);
-  }
-});
-
-app.post('/admin/categories/:id/archive', requireRole('admin'), async (req, res, next) => {
-  try {
-    await pool.query('UPDATE equipment_categories SET archived = true WHERE id = $1', [req.params.id]);
-    res.redirect('/admin/categories');
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/admin/categories/:id/restore', requireRole('admin'), async (req, res, next) => {
-  try {
-    await pool.query('UPDATE equipment_categories SET archived = false WHERE id = $1', [req.params.id]);
-    res.redirect('/admin/categories');
   } catch (err) {
     next(err);
   }
@@ -5395,13 +5264,12 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
     }
     const r = result.rows[0];
 
-    const [maintenanceCategories, inspectionCategories, selectedMaintenanceIds, selectedInspectionIds, rooms, categories] = await Promise.all([
+    const [maintenanceCategories, inspectionCategories, selectedMaintenanceIds, selectedInspectionIds, rooms] = await Promise.all([
       fetchCriteriaLibrary('maintenance'),
       fetchCriteriaLibrary('inspection'),
       fetchSelectedCriteriaIds('maintenance', r.id),
       fetchSelectedCriteriaIds('inspection', r.id),
       fetchRoomsForSelect(r.room_id),
-      fetchCategoriesForSelect(r.category_id),
     ]);
 
     const peraResult = await pool.query('SELECT id, activity_name FROM pera_records WHERE archived = false OR id = $1 ORDER BY activity_name ASC', [r.pera_id]);
@@ -5427,8 +5295,24 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
           <input type="text" id="name" name="name" value="${escapeHtml(r.name)}" required>
         </div>
         <div class="form-row">
-          <label for="category_id">Category</label>
-          ${categorySelectHtml(categories, r.category_id)}
+          <label for="make">Make</label>
+          <input type="text" id="make" name="make" value="${escapeHtml(r.make || '')}" placeholder="e.g. Hafco">
+        </div>
+        <div class="form-row">
+          <label for="model">Model</label>
+          <input type="text" id="model" name="model" value="${escapeHtml(r.model || '')}" placeholder="e.g. PT-254">
+        </div>
+        <div class="form-row">
+          <label for="serial_number">Serial number</label>
+          <input type="text" id="serial_number" name="serial_number" value="${escapeHtml(r.serial_number || '')}">
+        </div>
+        <div class="form-row">
+          <label for="supplier">Supplier</label>
+          <input type="text" id="supplier" name="supplier" value="${escapeHtml(r.supplier || '')}">
+        </div>
+        <div class="form-row">
+          <label for="purchase_date">Purchase date</label>
+          <input type="date" id="purchase_date" name="purchase_date" value="${toDateInputValue(r.purchase_date)}">
         </div>
         <div class="form-row">
           <label for="room_id">Location</label>
@@ -5482,7 +5366,7 @@ app.get('/admin/equipment/:id/edit', requireRole('admin'), async (req, res, next
 app.post('/admin/equipment/:id', requireRole('admin'), async (req, res, next) => {
   try {
     const {
-      name, category_id, new_category_name, room_id, new_room_name, status, pera_id, notes,
+      name, make, model, serial_number, supplier, purchase_date, room_id, new_room_name, status, pera_id, notes,
       inspection_frequency, maintenance_frequency,
       maintenance_criteria_ids, new_maintenance_criteria, inspection_criteria_ids, new_inspection_criteria,
     } = req.body;
@@ -5507,18 +5391,20 @@ app.post('/admin/equipment/:id', requireRole('admin'), async (req, res, next) =>
     const frequency = EQUIPMENT_FREQUENCIES.includes(inspection_frequency) ? inspection_frequency : null;
     const maintFrequency = EQUIPMENT_FREQUENCIES.includes(maintenance_frequency) ? maintenance_frequency : null;
     const resolvedRoomId = await resolveRoomIdFromInput(room_id, new_room_name);
-    const resolvedCategoryId = await resolveCategoryIdFromInput(category_id, new_category_name);
 
     // last_inspected/next_inspection_due and last_maintained/next_maintenance_due
     // are intentionally left alone here -- they're no longer editable by hand,
     // only ever set by actually logging an inspection/maintenance check.
     await pool.query(
       `UPDATE equipment_items SET
-         name = $1, category_id = $2, room_id = $3, status = $4, pera_id = $5,
-         notes = $6, inspection_frequency = $7, maintenance_frequency = $8, updated_at = now()
-       WHERE id = $9`,
+         name = $1, make = $2, model = $3, serial_number = $4, supplier = $5, purchase_date = $6,
+         room_id = $7, status = $8, pera_id = $9,
+         notes = $10, inspection_frequency = $11, maintenance_frequency = $12, updated_at = now()
+       WHERE id = $13`,
       [
-        normalizeText(name), resolvedCategoryId, resolvedRoomId, status,
+        normalizeText(name), normalizeText(make) || null, normalizeText(model) || null,
+        normalizeText(serial_number) || null, normalizeText(supplier) || null, purchase_date || null,
+        resolvedRoomId, status,
         pera_id || null, normalizeText(notes) || null,
         frequency, maintFrequency,
         req.params.id,

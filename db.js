@@ -808,6 +808,17 @@ async function migrate() {
     FROM equipment_categories ec
     WHERE e.category_id IS NULL AND e.category IS NOT NULL AND trim(e.category) = ec.name;
   `);
+
+  // Category (and its equipment_categories table above) turned out not to
+  // be what was wanted -- it's dropped from the equipment pages in favour
+  // of plain asset-record fields below. Neither the table nor
+  // category/category_id are removed here (nothing in this codebase drops
+  // a column), they're just unused going forward.
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS make TEXT;`);
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS model TEXT;`);
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS serial_number TEXT;`);
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS purchase_date DATE;`);
+  await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS supplier TEXT;`);
 }
 
 module.exports = { pool, migrate };
