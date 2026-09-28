@@ -3882,6 +3882,13 @@ app.post('/equipment/:id/inspection-check', async (req, res, next) => {
     const performedBy = formSubmitted ? (normalizeText(req.body.performed_by) || null) : null;
     const notes = formSubmitted ? (normalizeText(req.body.notes) || null) : null;
 
+    // A failed ("cross") criterion means the item isn't safe to keep using
+    // as-is, so a single failure automatically takes it out of service --
+    // it stays that way until someone manually changes the status back
+    // (via the edit form), which is a deliberate, visible decision rather
+    // than something a later passing inspection silently undoes.
+    const hasFailure = completedCriteria.some((c) => c.status === 'no');
+
     const today = new Date();
     const nextDue = computeNextDue(today, r.inspection_frequency);
 
@@ -3894,6 +3901,9 @@ app.post('/equipment/:id/inspection-check', async (req, res, next) => {
       `UPDATE equipment_items SET last_inspected = $1, next_inspection_due = $2, updated_at = now() WHERE id = $3`,
       [today, nextDue, r.id]
     );
+    if (hasFailure) {
+      await pool.query(`UPDATE equipment_items SET status = 'Out of service', updated_at = now() WHERE id = $1`, [r.id]);
+    }
 
     res.redirect(req.body.return_to === 'by-room' ? '/equipment/by-room' : `/equipment/${r.id}`);
   } catch (err) {
@@ -3921,6 +3931,10 @@ app.post('/equipment/:id/maintenance-check', async (req, res, next) => {
     const performedBy = normalizeText(req.body.performed_by) || null;
     const notes = normalizeText(req.body.notes) || null;
 
+    // Same rule as inspections: a failed criterion automatically takes the
+    // item out of service until someone manually restores the status.
+    const hasFailure = completedCriteria.some((c) => c.status === 'no');
+
     const today = new Date();
     const nextDue = computeNextDue(today, r.maintenance_frequency);
 
@@ -3933,6 +3947,9 @@ app.post('/equipment/:id/maintenance-check', async (req, res, next) => {
       `UPDATE equipment_items SET last_maintained = $1, next_maintenance_due = $2, updated_at = now() WHERE id = $3`,
       [today, nextDue, r.id]
     );
+    if (hasFailure) {
+      await pool.query(`UPDATE equipment_items SET status = 'Out of service', updated_at = now() WHERE id = $1`, [r.id]);
+    }
 
     res.redirect(`/equipment/${r.id}`);
   } catch (err) {
