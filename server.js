@@ -1708,7 +1708,12 @@ app.get('/cara/new', async (req, res, next) => {
   try {
     const toolsResult = await pool.query(
       `SELECT id, activity_name, class_unit, risk_level FROM pera_records
-       WHERE status = 'Approved' AND archived = false ORDER BY class_unit NULLS LAST, activity_name`
+       WHERE status = 'Approved' AND archived = false
+         AND EXISTS (
+           SELECT 1 FROM equipment_items
+           WHERE equipment_items.pera_id = pera_records.id AND equipment_items.status = 'Operational'
+         )
+       ORDER BY class_unit NULLS LAST, activity_name`
     );
 
     const groups = new Map();
@@ -1969,7 +1974,13 @@ app.get('/cara/:id/edit', async (req, res, next) => {
 
     const toolsResult = await pool.query(
       `SELECT DISTINCT pr.id, pr.activity_name, pr.class_unit, pr.risk_level FROM pera_records pr
-       WHERE (pr.status = 'Approved' AND pr.archived = false) OR pr.id IN (SELECT pera_id FROM cara_tool_links WHERE cara_id = $1)
+       WHERE (
+         pr.status = 'Approved' AND pr.archived = false
+         AND EXISTS (
+           SELECT 1 FROM equipment_items ei
+           WHERE ei.pera_id = pr.id AND ei.status = 'Operational'
+         )
+       ) OR pr.id IN (SELECT pera_id FROM cara_tool_links WHERE cara_id = $1)
        ORDER BY pr.class_unit NULLS LAST, pr.activity_name`,
       [req.params.id]
     );
