@@ -1198,9 +1198,9 @@ app.get('/pera/:id', async (req, res, next) => {
               <col style="width:9%;">
               <col style="width:7%;">
               <col style="width:35%;">
+              <col style="width:12%;">
+              <col style="width:8%;">
               <col style="width:9%;">
-              <col style="width:9%;">
-              <col style="width:11%;">
             </colgroup>
             <thead>
               <tr><th>Hazard</th><th>Category</th><th>Risk</th><th>Control measure</th><th>Type</th><th>Mandatory</th><th>Applies to</th></tr>
