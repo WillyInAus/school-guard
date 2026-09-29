@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
+const multer = require('multer');
 const { pool, migrate } = require('./db');
 const { page, escapeHtml } = require('./views/layout');
 
@@ -37,6 +38,37 @@ const APPROVAL_REQUIRED_LEVELS = ['Principal', 'Delegate', 'HOD', 'WHS Officer']
 const HAZARD_APPLIES_TO = ['Staff', 'Students', 'Both'];
 const MIN_REQUIREMENT_STATUSES = ['Current', 'Required', 'Due Soon', 'Missing'];
 const DOCUMENT_CATEGORIES = ['SOP', 'Manufacturer manual', 'Equipment Maintenance Record', 'Student induction record', 'Staff competency record', 'Previous risk assessment', 'Other'];
+
+// Related documents on a PERA can now be an actual uploaded file (stored
+// straight in Postgres as bytea, not on the app container's disk -- that
+// disk doesn't survive a "docker compose up --build") instead of just a
+// link to somewhere else. Kept to common office/document/image formats;
+// anything else is rejected with a clear error rather than silently
+// stored as an unrecognised blob.
+const DOCUMENT_UPLOAD_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'text/plain',
+]);
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
+  fileFilter: (req, file, cb) => {
+    if (!DOCUMENT_UPLOAD_MIME_TYPES.has(file.mimetype)) {
+      return cb(new Error('UNSUPPORTED_FILE_TYPE'));
+    }
+    cb(null, true);
+  },
+});
 
 // Seeded onto every new PERA as pera_min_requirements rows (see POST /pera
 // below), each starting at status 'Required' until someone marks it
@@ -1144,29 +1176,35 @@ app.get('/pera/:id', async (req, res, next) => {
     const documentsHtml = `
       ${documentsResult.rows.length ? `
         <div class="min-req-list" style="margin-bottom:16px;">
-          ${documentsResult.rows.map((d) => `
+          ${documentsResult.rows.map((d) => {
+            const link = d.file_data ? `/pera/${r.id}/documents/${d.id}/file` : d.url;
+            const sizeHint = d.file_data ? ` (${formatFileSize(d.file_size)})` : '';
+            return `
             <div class="min-req-item" style="justify-content:space-between;">
-              <div><span class="badge badge-draft">${escapeHtml(d.category || 'Other')}</span> ${d.url ? `<a href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.title)}</a>` : escapeHtml(d.title)}${d.notes ? ` — ${escapeHtml(d.notes)}` : ''}</div>
+              <div><span class="badge badge-draft">${escapeHtml(d.category || 'Other')}</span> ${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener">${escapeHtml(d.title)}</a>${sizeHint}` : escapeHtml(d.title)}${d.notes ? ` — ${escapeHtml(d.notes)}` : ''}</div>
               ${canEdit ? `
                 <form method="post" action="/pera/${r.id}/documents/${d.id}/delete" onsubmit="return confirm('Remove this document?');">
                   <button type="submit" class="btn btn-secondary" style="padding:4px 10px;font-size:13px;">Remove</button>
                 </form>
               ` : ''}
             </div>
-          `).join('')}
+          `;
+          }).join('')}
         </div>
       ` : `<div class="empty-state" style="margin-bottom:16px;">No related documents yet.</div>`}
       ${canEdit ? `
-        <form class="form-card" method="post" action="/pera/${r.id}/documents" style="max-width:520px;">
+        <form class="form-card" method="post" action="/pera/${r.id}/documents" enctype="multipart/form-data" style="max-width:520px;">
           <div class="form-row">
             <label for="doc_category">Type</label>
             <select id="doc_category" name="category" required>
               ${DOCUMENT_CATEGORIES.map((c) => `<option value="${c}">${c}</option>`).join('')}
             </select>
           </div>
-          <div class="form-row"><label for="doc_title">Title</label><input type="text" id="doc_title" name="title" required placeholder="e.g. Bench grinder manual"></div>
-          <div class="form-row"><label for="doc_url">Link (optional)</label><input type="text" id="doc_url" name="url" placeholder="https://..."></div>
+          <div class="form-row"><label for="doc_file">Upload a file</label><input type="file" id="doc_file" name="file"></div>
+          <div class="form-row"><label for="doc_url">Or a link instead</label><input type="text" id="doc_url" name="url" placeholder="https://..."></div>
+          <div class="form-row"><label for="doc_title">Title</label><input type="text" id="doc_title" name="title" placeholder="e.g. Bench grinder manual (defaults to the file name if left blank)"></div>
           <div class="form-row"><label for="doc_notes">Notes (optional)</label><input type="text" id="doc_notes" name="notes"></div>
+          <div class="form-section-hint">Upload a file (PDF, Word, Excel, PowerPoint, text, or an image) up to 20MB, or paste a link if it's kept somewhere else.</div>
           <div class="form-actions"><button type="submit" class="btn btn-secondary">Add document</button></div>
         </form>
       ` : ''}
@@ -1511,7 +1549,17 @@ app.post('/pera/:id/requirements', async (req, res, next) => {
 
 // ---------- PERA: related documents ----------
 
-app.post('/pera/:id/documents', async (req, res, next) => {
+app.post('/pera/:id/documents', (req, res, next) => {
+  documentUpload.single('file')(req, res, (err) => {
+    if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).send('That file is too large -- the limit is 20MB. <a href="/pera/' + req.params.id + '">Back</a>');
+    }
+    if (err) {
+      return res.status(400).send('That file type isn\'t supported. Allowed: PDF, Word, Excel, PowerPoint, a plain text file, or an image (JPG/PNG/GIF/WEBP). <a href="/pera/' + req.params.id + '">Back</a>');
+    }
+    next();
+  });
+}, async (req, res, next) => {
   try {
     const recordResult = await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id]);
     if (recordResult.rows.length === 0) {
@@ -1520,16 +1568,45 @@ app.post('/pera/:id/documents', async (req, res, next) => {
     if (!canManageOwnRecord(req.staffUser, recordResult.rows[0])) {
       return res.status(403).send('You can only add documents to PERA records you created yourself. <a href="/pera/' + req.params.id + '">Back</a>');
     }
-    const normalizedTitle = normalizeText(req.body.title || '').trim();
+    const normalizedTitle = normalizeText(req.body.title || '').trim()
+      || (req.file ? normalizeText(req.file.originalname) : '');
     if (!normalizedTitle) {
       return res.status(400).send('A title is required. <a href="/pera/' + req.params.id + '">Back</a>');
     }
+    if (!req.file && !normalizeText(req.body.url)) {
+      return res.status(400).send('Upload a file or provide a link. <a href="/pera/' + req.params.id + '">Back</a>');
+    }
     const category = DOCUMENT_CATEGORIES.includes(req.body.category) ? req.body.category : 'Other';
     await pool.query(
-      'INSERT INTO pera_documents (pera_id, title, url, notes, added_by, category) VALUES ($1,$2,$3,$4,$5,$6)',
-      [req.params.id, normalizedTitle, normalizeText(req.body.url) || null, normalizeText(req.body.notes) || null, req.staffUser.name, category]
+      `INSERT INTO pera_documents (pera_id, title, url, notes, added_by, category, file_data, file_name, file_mime, file_size)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [
+        req.params.id, normalizedTitle, normalizeText(req.body.url) || null, normalizeText(req.body.notes) || null, req.staffUser.name, category,
+        req.file ? req.file.buffer : null,
+        req.file ? req.file.originalname : null,
+        req.file ? req.file.mimetype : null,
+        req.file ? req.file.size : null,
+      ]
     );
     res.redirect(`/pera/${req.params.id}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/pera/:id/documents/:docId/file', async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      'SELECT file_data, file_name, file_mime FROM pera_documents WHERE id = $1 AND pera_id = $2',
+      [req.params.docId, req.params.id]
+    );
+    if (result.rows.length === 0 || !result.rows[0].file_data) {
+      return res.status(404).send('File not found.');
+    }
+    const { file_data, file_name, file_mime } = result.rows[0];
+    res.setHeader('Content-Type', file_mime || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${(file_name || 'document').replace(/"/g, '')}"`);
+    res.send(file_data);
   } catch (err) {
     next(err);
   }
@@ -3393,6 +3470,13 @@ function toDateInputValue(d) {
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const dd = String(date.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatFileSize(bytes) {
+  if (!bytes && bytes !== 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
 // ---- Rooms (equipment's "Location" picker) -------------------------------

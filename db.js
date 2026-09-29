@@ -819,6 +819,16 @@ async function migrate() {
   await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS serial_number TEXT;`);
   await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS purchase_date DATE;`);
   await pool.query(`ALTER TABLE equipment_items ADD COLUMN IF NOT EXISTS supplier TEXT;`);
+
+  // PERA related documents can now actually be uploaded and stored (as
+  // opposed to only being a link to somewhere else) -- stored as bytea
+  // directly in Postgres rather than on the container's local disk, since
+  // that already has a persistent volume (unlike the app container, whose
+  // filesystem is thrown away on every "docker compose up --build").
+  await pool.query(`ALTER TABLE pera_documents ADD COLUMN IF NOT EXISTS file_data BYTEA;`);
+  await pool.query(`ALTER TABLE pera_documents ADD COLUMN IF NOT EXISTS file_name TEXT;`);
+  await pool.query(`ALTER TABLE pera_documents ADD COLUMN IF NOT EXISTS file_mime TEXT;`);
+  await pool.query(`ALTER TABLE pera_documents ADD COLUMN IF NOT EXISTS file_size INTEGER;`);
 }
 
 module.exports = { pool, migrate };
