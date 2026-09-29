@@ -438,7 +438,7 @@ table {
    below, which would otherwise win and squash this back down. */
 .card:has(> table.hazards-table) table.hazards-table {
   table-layout: fixed;
-  min-width: 840px;
+  min-width: 1050px;
 }
 
 .hazards-table td,
