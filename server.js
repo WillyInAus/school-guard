@@ -75,7 +75,14 @@ const documentUpload = multer({
 });
 
 const execFileAsync = util.promisify(execFile);
-const THUMBNAIL_SIZE = 700;
+// A photo just needs to comfortably out-resolve the ~500px display size
+// (including on a retina screen), so it's capped lower than a rendered PDF
+// page, which needs real DPI for its text to look sharp once magnified --
+// a normal A4/Letter page at 200dpi is up to ~2340px tall, so that cap is
+// set high enough to leave a normal page untouched and only kick in for
+// something unusual (e.g. an A0 poster).
+const IMAGE_THUMBNAIL_MAX_DIMENSION = 1200;
+const PDF_THUMBNAIL_MAX_DIMENSION = 2400;
 
 // Renders a small preview thumbnail for an uploaded document, if it's a
 // type that has a sensible one: an image is just resized down, and a PDF
@@ -88,7 +95,7 @@ async function generateDocumentThumbnail(buffer, mimetype) {
   try {
     if (mimetype.startsWith('image/')) {
       return await sharp(buffer)
-        .resize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, { fit: 'inside', withoutEnlargement: true })
+        .resize(IMAGE_THUMBNAIL_MAX_DIMENSION, IMAGE_THUMBNAIL_MAX_DIMENSION, { fit: 'inside', withoutEnlargement: true })
         .png()
         .toBuffer();
     }
@@ -107,12 +114,21 @@ async function renderPdfFirstPageThumbnail(buffer) {
   const outPath = path.join(tmpDir, 'out');
   try {
     fs.writeFileSync(pdfPath, buffer);
+    // Render at a fixed 200 DPI rather than a fixed pixel width -- a pixel
+    // width target was coming out far too low-resolution for readable text
+    // (a normal A4 page at 700px wide is only ~85dpi, which looks fuzzy
+    // once displayed at 500px). 200dpi keeps text crisp; the resize below
+    // then caps the result in case of an oversized physical page.
     await execFileAsync('pdftoppm', [
       '-png', '-f', '1', '-l', '1',
-      '-scale-to-x', String(THUMBNAIL_SIZE), '-scale-to-y', '-1',
+      '-r', '200',
       '-singlefile', pdfPath, outPath,
     ]);
-    return fs.readFileSync(`${outPath}.png`);
+    const rendered = fs.readFileSync(`${outPath}.png`);
+    return await sharp(rendered)
+      .resize(PDF_THUMBNAIL_MAX_DIMENSION, PDF_THUMBNAIL_MAX_DIMENSION, { fit: 'inside', withoutEnlargement: true })
+      .png()
+      .toBuffer();
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
