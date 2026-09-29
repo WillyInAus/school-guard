@@ -1197,13 +1197,13 @@ app.get('/pera/:id', async (req, res, next) => {
               <col style="width:20%;">
               <col style="width:9%;">
               <col style="width:7%;">
-              <col style="width:34%;">
+              <col style="width:35%;">
               <col style="width:12%;">
               <col style="width:8%;">
-              <col style="width:10%;">
+              <col style="width:9%;">
             </colgroup>
             <thead>
-              <tr><th>Hazard</th><th title="Category" style="cursor:help;">C</th><th title="Risk" style="cursor:help;">R</th><th>Control measure</th><th title="Type" style="cursor:help;">T</th><th title="Mandatory" style="cursor:help;">M</th><th title="Applies to" style="cursor:help;">A</th></tr>
+              <tr><th>Hazard</th><th>Category</th><th>Risk</th><th>Control measure</th><th>Type</th><th>Mandatory</th><th>Applies to</th></tr>
             </thead>
             <tbody>
               ${hazardsResult.rows.map((h) => `
