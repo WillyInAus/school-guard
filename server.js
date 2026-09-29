@@ -1249,10 +1249,10 @@ app.get('/pera/:id', async (req, res, next) => {
             const link = d.has_file ? `/pera/${r.id}/documents/${d.id}/file` : d.url;
             const sizeHint = d.has_file ? ` (${formatFileSize(d.file_size)})` : '';
             const previewHtml = d.has_thumbnail
-              ? `<img src="/pera/${r.id}/documents/${d.id}/thumbnail" alt="" style="width:500px;max-width:100%;height:auto;display:block;border-radius:8px;border:1px solid #E3DFD3;">`
-              : `<div style="width:500px;max-width:100%;height:140px;border-radius:8px;background:#F0EDE5;color:#6B6659;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:600;">${escapeHtml(documentFileExtLabel(d))}</div>`;
+              ? `<img src="/pera/${r.id}/documents/${d.id}/thumbnail" alt="" style="width:125px;max-width:100%;height:auto;display:block;border-radius:8px;border:1px solid #E3DFD3;">`
+              : `<div style="width:125px;max-width:100%;height:125px;border-radius:8px;background:#F0EDE5;color:#6B6659;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;">${escapeHtml(documentFileExtLabel(d))}</div>`;
             return `
-            <div class="card" style="padding:14px;width:500px;max-width:100%;">
+            <div class="card" style="padding:14px;width:125px;max-width:100%;">
               ${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener">${previewHtml}</a>` : previewHtml}
               <div style="margin-top:10px;"><span class="badge badge-draft">${escapeHtml(d.category || 'Other')}</span> ${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener">${escapeHtml(d.title)}</a>${sizeHint}` : escapeHtml(d.title)}${d.notes ? ` — ${escapeHtml(d.notes)}` : ''}</div>
               ${canEdit ? `
