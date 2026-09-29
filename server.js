@@ -1197,9 +1197,9 @@ app.get('/pera/:id', async (req, res, next) => {
               <col style="width:20%;">
               <col style="width:9%;">
               <col style="width:7%;">
-              <col style="width:32%;">
+              <col style="width:35%;">
               <col style="width:9%;">
-              <col style="width:12%;">
+              <col style="width:9%;">
               <col style="width:11%;">
             </colgroup>
             <thead>
