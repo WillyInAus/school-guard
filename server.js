@@ -1,9 +1,13 @@
 const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const util = require('util');
+const { execFile } = require('child_process');
 const PDFDocument = require('pdfkit');
 const multer = require('multer');
+const sharp = require('sharp');
 const { pool, migrate } = require('./db');
 const { page, escapeHtml } = require('./views/layout');
 
@@ -69,6 +73,50 @@ const documentUpload = multer({
     cb(null, true);
   },
 });
+
+const execFileAsync = util.promisify(execFile);
+const THUMBNAIL_SIZE = 160;
+
+// Renders a small preview thumbnail for an uploaded document, if it's a
+// type that has a sensible one: an image is just resized down, and a PDF
+// is rendered from its first page via poppler's pdftoppm (installed in the
+// Docker image -- see Dockerfile). Anything else (Word/Excel/PowerPoint/
+// text) gets no thumbnail and falls back to a generic icon in the UI.
+// Never throws -- a broken/unusual file just ends up with no thumbnail
+// rather than failing the whole upload.
+async function generateDocumentThumbnail(buffer, mimetype) {
+  try {
+    if (mimetype.startsWith('image/')) {
+      return await sharp(buffer)
+        .resize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, { fit: 'inside', withoutEnlargement: true })
+        .png()
+        .toBuffer();
+    }
+    if (mimetype === 'application/pdf') {
+      return await renderPdfFirstPageThumbnail(buffer);
+    }
+  } catch (err) {
+    console.warn('Thumbnail generation failed:', err.message);
+  }
+  return null;
+}
+
+async function renderPdfFirstPageThumbnail(buffer) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sop-thumb-'));
+  const pdfPath = path.join(tmpDir, 'input.pdf');
+  const outPath = path.join(tmpDir, 'out');
+  try {
+    fs.writeFileSync(pdfPath, buffer);
+    await execFileAsync('pdftoppm', [
+      '-png', '-f', '1', '-l', '1',
+      '-scale-to-x', String(THUMBNAIL_SIZE), '-scale-to-y', '-1',
+      '-singlefile', pdfPath, outPath,
+    ]);
+    return fs.readFileSync(`${outPath}.png`);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
 
 // Seeded onto every new PERA as pera_min_requirements rows (see POST /pera
 // below), each starting at status 'Required' until someone marks it
@@ -1086,7 +1134,12 @@ app.get('/pera/:id', async (req, res, next) => {
     const [hazardsResult, requirementsResult, documentsResult, reviewsResult, changeLogResult] = await Promise.all([
       pool.query('SELECT * FROM pera_hazards WHERE pera_id = $1 ORDER BY sort_order, id', [req.params.id]),
       pool.query('SELECT * FROM pera_min_requirements WHERE pera_id = $1 ORDER BY sort_order, id', [req.params.id]),
-      pool.query('SELECT * FROM pera_documents WHERE pera_id = $1 ORDER BY added_at DESC', [req.params.id]),
+      pool.query(
+        `SELECT id, pera_id, title, url, notes, added_by, added_at, category, file_name, file_mime, file_size,
+                (file_data IS NOT NULL) AS has_file, (thumbnail_data IS NOT NULL) AS has_thumbnail
+         FROM pera_documents WHERE pera_id = $1 ORDER BY added_at DESC`,
+        [req.params.id]
+      ),
       pool.query('SELECT * FROM pera_annual_reviews WHERE pera_id = $1 ORDER BY reviewed_at DESC', [req.params.id]),
       pool.query('SELECT * FROM pera_change_log WHERE pera_id = $1 ORDER BY changed_at DESC', [req.params.id]),
     ]);
@@ -1177,11 +1230,17 @@ app.get('/pera/:id', async (req, res, next) => {
       ${documentsResult.rows.length ? `
         <div class="min-req-list" style="margin-bottom:16px;">
           ${documentsResult.rows.map((d) => {
-            const link = d.file_data ? `/pera/${r.id}/documents/${d.id}/file` : d.url;
-            const sizeHint = d.file_data ? ` (${formatFileSize(d.file_size)})` : '';
+            const link = d.has_file ? `/pera/${r.id}/documents/${d.id}/file` : d.url;
+            const sizeHint = d.has_file ? ` (${formatFileSize(d.file_size)})` : '';
+            const iconHtml = d.has_thumbnail
+              ? `<img src="/pera/${r.id}/documents/${d.id}/thumbnail" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid #E3DFD3;flex:0 0 auto;">`
+              : `<div style="width:44px;height:44px;border-radius:6px;background:#F0EDE5;color:#6B6659;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;flex:0 0 auto;">${escapeHtml(documentFileExtLabel(d))}</div>`;
             return `
-            <div class="min-req-item" style="justify-content:space-between;">
-              <div><span class="badge badge-draft">${escapeHtml(d.category || 'Other')}</span> ${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener">${escapeHtml(d.title)}</a>${sizeHint}` : escapeHtml(d.title)}${d.notes ? ` — ${escapeHtml(d.notes)}` : ''}</div>
+            <div class="min-req-item" style="justify-content:space-between;align-items:center;">
+              <div style="display:flex;align-items:center;gap:10px;">
+                ${iconHtml}
+                <div><span class="badge badge-draft">${escapeHtml(d.category || 'Other')}</span> ${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener">${escapeHtml(d.title)}</a>${sizeHint}` : escapeHtml(d.title)}${d.notes ? ` — ${escapeHtml(d.notes)}` : ''}</div>
+              </div>
               ${canEdit ? `
                 <form method="post" action="/pera/${r.id}/documents/${d.id}/delete" onsubmit="return confirm('Remove this document?');">
                   <button type="submit" class="btn btn-secondary" style="padding:4px 10px;font-size:13px;">Remove</button>
@@ -1577,15 +1636,17 @@ app.post('/pera/:id/documents', (req, res, next) => {
       return res.status(400).send('Upload a file or provide a link. <a href="/pera/' + req.params.id + '">Back</a>');
     }
     const category = DOCUMENT_CATEGORIES.includes(req.body.category) ? req.body.category : 'Other';
+    const thumbnailData = req.file ? await generateDocumentThumbnail(req.file.buffer, req.file.mimetype) : null;
     await pool.query(
-      `INSERT INTO pera_documents (pera_id, title, url, notes, added_by, category, file_data, file_name, file_mime, file_size)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      `INSERT INTO pera_documents (pera_id, title, url, notes, added_by, category, file_data, file_name, file_mime, file_size, thumbnail_data)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [
         req.params.id, normalizedTitle, normalizeText(req.body.url) || null, normalizeText(req.body.notes) || null, req.staffUser.name, category,
         req.file ? req.file.buffer : null,
         req.file ? req.file.originalname : null,
         req.file ? req.file.mimetype : null,
         req.file ? req.file.size : null,
+        thumbnailData,
       ]
     );
     res.redirect(`/pera/${req.params.id}`);
@@ -1607,6 +1668,23 @@ app.get('/pera/:id/documents/:docId/file', async (req, res, next) => {
     res.setHeader('Content-Type', file_mime || 'application/octet-stream');
     res.setHeader('Content-Disposition', `inline; filename="${(file_name || 'document').replace(/"/g, '')}"`);
     res.send(file_data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/pera/:id/documents/:docId/thumbnail', async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      'SELECT thumbnail_data FROM pera_documents WHERE id = $1 AND pera_id = $2',
+      [req.params.docId, req.params.id]
+    );
+    if (result.rows.length === 0 || !result.rows[0].thumbnail_data) {
+      return res.status(404).send('No thumbnail.');
+    }
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(result.rows[0].thumbnail_data);
   } catch (err) {
     next(err);
   }
@@ -3477,6 +3555,17 @@ function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+// Short label shown in the generic file icon for a related document that
+// has no thumbnail (an uploaded Word/Excel/PowerPoint/text file, or a
+// link with nothing uploaded at all).
+function documentFileExtLabel(d) {
+  if (d.has_file && d.file_name) {
+    const ext = d.file_name.includes('.') ? d.file_name.split('.').pop() : '';
+    if (ext && ext.length <= 5) return ext.toUpperCase();
+  }
+  return d.has_file ? 'FILE' : 'LINK';
 }
 
 // ---- Rooms (equipment's "Location" picker) -------------------------------

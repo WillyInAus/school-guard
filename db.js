@@ -829,6 +829,12 @@ async function migrate() {
   await pool.query(`ALTER TABLE pera_documents ADD COLUMN IF NOT EXISTS file_name TEXT;`);
   await pool.query(`ALTER TABLE pera_documents ADD COLUMN IF NOT EXISTS file_mime TEXT;`);
   await pool.query(`ALTER TABLE pera_documents ADD COLUMN IF NOT EXISTS file_size INTEGER;`);
+
+  // Small preview thumbnail (PNG/JPEG bytes) generated at upload time for an
+  // uploaded PDF (first page) or image -- null for a link-only document, or
+  // an uploaded file type thumbnails aren't generated for (Word/Excel/
+  // PowerPoint/text), which just show a generic icon instead.
+  await pool.query(`ALTER TABLE pera_documents ADD COLUMN IF NOT EXISTS thumbnail_data BYTEA;`);
 }
 
 module.exports = { pool, migrate };
