@@ -1195,25 +1195,27 @@ app.get('/pera/:id', async (req, res, next) => {
           <table class="hazards-table">
             <colgroup>
               <col style="width:20%;">
-              <col style="width:9%;">
-              <col style="width:7%;">
-              <col style="width:35%;">
-              <col style="width:12%;">
-              <col style="width:8%;">
-              <col style="width:9%;">
+              <col style="width:16%;">
+              <col style="width:34%;">
+              <col style="width:20%;">
+              <col style="width:10%;">
             </colgroup>
             <thead>
-              <tr><th>Hazard</th><th>Category</th><th>Risk</th><th>Control measure</th><th>Type</th><th>Mandatory</th><th>Applies to</th></tr>
+              <tr><th>Hazard</th><th>Category / Risk</th><th>Control measure</th><th>Type / Mandatory</th><th>Applies to</th></tr>
             </thead>
             <tbody>
               ${hazardsResult.rows.map((h) => `
                 <tr>
                   <td>${escapeHtml(h.description)}</td>
-                  <td>${escapeHtml(h.category || '—')}</td>
-                  <td>${h.risk_level ? `<span class="badge ${riskBadgeClass(h.risk_level)}">${escapeHtml(h.risk_level)}</span>` : '—'}</td>
+                  <td>
+                    <div>${escapeHtml(h.category || '—')}</div>
+                    <div style="margin-top:8px;">${h.risk_level ? `<span class="badge ${riskBadgeClass(h.risk_level)}">${escapeHtml(h.risk_level)}</span>` : '—'}</div>
+                  </td>
                   <td>${escapeHtml(h.control_measure || '—')}</td>
-                  <td>${escapeHtml(h.control_type || '—')}</td>
-                  <td>${h.mandatory ? 'Yes' : 'No'}</td>
+                  <td>
+                    <div>${escapeHtml(h.control_type || '—')}</div>
+                    <div style="margin-top:8px;"><span class="detail-label" style="margin-right:6px;">Mandatory</span>${h.mandatory ? 'Yes' : 'No'}</div>
+                  </td>
                   <td>${escapeHtml(h.applies_to || '—')}</td>
                 </tr>
               `).join('')}
