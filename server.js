@@ -75,7 +75,7 @@ const documentUpload = multer({
 });
 
 const execFileAsync = util.promisify(execFile);
-const THUMBNAIL_SIZE = 240;
+const THUMBNAIL_SIZE = 700;
 
 // Renders a small preview thumbnail for an uploaded document, if it's a
 // type that has a sensible one: an image is just resized down, and a PDF
@@ -1228,21 +1228,19 @@ app.get('/pera/:id', async (req, res, next) => {
 
     const documentsHtml = `
       ${documentsResult.rows.length ? `
-        <div class="min-req-list" style="margin-bottom:16px;">
+        <div style="display:flex;flex-wrap:wrap;gap:20px;margin-bottom:16px;">
           ${documentsResult.rows.map((d) => {
             const link = d.has_file ? `/pera/${r.id}/documents/${d.id}/file` : d.url;
             const sizeHint = d.has_file ? ` (${formatFileSize(d.file_size)})` : '';
-            const iconHtml = d.has_thumbnail
-              ? `<img src="/pera/${r.id}/documents/${d.id}/thumbnail" alt="" style="width:66px;height:66px;object-fit:cover;border-radius:8px;border:1px solid #E3DFD3;flex:0 0 auto;">`
-              : `<div style="width:66px;height:66px;border-radius:8px;background:#F0EDE5;color:#6B6659;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex:0 0 auto;">${escapeHtml(documentFileExtLabel(d))}</div>`;
+            const previewHtml = d.has_thumbnail
+              ? `<img src="/pera/${r.id}/documents/${d.id}/thumbnail" alt="" style="width:500px;max-width:100%;height:auto;display:block;border-radius:8px;border:1px solid #E3DFD3;">`
+              : `<div style="width:500px;max-width:100%;height:140px;border-radius:8px;background:#F0EDE5;color:#6B6659;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:600;">${escapeHtml(documentFileExtLabel(d))}</div>`;
             return `
-            <div class="min-req-item" style="justify-content:space-between;align-items:center;">
-              <div style="display:flex;align-items:center;gap:10px;">
-                ${iconHtml}
-                <div><span class="badge badge-draft">${escapeHtml(d.category || 'Other')}</span> ${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener">${escapeHtml(d.title)}</a>${sizeHint}` : escapeHtml(d.title)}${d.notes ? ` — ${escapeHtml(d.notes)}` : ''}</div>
-              </div>
+            <div class="card" style="padding:14px;width:500px;max-width:100%;">
+              ${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener">${previewHtml}</a>` : previewHtml}
+              <div style="margin-top:10px;"><span class="badge badge-draft">${escapeHtml(d.category || 'Other')}</span> ${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener">${escapeHtml(d.title)}</a>${sizeHint}` : escapeHtml(d.title)}${d.notes ? ` — ${escapeHtml(d.notes)}` : ''}</div>
               ${canEdit ? `
-                <form method="post" action="/pera/${r.id}/documents/${d.id}/delete" onsubmit="return confirm('Remove this document?');">
+                <form method="post" action="/pera/${r.id}/documents/${d.id}/delete" onsubmit="return confirm('Remove this document?');" style="margin-top:8px;">
                   <button type="submit" class="btn btn-secondary" style="padding:4px 10px;font-size:13px;">Remove</button>
                 </form>
               ` : ''}
