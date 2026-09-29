@@ -75,7 +75,7 @@ const documentUpload = multer({
 });
 
 const execFileAsync = util.promisify(execFile);
-const THUMBNAIL_SIZE = 160;
+const THUMBNAIL_SIZE = 240;
 
 // Renders a small preview thumbnail for an uploaded document, if it's a
 // type that has a sensible one: an image is just resized down, and a PDF
@@ -1233,8 +1233,8 @@ app.get('/pera/:id', async (req, res, next) => {
             const link = d.has_file ? `/pera/${r.id}/documents/${d.id}/file` : d.url;
             const sizeHint = d.has_file ? ` (${formatFileSize(d.file_size)})` : '';
             const iconHtml = d.has_thumbnail
-              ? `<img src="/pera/${r.id}/documents/${d.id}/thumbnail" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid #E3DFD3;flex:0 0 auto;">`
-              : `<div style="width:44px;height:44px;border-radius:6px;background:#F0EDE5;color:#6B6659;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;flex:0 0 auto;">${escapeHtml(documentFileExtLabel(d))}</div>`;
+              ? `<img src="/pera/${r.id}/documents/${d.id}/thumbnail" alt="" style="width:66px;height:66px;object-fit:cover;border-radius:8px;border:1px solid #E3DFD3;flex:0 0 auto;">`
+              : `<div style="width:66px;height:66px;border-radius:8px;background:#F0EDE5;color:#6B6659;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex:0 0 auto;">${escapeHtml(documentFileExtLabel(d))}</div>`;
             return `
             <div class="min-req-item" style="justify-content:space-between;align-items:center;">
               <div style="display:flex;align-items:center;gap:10px;">
