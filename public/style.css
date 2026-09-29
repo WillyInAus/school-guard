@@ -427,6 +427,30 @@ table {
   width: 100%;
 }
 
+/* The PERA hazards/controls table mixes very short columns (Risk, Type,
+   Mandatory, Applies to) with two long free-text ones (Hazard, Control
+   measure). Left to auto layout, the browser can squeeze a long-text
+   column down to almost nothing while wrapping every other word onto its
+   own line -- table-layout:fixed plus the <colgroup> widths in the markup
+   give every column a sane, stable share of the available width instead.
+   The selector here is deliberately more specific than the general
+   ".card:has(> table) table { min-width: 560px }" responsive-table rule
+   below, which would otherwise win and squash this back down. */
+.card:has(> table.hazards-table) table.hazards-table {
+  table-layout: fixed;
+  min-width: 840px;
+}
+
+.hazards-table td,
+.hazards-table th {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.hazards-table td {
+  vertical-align: top;
+}
+
 th {
   text-align: left;
   padding: 12px 16px;

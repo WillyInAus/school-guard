@@ -1192,7 +1192,16 @@ app.get('/pera/:id', async (req, res, next) => {
     if (hazardsResult.rows.length) {
       hazardsSectionHtml = `
         <div class="card" style="overflow-x:auto;">
-          <table>
+          <table class="hazards-table">
+            <colgroup>
+              <col style="width:20%;">
+              <col style="width:9%;">
+              <col style="width:7%;">
+              <col style="width:32%;">
+              <col style="width:9%;">
+              <col style="width:12%;">
+              <col style="width:11%;">
+            </colgroup>
             <thead>
               <tr><th>Hazard</th><th>Category</th><th>Risk</th><th>Control measure</th><th>Type</th><th>Mandatory</th><th>Applies to</th></tr>
             </thead>
