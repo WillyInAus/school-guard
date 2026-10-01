@@ -5805,6 +5805,8 @@ app.get('/induction', async (req, res, next) => {
       <div class="card" style="padding:20px;">
         <div style="font-weight:700;font-size:14px;margin-bottom:10px;">Admin &amp; assessor tools</div>
         <div style="display:flex;flex-direction:column;gap:8px;">
+          <a href="/induction/review-queue" style="color:#1B5E52;font-weight:600;">Review queue — flagged profile changes &amp; pending verification →</a>
+          <a href="/admin/induction/shared-topics" style="color:#1B5E52;font-weight:600;">Manage shared induction topics (emergency procedures, workshop rules) →</a>
           <a href="/admin/induction/items" style="color:#1B5E52;font-weight:600;">Manage the equipment induction list (link to PERA, hide items not at this school) →</a>
         </div>
       </div>` : ''}
@@ -5898,6 +5900,7 @@ app.get('/induction/staff/:staffId', async (req, res, next) => {
           <a class="btn btn-secondary" href="/induction/staff/${staffId}/export.pdf">PDF export</a>
         </div>
       </div>
+      ${profileNavLinks(staffId, isSelf)}
       <div class="note-box">Self-assessed ("C") is the staff member's own declaration only — it does not by itself authorise using the equipment or supervising students on it. Only a separate assessor-verified competency and school authorisation (right-hand columns) permit that.</div>
       <div class="card" style="padding:22px;">
         ${categoryBlocks}
@@ -5971,6 +5974,66 @@ app.get('/induction/staff/:staffId/item/:itemId', async (req, res, next) => {
       pool.query('SELECT * FROM induction_change_log WHERE staff_id = $1 AND induction_item_id = $2 ORDER BY changed_at DESC LIMIT 25', [staffId, itemId]),
     ]);
     const declaration = decl.rows[0] || null;
+
+    // Competency profile: what's already on file for this staff member that
+    // applies to this item, any shared topics it draws on, and any unresolved
+    // "this may need re-checking" flags -- shown read-only here; it's
+    // pre-filled information, never a status by itself.
+    const [profileAppsByItem, profileFlags, sharedTopicsResult, equipGroups] = await Promise.all([
+      getProfileApplicationsByItem(staffId),
+      pool.query('SELECT * FROM staff_profile_review_flags WHERE staff_id = $1 AND induction_item_id = $2 AND resolved = false ORDER BY created_at DESC', [staffId, itemId]),
+      pool.query(
+        `SELECT t.*, ack.acknowledged_at, ack.acknowledged_by_staff_id
+         FROM induction_item_shared_topics its
+         JOIN induction_shared_topics t ON t.id = its.topic_id AND t.archived = false
+         LEFT JOIN staff_shared_topic_acknowledgements ack ON ack.topic_id = t.id AND ack.staff_id = $2
+         WHERE its.induction_item_id = $1
+         ORDER BY t.sort_order`,
+        [itemId, staffId]
+      ),
+      getProfileEquipmentGroups(staffId),
+    ]);
+    const itemProfileApps = profileAppsByItem.get(itemId) || { evidence: [], licences: [] };
+    const claimsGroupForItem = equipGroups.some((g) => g.category_id === item.category_id);
+
+    const sourceProfilePanel = `
+      <div class="card" style="padding:22px;margin-bottom:20px;">
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Source profile information</div>
+        <div class="form-section-hint" style="margin:0 0 10px;">Pulled from ${escapeHtml(staff.name)}'s <a href="/induction/staff/${staffId}/profile" style="color:#1B5E52;font-weight:600;">competency profile</a> — pre-filled information only. It does not mark this item competent, induction complete, verified or authorised.</div>
+        ${profileFlags.rows.length ? `
+        <div class="note-box" style="border-color:#C96A3A;color:#8A3E1C;">This item's profile information has changed since it was applied — flagged for review: ${profileFlags.rows.map((f) => escapeHtml(f.reason)).join('; ')}</div>
+        ` : ''}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+          <span class="badge ${claimsGroupForItem ? 'badge-approved' : 'badge-draft'}">${claimsGroupForItem ? 'Claims experience with this equipment group' : 'No equipment-group experience claimed'}</span>
+        </div>
+        ${itemProfileApps.licences.length ? `
+          <div class="detail-value" style="margin-bottom:6px;"><strong>Licences applied:</strong> ${itemProfileApps.licences.map((l) => `${escapeHtml(l.name)}${l.expiry_date ? ` (expires ${formatBrisbaneDate(l.expiry_date)})` : ''}${l.active ? '' : ' — superseded'}`).join(', ')}</div>
+        ` : ''}
+        ${itemProfileApps.evidence.length ? `
+          <div class="detail-value" style="margin-bottom:6px;"><strong>Evidence applied:</strong> ${itemProfileApps.evidence.map((e) => e.removed ? `<span style="color:#B0AA9A;">${escapeHtml(e.title)} (removed)</span>` : (e.url ? `<a href="${escapeHtml(e.url)}" target="_blank" rel="noopener" style="color:#1B5E52;font-weight:600;">${escapeHtml(e.title)}</a>` : escapeHtml(e.title))).join(', ')}</div>
+        ` : ''}
+        ${!itemProfileApps.licences.length && !itemProfileApps.evidence.length && !claimsGroupForItem ? '<div class="form-section-hint" style="margin:0;">Nothing from the profile has been applied to this item yet.</div>' : ''}
+        ${sharedTopicsResult.rows.length ? `
+        <div style="margin-top:14px;border-top:1px solid #E4DFD3;padding-top:12px;">
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px;">Shared topics for this equipment</div>
+          ${sharedTopicsResult.rows.map((t) => `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid #F0EDE5;">
+              <div>
+                <strong style="font-size:13px;">${escapeHtml(t.name)}</strong>
+                ${t.description ? `<div style="font-size:12px;color:#6B6659;">${escapeHtml(t.description)}</div>` : ''}
+              </div>
+              ${t.acknowledged_at
+                ? `<span class="badge badge-approved" style="white-space:nowrap;">Acknowledged ${formatBrisbaneDate(t.acknowledged_at)}</span>`
+                : (isSelf || req.staffUser.role === 'admin') ? `
+                  <form method="post" action="/induction/staff/${staffId}/shared-topic/${t.id}/acknowledge" style="margin:0;">
+                    <button type="submit" class="btn btn-secondary" style="white-space:nowrap;">Acknowledge</button>
+                  </form>` : `<span class="badge badge-draft" style="white-space:nowrap;">Not acknowledged</span>`}
+            </div>
+          `).join('')}
+        </div>
+        ` : ''}
+      </div>
+    `;
 
     let criteria = [];
     let latestAssessment = null;
@@ -6285,6 +6348,7 @@ app.get('/induction/staff/:staffId/item/:itemId', async (req, res, next) => {
       ${physicalEquipment.length ? `
       <div class="note-box">Physical equipment covered by this PERA: ${physicalEquipment.map((e) => `<a href="/equipment/${e.id}" style="color:#1B5E52;font-weight:600;">${escapeHtml(e.name)}</a> (${escapeHtml(e.status)})`).join(', ')}</div>
       ` : ''}
+      ${sourceProfilePanel}
       ${declarationPanel}
       ${stepsPanel}
       ${checklistPanel}
@@ -7163,6 +7227,950 @@ app.post('/admin/induction/items/:id', requireRole('admin'), async (req, res, ne
       [req.body.pera_id || null, availableAtSchool, req.params.id]
     );
     res.redirect('/admin/induction/items');
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Staff Competency Profile ----------
+//
+// Reduces repeated data entry in the Staff Equipment Induction module
+// above. One profile per staff member (qualifications/trade background,
+// teaching/industry experience, licences with expiry dates, reusable
+// evidence, and claimed equipment-group experience), reused across many
+// equipment items instead of re-entering the same thing on each one. See
+// db.js for the full table set and the "why" behind each one. Everything
+// here only ever writes to staff_competency_profile_versions /
+// staff_profile_licences / staff_profile_evidence / the application and
+// batch tables, or -- for the actual declaration/verification decision --
+// upserts the exact same per-item tables the induction module already
+// uses, under the exact same rules (nothing preselected, no self-
+// verification, no automatic authorisation). This module never writes to
+// staff_induction_authorisations at all.
+
+async function getCurrentProfileVersion(staffId) {
+  const { rows } = await pool.query(
+    'SELECT * FROM staff_competency_profile_versions WHERE staff_id = $1 ORDER BY recorded_at DESC, id DESC LIMIT 1',
+    [staffId]
+  );
+  return rows[0] || null;
+}
+
+async function getActiveLicences(staffId) {
+  const { rows } = await pool.query(
+    'SELECT * FROM staff_profile_licences WHERE staff_id = $1 AND active = true ORDER BY expiry_date ASC NULLS LAST, name ASC',
+    [staffId]
+  );
+  return rows;
+}
+
+async function getActiveEvidence(staffId) {
+  const { rows } = await pool.query(
+    'SELECT * FROM staff_profile_evidence WHERE staff_id = $1 AND removed = false ORDER BY added_at DESC',
+    [staffId]
+  );
+  return rows;
+}
+
+async function getProfileEquipmentGroups(staffId) {
+  const { rows } = await pool.query(
+    `SELECT g.*, c.name AS category_name FROM staff_profile_equipment_groups g
+     JOIN induction_equipment_categories c ON c.id = g.category_id
+     WHERE g.staff_id = $1 ORDER BY c.sort_order`,
+    [staffId]
+  );
+  return rows;
+}
+
+// Every application of profile evidence/a licence to an item, for a given
+// staff member -- used both to show "source profile information" on an
+// item's workspace and to pre-fill the grouped self-assessment screen
+// with what's already been applied.
+async function getProfileApplicationsByItem(staffId) {
+  const [evidenceResult, licenceResult] = await Promise.all([
+    pool.query(
+      `SELECT a.induction_item_id, e.id, e.title, e.url, e.notes, e.removed
+       FROM staff_profile_evidence_applications a
+       JOIN staff_profile_evidence e ON e.id = a.profile_evidence_id
+       WHERE a.staff_id = $1`,
+      [staffId]
+    ),
+    pool.query(
+      `SELECT a.induction_item_id, l.id, l.name, l.expiry_date, l.active
+       FROM staff_profile_licence_applications a
+       JOIN staff_profile_licences l ON l.id = a.profile_licence_id
+       WHERE a.staff_id = $1`,
+      [staffId]
+    ),
+  ]);
+  const byItem = new Map();
+  const ensure = (itemId) => {
+    if (!byItem.has(itemId)) byItem.set(itemId, { evidence: [], licences: [] });
+    return byItem.get(itemId);
+  };
+  for (const row of evidenceResult.rows) {
+    const seen = new Set();
+    const entry = ensure(row.induction_item_id);
+    if (!seen.has(row.id)) { entry.evidence.push(row); seen.add(row.id); }
+  }
+  for (const row of licenceResult.rows) {
+    ensure(row.induction_item_id).licences.push(row);
+  }
+  return byItem;
+}
+
+// "When qualifications, evidence or expiry dates change, flag affected
+// records for review." Called whenever a profile component that other
+// records may have relied on is edited, superseded or removed -- never
+// changes the records themselves, just queues a prompt.
+async function flagForReview({ staffId, inductionItemId, reason, sourceType, sourceId }) {
+  await pool.query(
+    `INSERT INTO staff_profile_review_flags (staff_id, induction_item_id, reason, source_type, source_id)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [staffId, inductionItemId || null, reason, sourceType, sourceId || null]
+  );
+}
+
+function profileNavLinks(staffId, isSelf) {
+  return `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;">
+      <a class="btn btn-secondary" href="/induction/staff/${staffId}/profile">Competency profile</a>
+      <a class="btn btn-secondary" href="/induction/staff/${staffId}/assess">Self-assessment</a>
+    </div>
+  `;
+}
+
+// ---------- Competency profile: view/edit ----------
+
+app.get('/induction/staff/:staffId/profile', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const isSelf = staffId === req.staffUser.id;
+    const canEdit = isSelf || req.staffUser.role === 'admin';
+    if (!isSelf && !canActAsAssessor(req.staffUser.role)) {
+      return res.status(403).send('You can only view your own competency profile. <a href="/induction">Back</a>');
+    }
+    const staffResult = await pool.query('SELECT id, name, email FROM staff_users WHERE id = $1', [staffId]);
+    if (!staffResult.rows.length) return res.status(404).send('Staff member not found.');
+    const staff = staffResult.rows[0];
+
+    const [profile, licences, evidence, groups, categories] = await Promise.all([
+      getCurrentProfileVersion(staffId),
+      getActiveLicences(staffId),
+      getActiveEvidence(staffId),
+      getProfileEquipmentGroups(staffId),
+      getInductionCategoriesWithItems(),
+    ]);
+    const groupCategoryIds = new Set(groups.map((g) => g.category_id));
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const licenceRowsHtml = licences.map((l) => {
+      const expired = l.expiry_date && new Date(l.expiry_date) < today;
+      const expSoon = l.expiry_date && !expired && (new Date(l.expiry_date) - today) / 86400000 <= 30;
+      return `
+      <tr style="border-bottom:1px solid #F0EDE5;">
+        <td style="padding:8px 6px;font-size:13px;">${escapeHtml(l.name)}${l.issuing_body ? ` <span style="color:#6B6659;">(${escapeHtml(l.issuing_body)})</span>` : ''}${l.licence_number ? `<div style="font-size:11px;color:#B0AA9A;">${escapeHtml(l.licence_number)}</div>` : ''}</td>
+        <td style="padding:8px 6px;"><span class="badge ${expired ? 'badge-changes' : (expSoon ? 'badge-pending' : 'badge-approved')}">${l.expiry_date ? formatBrisbaneDate(l.expiry_date) : 'No expiry'}${expired ? ' — expired' : (expSoon ? ' — expiring soon' : '')}</span></td>
+        <td style="padding:8px 6px;text-align:right;">
+          ${canEdit ? `<form method="post" action="/induction/staff/${staffId}/profile/licences/${l.id}/remove" style="display:inline;" onsubmit="return confirm('Remove this licence? Records that already applied it will be flagged for review.');"><button type="submit" class="btn btn-secondary" style="padding:4px 10px;font-size:12px;">Remove</button></form>` : ''}
+        </td>
+      </tr>`;
+    }).join('');
+
+    const evidenceRowsHtml = evidence.map((e) => `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #F0EDE5;">
+        <div>
+          ${e.url ? `<a href="${escapeHtml(e.url)}" target="_blank" rel="noopener" style="color:#1B5E52;font-weight:600;font-size:13px;">${escapeHtml(e.title)}</a>` : `<strong style="font-size:13px;">${escapeHtml(e.title)}</strong>`}
+          ${e.notes ? `<div style="font-size:12px;color:#6B6659;">${escapeHtml(e.notes)}</div>` : ''}
+        </div>
+        ${canEdit ? `<form method="post" action="/induction/staff/${staffId}/profile/evidence/${e.id}/remove" onsubmit="return confirm('Remove this evidence? Records that already applied it will be flagged for review.');"><button type="submit" class="btn btn-secondary" style="padding:4px 10px;font-size:12px;flex-shrink:0;">Remove</button></form>` : ''}
+      </div>
+    `).join('');
+
+    const groupCheckboxesHtml = categories.map((cat) => `
+      <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;">
+        <input type="checkbox" name="category_id" value="${cat.id}" ${groupCategoryIds.has(cat.id) ? 'checked' : ''} ${canEdit ? '' : 'disabled'}>
+        ${escapeHtml(cat.name)}
+      </label>
+    `).join('');
+
+    const body = `
+      <a class="back-link" href="/induction/staff/${staffId}">← ${escapeHtml(staff.name)}</a>
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Competency profile — ${escapeHtml(staff.name)}</h1>
+          <p class="page-subtitle">Kept in one place and reused across every equipment record — never automatically marks anything competent, verified or authorised.</p>
+        </div>
+      </div>
+      <div class="note-box">A profile only supplies supporting information. Equipment-specific competence, induction, verification and authorisation are always recorded separately against each item.</div>
+
+      <div class="form-section-title">Qualifications, trade background &amp; experience</div>
+      <form class="form-card" method="post" action="/induction/staff/${staffId}/profile">
+        <div class="form-row">
+          <label for="qualifications_trade">Qualifications and trade background</label>
+          <textarea id="qualifications_trade" name="qualifications_trade" rows="3" ${canEdit ? '' : 'disabled'}>${escapeHtml(profile ? profile.qualifications_trade || '' : '')}</textarea>
+        </div>
+        <div class="form-row">
+          <label for="teaching_industry_experience">Teaching and industry experience</label>
+          <textarea id="teaching_industry_experience" name="teaching_industry_experience" rows="3" ${canEdit ? '' : 'disabled'}>${escapeHtml(profile ? profile.teaching_industry_experience || '' : '')}</textarea>
+        </div>
+        ${profile ? `<div class="form-section-hint">Last updated ${formatBrisbaneDateTime(profile.recorded_at)}.</div>` : ''}
+        ${canEdit ? `<div class="form-actions"><button type="submit" class="btn btn-primary">Save profile</button></div>` : ''}
+      </form>
+
+      <div class="form-section-title" style="margin-top:28px;">Licences &amp; certificates</div>
+      <div class="card">
+        <table style="width:100%;border-collapse:collapse;">
+          <tbody>${licenceRowsHtml || `<tr><td style="padding:16px;text-align:center;color:#6B6659;">No licences recorded yet.</td></tr>`}</tbody>
+        </table>
+      </div>
+      ${canEdit ? `
+      <form class="form-card" method="post" action="/induction/staff/${staffId}/profile/licences" style="max-width:560px;margin-top:12px;">
+        <div class="form-row"><label for="licence_name">Licence / certificate name</label><input type="text" id="licence_name" name="name" required placeholder="e.g. White Card"></div>
+        <div class="form-row"><label for="issuing_body">Issuing body</label><input type="text" id="issuing_body" name="issuing_body"></div>
+        <div class="form-row"><label for="licence_number">Licence number</label><input type="text" id="licence_number" name="licence_number"></div>
+        <div class="form-row"><label for="expiry_date">Expiry date</label><input type="date" id="expiry_date" name="expiry_date"></div>
+        <div class="form-actions"><button type="submit" class="btn btn-secondary">Add licence</button></div>
+      </form>` : ''}
+
+      <div class="form-section-title" style="margin-top:28px;">Supporting evidence</div>
+      <div class="card" style="padding:16px 18px;">
+        ${evidenceRowsHtml || '<div class="empty-state">No supporting evidence yet.</div>'}
+      </div>
+      ${canEdit ? `
+      <form class="form-card" method="post" action="/induction/staff/${staffId}/profile/evidence" style="max-width:560px;margin-top:12px;">
+        <div class="form-row"><label for="evidence_title">Title</label><input type="text" id="evidence_title" name="title" required placeholder="e.g. Trade certificate — Carpentry"></div>
+        <div class="form-row"><label for="evidence_url">Link (optional)</label><input type="text" id="evidence_url" name="url" placeholder="https://..."></div>
+        <div class="form-row"><label for="evidence_notes">Notes</label><input type="text" id="evidence_notes" name="notes"></div>
+        <div class="form-actions"><button type="submit" class="btn btn-secondary">Add evidence</button></div>
+      </form>` : ''}
+
+      <div class="form-section-title" style="margin-top:28px;">Equipment groups with experience</div>
+      <form class="form-card" method="post" action="/induction/staff/${staffId}/profile/equipment-groups">
+        <div class="form-section-hint" style="margin:0 0 10px;">Used to pre-select relevant items on the self-assessment screen — a group here is never itself a declaration of competence.</div>
+        ${groupCheckboxesHtml}
+        ${canEdit ? `<div class="form-actions" style="margin-top:12px;"><button type="submit" class="btn btn-secondary">Save equipment groups</button></div>` : ''}
+      </form>
+    `;
+    res.send(page({ title: `Competency Profile — ${staff.name}`, active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/profile', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const isSelf = staffId === req.staffUser.id;
+    if (!isSelf && req.staffUser.role !== 'admin') {
+      return res.status(403).send('Only the staff member themselves (or an admin) can edit this profile. <a href="javascript:history.back()">Back</a>');
+    }
+    const { qualifications_trade, teaching_industry_experience } = req.body;
+    const previous = await getCurrentProfileVersion(staffId);
+    const newQuals = normalizeText(qualifications_trade) || null;
+    const newExp = normalizeText(teaching_industry_experience) || null;
+    const changed = !previous || previous.qualifications_trade !== newQuals || previous.teaching_industry_experience !== newExp;
+
+    const { rows } = await pool.query(
+      `INSERT INTO staff_competency_profile_versions (staff_id, qualifications_trade, teaching_industry_experience, recorded_by_staff_id)
+       VALUES ($1,$2,$3,$4) RETURNING id`,
+      [staffId, newQuals, newExp, req.staffUser.id]
+    );
+
+    if (changed && previous) {
+      // Flag every item this staff member already has a "C" declaration or
+      // a verified competency on -- the profile text that supported those
+      // just changed, so they're worth another look. Never touches the
+      // declaration/verification rows themselves.
+      const affected = await pool.query(
+        `SELECT DISTINCT induction_item_id FROM staff_induction_declarations WHERE staff_id = $1 AND status = 'C'
+         UNION
+         SELECT DISTINCT induction_item_id FROM staff_induction_competency_verifications WHERE staff_id = $1 AND verified = true`,
+        [staffId]
+      );
+      for (const row of affected.rows) {
+        await flagForReview({
+          staffId, inductionItemId: row.induction_item_id,
+          reason: 'Qualifications/experience summary was updated — check this still supports the declared or verified competence.',
+          sourceType: 'profile_updated', sourceId: rows[0].id,
+        });
+      }
+    }
+
+    await logInductionChange({
+      staffId, contextType: 'profile', contextId: rows[0].id,
+      summary: 'Competency profile (qualifications/experience) updated', changedByStaffId: req.staffUser.id,
+    });
+    res.redirect(`/induction/staff/${staffId}/profile`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/profile/licences', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    if (staffId !== req.staffUser.id && req.staffUser.role !== 'admin') {
+      return res.status(403).send('Only the staff member themselves (or an admin) can edit this profile. <a href="javascript:history.back()">Back</a>');
+    }
+    const { name, issuing_body, licence_number, expiry_date, notes } = req.body;
+    if (!normalizeText(name || '').trim()) return res.status(400).send('A licence/certificate name is required. <a href="javascript:history.back()">Back</a>');
+    const { rows } = await pool.query(
+      `INSERT INTO staff_profile_licences (staff_id, name, issuing_body, licence_number, expiry_date, notes, recorded_by_staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [staffId, normalizeText(name), normalizeText(issuing_body) || null, normalizeText(licence_number) || null, expiry_date || null, normalizeText(notes) || null, req.staffUser.id]
+    );
+    await logInductionChange({ staffId, contextType: 'profile_licence', contextId: rows[0].id, summary: `Licence "${normalizeText(name)}" added to profile`, changedByStaffId: req.staffUser.id });
+    res.redirect(`/induction/staff/${staffId}/profile`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/profile/licences/:licenceId/remove', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const licenceId = Number(req.params.licenceId);
+    if (staffId !== req.staffUser.id && req.staffUser.role !== 'admin') {
+      return res.status(403).send('Only the staff member themselves (or an admin) can edit this profile. <a href="javascript:history.back()">Back</a>');
+    }
+    const { rows } = await pool.query('UPDATE staff_profile_licences SET active = false WHERE id = $1 AND staff_id = $2 RETURNING name', [licenceId, staffId]);
+    if (!rows.length) return res.status(404).send('Licence not found.');
+
+    const affected = await pool.query('SELECT DISTINCT induction_item_id FROM staff_profile_licence_applications WHERE profile_licence_id = $1', [licenceId]);
+    for (const row of affected.rows) {
+      await flagForReview({
+        staffId, inductionItemId: row.induction_item_id,
+        reason: `Licence "${rows[0].name}" was removed from the profile — check whether this record still has the support it needs.`,
+        sourceType: 'licence_removed', sourceId: licenceId,
+      });
+    }
+    await logInductionChange({ staffId, contextType: 'profile_licence', contextId: licenceId, summary: `Licence "${rows[0].name}" removed from profile`, changedByStaffId: req.staffUser.id });
+    res.redirect(`/induction/staff/${staffId}/profile`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/profile/evidence', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    if (staffId !== req.staffUser.id && req.staffUser.role !== 'admin') {
+      return res.status(403).send('Only the staff member themselves (or an admin) can edit this profile. <a href="javascript:history.back()">Back</a>');
+    }
+    const { title, url, notes } = req.body;
+    if (!normalizeText(title || '').trim()) return res.status(400).send('A title is required. <a href="javascript:history.back()">Back</a>');
+    const { rows } = await pool.query(
+      `INSERT INTO staff_profile_evidence (staff_id, title, url, notes, added_by_staff_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [staffId, normalizeText(title), normalizeText(url) || null, normalizeText(notes) || null, req.staffUser.id]
+    );
+    await logInductionChange({ staffId, contextType: 'profile_evidence', contextId: rows[0].id, summary: `Evidence "${normalizeText(title)}" added to profile`, changedByStaffId: req.staffUser.id });
+    res.redirect(`/induction/staff/${staffId}/profile`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/profile/evidence/:evidenceId/remove', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const evidenceId = Number(req.params.evidenceId);
+    if (staffId !== req.staffUser.id && req.staffUser.role !== 'admin') {
+      return res.status(403).send('Only the staff member themselves (or an admin) can edit this profile. <a href="javascript:history.back()">Back</a>');
+    }
+    const { rows } = await pool.query('UPDATE staff_profile_evidence SET removed = true, removed_at = now() WHERE id = $1 AND staff_id = $2 RETURNING title', [evidenceId, staffId]);
+    if (!rows.length) return res.status(404).send('Evidence not found.');
+
+    const affected = await pool.query('SELECT DISTINCT induction_item_id FROM staff_profile_evidence_applications WHERE profile_evidence_id = $1', [evidenceId]);
+    for (const row of affected.rows) {
+      await flagForReview({
+        staffId, inductionItemId: row.induction_item_id,
+        reason: `Evidence "${rows[0].title}" was removed from the profile — check whether this record still has the support it needs.`,
+        sourceType: 'evidence_removed', sourceId: evidenceId,
+      });
+    }
+    await logInductionChange({ staffId, contextType: 'profile_evidence', contextId: evidenceId, summary: `Evidence "${rows[0].title}" removed from profile`, changedByStaffId: req.staffUser.id });
+    res.redirect(`/induction/staff/${staffId}/profile`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/profile/equipment-groups', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    if (staffId !== req.staffUser.id && req.staffUser.role !== 'admin') {
+      return res.status(403).send('Only the staff member themselves (or an admin) can edit this profile. <a href="javascript:history.back()">Back</a>');
+    }
+    let categoryIds = req.body.category_id;
+    if (!categoryIds) categoryIds = [];
+    if (!Array.isArray(categoryIds)) categoryIds = [categoryIds];
+    categoryIds = categoryIds.map(Number).filter((n) => Number.isInteger(n));
+
+    await pool.query('DELETE FROM staff_profile_equipment_groups WHERE staff_id = $1 AND category_id != ALL($2::int[])', [staffId, categoryIds.length ? categoryIds : [0]]);
+    for (const categoryId of categoryIds) {
+      await pool.query(
+        `INSERT INTO staff_profile_equipment_groups (staff_id, category_id, added_by_staff_id) VALUES ($1,$2,$3)
+         ON CONFLICT (staff_id, category_id) DO NOTHING`,
+        [staffId, categoryId, req.staffUser.id]
+      );
+    }
+    await logInductionChange({ staffId, contextType: 'profile_equipment_groups', summary: 'Equipment groups with experience updated', changedByStaffId: req.staffUser.id });
+    res.redirect(`/induction/staff/${staffId}/profile`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Competency profile: grouped self-assessment ----------
+// "Complete profile → select relevant equipment → review pre-filled
+// information → record exceptions → submit declaration." One submission
+// here still writes/updates the real per-item staff_induction_declarations
+// row for every selected item (never a replacement for it) -- see the
+// staff_declaration_batches comment in db.js for why.
+
+app.get('/induction/staff/:staffId/assess', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    if (staffId !== req.staffUser.id && req.staffUser.role !== 'admin') {
+      return res.status(403).send('You can only complete your own self-assessment. <a href="/induction">Back</a>');
+    }
+    const staffResult = await pool.query('SELECT id, name FROM staff_users WHERE id = $1', [staffId]);
+    if (!staffResult.rows.length) return res.status(404).send('Staff member not found.');
+    const staff = staffResult.rows[0];
+
+    const [categories, declResult, profile, licences, evidence, groups] = await Promise.all([
+      getInductionCategoriesWithItems(),
+      pool.query('SELECT induction_item_id, status FROM staff_induction_declarations WHERE staff_id = $1', [staffId]),
+      getCurrentProfileVersion(staffId),
+      getActiveLicences(staffId),
+      getActiveEvidence(staffId),
+      getProfileEquipmentGroups(staffId),
+    ]);
+    const declByItem = new Map(declResult.rows.map((d) => [d.induction_item_id, d.status]));
+    const groupCategoryIds = new Set(groups.map((g) => g.category_id));
+    const hasProfileText = Boolean((profile && (profile.qualifications_trade || profile.teaching_industry_experience)));
+
+    const categoryBlocks = categories.map((cat) => `
+      <div class="form-section-title" style="margin-top:20px;">${escapeHtml(cat.name)} ${groupCategoryIds.has(cat.id) ? '<span class="badge badge-approved" style="margin-left:8px;">You\'ve claimed experience here</span>' : ''}</div>
+      <table style="width:100%;border-collapse:collapse;">
+        <tbody>
+          ${cat.items.map((item) => {
+            const current = declByItem.get(item.id) || 'not_assessed';
+            const preTick = groupCategoryIds.has(cat.id);
+            return `
+            <tr style="border-bottom:1px solid #F0EDE5;">
+              <td style="padding:8px 6px;width:1%;"><input type="checkbox" name="item_id" value="${item.id}" ${preTick ? 'checked' : ''}></td>
+              <td style="padding:8px 6px;font-size:13px;">${escapeHtml(item.name)}<div style="font-size:11px;color:#B0AA9A;">Currently: ${escapeHtml(DECLARATION_LABELS[current])}</div></td>
+              <td style="padding:8px 6px;">
+                <select name="item_status_${item.id}" style="font-size:12px;padding:4px;">
+                  <option value="">(use selection above)</option>
+                  <option value="C">C — Competent</option>
+                  <option value="NYC">NYC — Not yet competent</option>
+                  <option value="NA">Not applicable</option>
+                </select>
+              </td>
+              <td style="padding:8px 6px;"><input type="text" name="item_comment_${item.id}" placeholder="Exception / comment" style="width:100%;font-size:12px;padding:4px;"></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    `).join('');
+
+    const evidenceCheckboxes = evidence.map((e) => `
+      <label style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:13px;">
+        <input type="checkbox" name="evidence_id" value="${e.id}">
+        <span>${escapeHtml(e.title)}${e.notes ? ` — <span style="color:#6B6659;">${escapeHtml(e.notes)}</span>` : ''}</span>
+      </label>`).join('') || '<div class="form-section-hint">No profile evidence yet — add some on your Competency Profile page.</div>';
+
+    const licenceCheckboxes = licences.map((l) => `
+      <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;">
+        <input type="checkbox" name="licence_id" value="${l.id}">
+        ${escapeHtml(l.name)}
+      </label>`).join('');
+
+    const body = `
+      <a class="back-link" href="/induction/staff/${staffId}">← ${escapeHtml(staff.name)}</a>
+      <h1 class="page-title">Self-assessment — ${escapeHtml(staff.name)}</h1>
+      <p class="page-subtitle" style="margin-bottom:18px;">Select the equipment this applies to, declare a status, and submit one authenticated declaration. Untouched items stay "Not assessed".</p>
+      <div class="note-box">A "Competent" declaration here is still only a self-declaration — it does not by itself authorise using the equipment or supervising students. <a href="/induction/staff/${staffId}/profile">Edit your Competency Profile</a> first if it needs updating.</div>
+      ${!hasProfileText ? `<div class="note-box" style="border-color:#C9A227;">Your Competency Profile has no qualifications/experience text yet — add some, or cite supporting evidence below, before declaring "Competent".</div>` : ''}
+      <form class="form-card" method="post" action="/induction/staff/${staffId}/assess">
+        <div class="form-row">
+          <label>Declare selected items as</label>
+          <select name="batch_status" required>
+            <option value="C">C — Self-assessed competent</option>
+            <option value="NYC">NYC — Not yet competent</option>
+            <option value="NA">Not applicable</option>
+          </select>
+        </div>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:10px 0;">
+          <input type="checkbox" name="confirmed_quals_support" value="on">
+          I confirm the qualifications and experience in my Competency Profile (and/or the evidence selected below) support competence for every item I've selected as Competent.
+        </label>
+        <div class="form-section-title">Cite supporting profile evidence (optional, reused — not re-uploaded)</div>
+        ${evidenceCheckboxes}
+        ${licenceCheckboxes ? `<div style="margin-top:8px;">${licenceCheckboxes}</div>` : ''}
+        <div class="form-row" style="margin-top:14px;">
+          <label for="notes">Notes (applies to the whole declaration)</label>
+          <textarea id="notes" name="notes" rows="2"></textarea>
+        </div>
+        <div class="form-section-title">Equipment</div>
+        ${categoryBlocks}
+        <div class="form-actions" style="margin-top:16px;">
+          <button type="submit" class="btn btn-primary">Submit declaration</button>
+        </div>
+      </form>
+    `;
+    res.send(page({ title: `Self-Assessment — ${staff.name}`, active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/assess', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    if (staffId !== req.staffUser.id && req.staffUser.role !== 'admin') {
+      return res.status(403).send('You can only complete your own self-assessment. <a href="/induction">Back</a>');
+    }
+    const { batch_status, notes } = req.body;
+    if (!['C', 'NYC', 'NA'].includes(batch_status)) return res.status(400).send('Invalid status. <a href="javascript:history.back()">Back</a>');
+    const confirmedQualsSupport = req.body.confirmed_quals_support === 'on' || req.body.confirmed_quals_support === 'true';
+
+    let itemIds = req.body.item_id;
+    if (!itemIds) itemIds = [];
+    if (!Array.isArray(itemIds)) itemIds = [itemIds];
+    itemIds = itemIds.map(Number).filter((n) => Number.isInteger(n));
+    if (!itemIds.length) return res.status(400).send('Select at least one equipment item. <a href="javascript:history.back()">Back</a>');
+
+    let evidenceIds = req.body.evidence_id;
+    if (!evidenceIds) evidenceIds = [];
+    if (!Array.isArray(evidenceIds)) evidenceIds = [evidenceIds];
+    evidenceIds = evidenceIds.map(Number).filter((n) => Number.isInteger(n));
+
+    let licenceIds = req.body.licence_id;
+    if (!licenceIds) licenceIds = [];
+    if (!Array.isArray(licenceIds)) licenceIds = [licenceIds];
+    licenceIds = licenceIds.map(Number).filter((n) => Number.isInteger(n));
+
+    // Resolve each item's effective status (batch default, or its own
+    // individual exception) before checking whether any of them need the
+    // competence confirmation / supporting profile content.
+    const effective = itemIds.map((id) => {
+      const override = req.body[`item_status_${id}`];
+      const status = ['C', 'NYC', 'NA'].includes(override) ? override : batch_status;
+      return { id, status, comment: normalizeText(req.body[`item_comment_${id}`]) || null };
+    });
+    const anyCompetent = effective.some((e) => e.status === 'C');
+    if (anyCompetent && !confirmedQualsSupport) {
+      return res.status(400).send('Declaring any item "Competent" requires confirming your qualifications/experience support it. <a href="javascript:history.back()">Back</a>');
+    }
+    const profile = await getCurrentProfileVersion(staffId);
+    const hasProfileSupport = Boolean(profile && (profile.qualifications_trade || profile.teaching_industry_experience)) || evidenceIds.length > 0 || licenceIds.length > 0;
+    if (anyCompetent && !hasProfileSupport) {
+      return res.status(400).send('Add qualifications/experience or supporting evidence to your Competency Profile before declaring an item competent. <a href="javascript:history.back()">Back</a>');
+    }
+
+    const batchResult = await pool.query(
+      `INSERT INTO staff_declaration_batches (staff_id, batch_status, confirmed_quals_support, profile_version_id, notes, declared_by_staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [staffId, batch_status, confirmedQualsSupport, profile ? profile.id : null, normalizeText(notes) || null, req.staffUser.id]
+    );
+    const batchId = batchResult.rows[0].id;
+
+    const qualsSnapshot = profile ? [profile.qualifications_trade, profile.teaching_industry_experience].filter(Boolean).join('\n\n') : null;
+
+    for (const item of effective) {
+      await pool.query(
+        `INSERT INTO staff_declaration_batch_items (batch_id, induction_item_id, status, comment) VALUES ($1,$2,$3,$4)
+         ON CONFLICT (batch_id, induction_item_id) DO UPDATE SET status = EXCLUDED.status, comment = EXCLUDED.comment`,
+        [batchId, item.id, item.status, item.comment]
+      );
+      const declResult = await pool.query(
+        `INSERT INTO staff_induction_declarations (staff_id, induction_item_id, status, qualifications_experience, declared_at)
+         VALUES ($1,$2,$3,$4,now())
+         ON CONFLICT (staff_id, induction_item_id) DO UPDATE SET
+           status = EXCLUDED.status, qualifications_experience = EXCLUDED.qualifications_experience,
+           declared_at = now(), updated_at = now()
+         RETURNING id`,
+        [staffId, item.id, item.status, qualsSnapshot]
+      );
+      for (const evidenceId of evidenceIds) {
+        await pool.query(
+          `INSERT INTO staff_profile_evidence_applications (profile_evidence_id, staff_id, induction_item_id, declaration_batch_id, applied_by_staff_id)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [evidenceId, staffId, item.id, batchId, req.staffUser.id]
+        );
+      }
+      for (const licenceId of licenceIds) {
+        await pool.query(
+          `INSERT INTO staff_profile_licence_applications (profile_licence_id, staff_id, induction_item_id, declaration_batch_id, applied_by_staff_id)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [licenceId, staffId, item.id, batchId, req.staffUser.id]
+        );
+      }
+      await logInductionChange({
+        staffId, inductionItemId: item.id, contextType: 'declaration', contextId: declResult.rows[0].id,
+        summary: `Self-declaration set to "${DECLARATION_LABELS[item.status]}" via bulk self-assessment (batch #${batchId})`,
+        changedByStaffId: req.staffUser.id,
+      });
+    }
+
+    res.redirect(`/induction/staff/${staffId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Competency profile: experienced-staff review pathway ----------
+// "Let an authorised assessor review the staff profile and relevant
+// equipment together... only allow bulk verification where the assessor
+// explicitly confirms the evidence supports each selected item... keep a
+// separate verification record for every item." Submitting still writes
+// one row per item into the existing staff_induction_competency_verifications
+// table -- this batch is the record of the review session, not a
+// substitute. Never writes to staff_induction_authorisations.
+
+app.get('/induction/staff/:staffId/review', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+    if (blockSelfAction(res, req.staffUser.id, staffId)) return;
+
+    const staffResult = await pool.query('SELECT id, name FROM staff_users WHERE id = $1', [staffId]);
+    if (!staffResult.rows.length) return res.status(404).send('Staff member not found.');
+    const staff = staffResult.rows[0];
+
+    const [categories, declResult, verifResult, profile, licences, evidence] = await Promise.all([
+      getInductionCategoriesWithItems(),
+      pool.query('SELECT induction_item_id, status FROM staff_induction_declarations WHERE staff_id = $1', [staffId]),
+      pool.query('SELECT induction_item_id, verified FROM staff_induction_competency_verifications WHERE staff_id = $1', [staffId]),
+      getCurrentProfileVersion(staffId),
+      getActiveLicences(staffId),
+      getActiveEvidence(staffId),
+    ]);
+    const declByItem = new Map(declResult.rows.map((d) => [d.induction_item_id, d.status]));
+    const verifByItem = new Map(verifResult.rows.map((v) => [v.induction_item_id, v.verified]));
+
+    const categoryBlocks = categories.map((cat) => `
+      <div class="form-section-title" style="margin-top:18px;">${escapeHtml(cat.name)}</div>
+      <table style="width:100%;border-collapse:collapse;">
+        <tbody>
+          ${cat.items.map((item) => {
+            const declStatus = declByItem.get(item.id) || 'not_assessed';
+            const verified = verifByItem.get(item.id);
+            const suggested = declStatus === 'C' && !verified;
+            return `
+            <tr style="border-bottom:1px solid #F0EDE5;">
+              <td style="padding:8px 6px;width:1%;"><input type="checkbox" name="item_id" value="${item.id}" ${suggested ? 'checked' : ''}></td>
+              <td style="padding:8px 6px;font-size:13px;">${escapeHtml(item.name)}
+                <div style="font-size:11px;color:#B0AA9A;">Self-assessed: ${escapeHtml(DECLARATION_LABELS[declStatus])}${verified ? ' · Already verified' : ''}</div>
+              </td>
+              <td style="padding:8px 6px;"><input type="text" name="item_gaps_${item.id}" placeholder="Gaps / restrictions for this item" style="width:100%;font-size:12px;padding:4px;"></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    `).join('');
+
+    const evidenceList = evidence.map((e) => `<li style="font-size:13px;">${escapeHtml(e.title)}${e.notes ? ` — <span style="color:#6B6659;">${escapeHtml(e.notes)}</span>` : ''}</li>`).join('') || '<li style="color:#6B6659;font-size:13px;">None recorded.</li>';
+    const licenceList = licences.map((l) => `<li style="font-size:13px;">${escapeHtml(l.name)}${l.expiry_date ? ` (expires ${formatBrisbaneDate(l.expiry_date)})` : ''}</li>`).join('') || '<li style="color:#6B6659;font-size:13px;">None recorded.</li>';
+
+    const body = `
+      <a class="back-link" href="/induction/staff/${staffId}">← ${escapeHtml(staff.name)}</a>
+      <h1 class="page-title">Review — ${escapeHtml(staff.name)}</h1>
+      <p class="page-subtitle" style="margin-bottom:18px;">Review the profile and relevant equipment together, then record verified competency per item. Items already self-assessed "Competent" and not yet verified are pre-selected.</p>
+      <div class="card" style="padding:18px;margin-bottom:16px;">
+        <div class="form-section-title" style="margin-top:0;">Profile summary</div>
+        <div style="font-size:13px;white-space:pre-wrap;">${escapeHtml(profile ? (profile.qualifications_trade || '') : '') || '<span style="color:#6B6659;">No qualifications/trade background recorded.</span>'}</div>
+        <div style="font-size:13px;white-space:pre-wrap;margin-top:6px;">${escapeHtml(profile ? (profile.teaching_industry_experience || '') : '') || '<span style="color:#6B6659;">No teaching/industry experience recorded.</span>'}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;">
+          <div><div style="font-size:11px;text-transform:uppercase;color:#6B6659;">Licences</div><ul style="margin:4px 0 0 18px;">${licenceList}</ul></div>
+          <div><div style="font-size:11px;text-transform:uppercase;color:#6B6659;">Evidence</div><ul style="margin:4px 0 0 18px;">${evidenceList}</ul></div>
+        </div>
+        <a href="/induction/staff/${staffId}/profile" style="display:inline-block;margin-top:10px;color:#1B5E52;font-weight:600;font-size:13px;">Open full Competency Profile →</a>
+      </div>
+      <div class="note-box">Bulk verification only proceeds once you explicitly confirm the evidence above supports every item selected. A separate verification record is still kept for each one.</div>
+      <form class="form-card" method="post" action="/induction/staff/${staffId}/review">
+        <div class="form-row"><label for="basis">Basis for recognising existing competence</label><textarea id="basis" name="basis" rows="3" required placeholder="e.g. Qualified trade carpenter (Cert III Carpentry, sighted), 8 years industry experience operating fixed wood machinery."></textarea></div>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:10px 0;">
+          <input type="checkbox" name="confirmed_evidence_supports" value="on" required>
+          I confirm the profile and evidence above support verified competency for every item I've selected below.
+        </label>
+        <div class="form-row"><label for="remaining_requirements">Any remaining local induction requirements</label><textarea id="remaining_requirements" name="remaining_requirements" rows="2" placeholder="e.g. Still needs this school's workshop-specific emergency procedures."></textarea></div>
+        <div class="form-section-title">Equipment</div>
+        ${categoryBlocks}
+        <div class="form-actions" style="margin-top:16px;"><button type="submit" class="btn btn-primary">Record verification for selected items</button></div>
+      </form>
+    `;
+    res.send(page({ title: `Review — ${staff.name}`, active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/review', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+    if (blockSelfAction(res, req.staffUser.id, staffId)) return;
+
+    const { basis, remaining_requirements } = req.body;
+    if (!normalizeText(basis || '').trim()) return res.status(400).send('A basis for recognising existing competence is required. <a href="javascript:history.back()">Back</a>');
+    const confirmedEvidenceSupports = req.body.confirmed_evidence_supports === 'on' || req.body.confirmed_evidence_supports === 'true';
+    if (!confirmedEvidenceSupports) return res.status(400).send('Bulk verification requires confirming the evidence supports every selected item. <a href="javascript:history.back()">Back</a>');
+
+    let itemIds = req.body.item_id;
+    if (!itemIds) itemIds = [];
+    if (!Array.isArray(itemIds)) itemIds = [itemIds];
+    itemIds = itemIds.map(Number).filter((n) => Number.isInteger(n));
+    if (!itemIds.length) return res.status(400).send('Select at least one equipment item. <a href="javascript:history.back()">Back</a>');
+
+    const profile = await getCurrentProfileVersion(staffId);
+    const batchResult = await pool.query(
+      `INSERT INTO staff_verification_batches (staff_id, assessor_staff_id, basis, confirmed_evidence_supports, remaining_requirements, profile_version_id)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [staffId, req.staffUser.id, normalizeText(basis), confirmedEvidenceSupports, normalizeText(remaining_requirements) || null, profile ? profile.id : null]
+    );
+    const batchId = batchResult.rows[0].id;
+
+    for (const itemId of itemIds) {
+      const gaps = normalizeText(req.body[`item_gaps_${itemId}`]) || null;
+      await pool.query(
+        `INSERT INTO staff_verification_batch_items (batch_id, induction_item_id, gaps_or_restrictions) VALUES ($1,$2,$3)
+         ON CONFLICT (batch_id, induction_item_id) DO UPDATE SET gaps_or_restrictions = EXCLUDED.gaps_or_restrictions`,
+        [batchId, itemId, gaps]
+      );
+      const verifResult = await pool.query(
+        `INSERT INTO staff_induction_competency_verifications (staff_id, induction_item_id, verified, verified_by_staff_id, verified_at, basis, notes)
+         VALUES ($1,$2,true,$3,now(),$4,$5)
+         ON CONFLICT (staff_id, induction_item_id) DO UPDATE SET
+           verified = true, verified_by_staff_id = EXCLUDED.verified_by_staff_id, verified_at = now(),
+           basis = EXCLUDED.basis, notes = EXCLUDED.notes, updated_at = now()
+         RETURNING id`,
+        [staffId, itemId, req.staffUser.id, normalizeText(basis), gaps]
+      );
+      await logInductionChange({
+        staffId, inductionItemId: itemId, contextType: 'verification', contextId: verifResult.rows[0].id,
+        summary: `Assessor-verified competency recorded via bulk review (batch #${batchId})`, changedByStaffId: req.staffUser.id,
+      });
+    }
+
+    res.redirect(`/induction/staff/${staffId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Competency profile: review queue (unresolved flags +
+// staff pending bulk verification + expiring/expired licences) ----------
+
+app.get('/induction/review-queue', async (req, res, next) => {
+  try {
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+
+    const [flagsResult, pendingResult, licenceResult] = await Promise.all([
+      pool.query(`
+        SELECT f.*, s.name AS staff_name, i.name AS item_name
+        FROM staff_profile_review_flags f
+        JOIN staff_users s ON s.id = f.staff_id
+        LEFT JOIN induction_equipment_items i ON i.id = f.induction_item_id
+        WHERE f.resolved = false ORDER BY f.created_at ASC`),
+      pool.query(`
+        SELECT s.id AS staff_id, s.name AS staff_name, COUNT(*)::int AS pending_count
+        FROM staff_induction_declarations d
+        JOIN staff_users s ON s.id = d.staff_id AND s.disabled = false
+        WHERE d.status = 'C'
+        AND NOT EXISTS (SELECT 1 FROM staff_induction_competency_verifications v WHERE v.staff_id = d.staff_id AND v.induction_item_id = d.induction_item_id AND v.verified = true)
+        GROUP BY s.id, s.name ORDER BY s.name`),
+      pool.query(`
+        SELECT l.*, s.name AS staff_name FROM staff_profile_licences l
+        JOIN staff_users s ON s.id = l.staff_id
+        WHERE l.active = true AND l.expiry_date IS NOT NULL AND l.expiry_date <= (CURRENT_DATE + INTERVAL '30 days')
+        ORDER BY l.expiry_date ASC`),
+    ]);
+
+    const body = `
+      <a class="back-link" href="/induction">← Staff Induction</a>
+      <h1 class="page-title">Review queue</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">Staff pending bulk verification, profile changes flagged for review, and licences expired or expiring within 30 days.</p>
+
+      <div class="form-section-title">Staff pending verification</div>
+      <div class="card" style="padding:18px;margin-bottom:20px;">
+        ${pendingResult.rows.length ? pendingResult.rows.map((r) => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #F0EDE5;">
+            <span style="font-size:13px;">${escapeHtml(r.staff_name)} — ${r.pending_count} item(s) awaiting verification</span>
+            <a href="/induction/staff/${r.staff_id}/review" class="btn btn-secondary" style="padding:6px 12px;">Review →</a>
+          </div>`).join('') : '<div class="empty-state">Nobody pending verification.</div>'}
+      </div>
+
+      <div class="form-section-title">Flagged for review</div>
+      <div class="card" style="padding:18px;margin-bottom:20px;">
+        ${flagsResult.rows.length ? flagsResult.rows.map((f) => `
+          <div style="padding:10px 0;border-bottom:1px solid #F0EDE5;">
+            <div style="font-size:13px;"><strong>${escapeHtml(f.staff_name)}</strong>${f.item_name ? ` — ${escapeHtml(f.item_name)}` : ' — profile-wide'}</div>
+            <div style="font-size:12px;color:#6B6659;margin:2px 0 6px;">${escapeHtml(f.reason)} <span style="color:#B0AA9A;">· ${formatBrisbaneDateTime(f.created_at)}</span></div>
+            <form method="post" action="/induction/review-queue/flags/${f.id}/resolve" style="display:flex;gap:8px;">
+              <input type="text" name="resolution_notes" placeholder="Resolution notes (optional)" style="flex:1;font-size:12px;padding:4px 8px;">
+              <button type="submit" class="btn btn-secondary" style="padding:4px 10px;font-size:12px;">Mark resolved</button>
+            </form>
+          </div>`).join('') : '<div class="empty-state">Nothing flagged.</div>'}
+      </div>
+
+      <div class="form-section-title">Licences expired or expiring within 30 days</div>
+      <div class="card" style="padding:18px;">
+        ${licenceResult.rows.length ? licenceResult.rows.map((l) => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #F0EDE5;">
+            <span style="font-size:13px;">${escapeHtml(l.staff_name)} — ${escapeHtml(l.name)}</span>
+            <span class="badge ${new Date(l.expiry_date) < new Date() ? 'badge-changes' : 'badge-pending'}">${formatBrisbaneDate(l.expiry_date)}</span>
+          </div>`).join('') : '<div class="empty-state">No licences expiring soon.</div>'}
+      </div>
+    `;
+    res.send(page({ title: 'Review Queue', active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/review-queue/flags/:flagId/resolve', async (req, res, next) => {
+  try {
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+    const flagId = Number(req.params.flagId);
+    await pool.query(
+      `UPDATE staff_profile_review_flags SET resolved = true, resolved_by_staff_id = $1, resolved_at = now(), resolution_notes = $2 WHERE id = $3`,
+      [req.staffUser.id, normalizeText(req.body.resolution_notes) || null, flagId]
+    );
+    res.redirect('/induction/review-queue');
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Competency profile: shared topics ----------
+// "Workshop emergency procedures and general workshop rules" recorded
+// once and referenced by whichever items an admin links them to. Kept
+// deliberately separate from machine-specific SOP acknowledgement /
+// practical assessment (staff_induction_steps / staff_induction_assessments
+// above) -- acknowledging a shared topic never substitutes for those.
+
+app.get('/admin/induction/shared-topics', requireRole('admin'), async (req, res, next) => {
+  try {
+    const [topicsResult, categories, linksResult] = await Promise.all([
+      pool.query('SELECT * FROM induction_shared_topics ORDER BY archived ASC, sort_order ASC'),
+      getInductionCategoriesWithItems(),
+      pool.query('SELECT * FROM induction_item_shared_topics'),
+    ]);
+    const linkedItemIdsByTopic = new Map();
+    for (const row of linksResult.rows) {
+      if (!linkedItemIdsByTopic.has(row.topic_id)) linkedItemIdsByTopic.set(row.topic_id, new Set());
+      linkedItemIdsByTopic.get(row.topic_id).add(row.induction_item_id);
+    }
+
+    const topicBlocks = topicsResult.rows.map((topic) => {
+      const linkedIds = linkedItemIdsByTopic.get(topic.id) || new Set();
+      return `
+      <div class="card" style="padding:18px;margin-bottom:14px;${topic.archived ? 'opacity:0.6;' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div>
+            <div style="font-weight:700;font-size:14px;">${escapeHtml(topic.name)}</div>
+            <div style="font-size:12px;color:#6B6659;">${escapeHtml(topic.description || '')}</div>
+          </div>
+          <form method="post" action="/admin/induction/shared-topics/${topic.id}/${topic.archived ? 'restore' : 'archive'}">
+            <button type="submit" class="btn btn-secondary" style="padding:4px 10px;font-size:12px;">${topic.archived ? 'Restore' : 'Archive'}</button>
+          </form>
+        </div>
+        <form method="post" action="/admin/induction/shared-topics/${topic.id}/items" style="margin-top:10px;">
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px;max-height:220px;overflow-y:auto;border:1px solid #F0EDE5;border-radius:6px;padding:10px;">
+            ${categories.map((cat) => cat.items.map((item) => `
+              <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
+                <input type="checkbox" name="item_id" value="${item.id}" ${linkedIds.has(item.id) ? 'checked' : ''}>
+                ${escapeHtml(item.name)}
+              </label>`).join('')).join('')}
+          </div>
+          <div class="form-actions" style="margin-top:8px;"><button type="submit" class="btn btn-secondary" style="padding:6px 12px;font-size:12px;">Save linked equipment</button></div>
+        </form>
+      </div>`;
+    }).join('');
+
+    const body = `
+      ${adminHeader('Shared induction topics', 'Recorded once and referenced by whichever equipment items you link below, instead of repeating it on every item.')}
+      ${topicBlocks || '<div class="empty-state">No shared topics yet.</div>'}
+      <div class="form-section-title">Add a shared topic</div>
+      <form class="form-card" method="post" action="/admin/induction/shared-topics" style="max-width:560px;">
+        <div class="form-row"><label for="name">Name</label><input type="text" id="name" name="name" required></div>
+        <div class="form-row"><label for="description">Description</label><textarea id="description" name="description" rows="2"></textarea></div>
+        <div class="form-actions"><button type="submit" class="btn btn-primary">Add topic</button></div>
+      </form>
+    `;
+    res.send(page({ title: 'Shared Induction Topics', active: 'admin', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/induction/shared-topics', requireRole('admin'), async (req, res, next) => {
+  try {
+    const name = normalizeText(req.body.name || '').trim();
+    if (!name) return res.status(400).send('A name is required. <a href="javascript:history.back()">Back</a>');
+    await pool.query('INSERT INTO induction_shared_topics (name, description) VALUES ($1,$2)', [name, normalizeText(req.body.description) || null]);
+    res.redirect('/admin/induction/shared-topics');
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/induction/shared-topics/:topicId/archive', requireRole('admin'), async (req, res, next) => {
+  try {
+    await pool.query('UPDATE induction_shared_topics SET archived = true WHERE id = $1', [Number(req.params.topicId)]);
+    res.redirect('/admin/induction/shared-topics');
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/induction/shared-topics/:topicId/restore', requireRole('admin'), async (req, res, next) => {
+  try {
+    await pool.query('UPDATE induction_shared_topics SET archived = false WHERE id = $1', [Number(req.params.topicId)]);
+    res.redirect('/admin/induction/shared-topics');
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/induction/shared-topics/:topicId/items', requireRole('admin'), async (req, res, next) => {
+  try {
+    const topicId = Number(req.params.topicId);
+    let itemIds = req.body.item_id;
+    if (!itemIds) itemIds = [];
+    if (!Array.isArray(itemIds)) itemIds = [itemIds];
+    itemIds = itemIds.map(Number).filter((n) => Number.isInteger(n));
+
+    await pool.query('DELETE FROM induction_item_shared_topics WHERE topic_id = $1 AND induction_item_id != ALL($2::int[])', [topicId, itemIds.length ? itemIds : [0]]);
+    for (const itemId of itemIds) {
+      await pool.query('INSERT INTO induction_item_shared_topics (topic_id, induction_item_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [topicId, itemId]);
+    }
+    res.redirect('/admin/induction/shared-topics');
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/shared-topic/:topicId/acknowledge', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const topicId = Number(req.params.topicId);
+    if (staffId !== req.staffUser.id && req.staffUser.role !== 'admin') {
+      return res.status(403).send('Only the staff member themselves (or an admin) can acknowledge this. <a href="javascript:history.back()">Back</a>');
+    }
+    await pool.query(
+      `INSERT INTO staff_shared_topic_acknowledgements (staff_id, topic_id, acknowledged_by_staff_id) VALUES ($1,$2,$3)
+       ON CONFLICT (staff_id, topic_id) DO UPDATE SET acknowledged_at = now(), acknowledged_by_staff_id = EXCLUDED.acknowledged_by_staff_id`,
+      [staffId, topicId, req.staffUser.id]
+    );
+    await logInductionChange({ staffId, contextType: 'shared_topic', contextId: topicId, summary: 'Shared induction topic acknowledged', changedByStaffId: req.staffUser.id });
+    res.redirect(req.get('referer') || `/induction/staff/${staffId}`);
   } catch (err) {
     next(err);
   }

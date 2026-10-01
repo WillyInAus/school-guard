@@ -1125,6 +1125,262 @@ async function migrate() {
       }
     }
   }
+
+  // ---------------------------------------------------------------
+  // Staff Competency Profile (reduces repeated data entry in the Staff
+  // Equipment Induction module above). One profile per staff member,
+  // reused across every equipment item rather than re-entering the same
+  // qualifications/experience/evidence on each one. Everything here is
+  // additive on top of the existing induction tables -- a declaration,
+  // verification or authorisation is still exactly the row it always was;
+  // this just gives teachers and assessors a faster way to fill them in
+  // and a place to see what's already been supplied.
+
+  // Qualifications/trade background and teaching/industry experience are
+  // free text that changes over time (a new qualification, a reworded
+  // summary). Stored append-only -- editing the profile INSERTs a new
+  // version rather than UPDATEing in place, so a declaration or
+  // verification that cites "the profile as it stood on this date" keeps
+  // pointing at the exact text that was true then, never silently
+  // rewritten later. The current profile for a staff member is simply
+  // the latest row by recorded_at.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_competency_profile_versions (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      qualifications_trade TEXT,
+      teaching_industry_experience TEXT,
+      recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      recorded_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL
+    );
+  `);
+
+  // Licences/certificates, each with its own expiry date. Same append-only
+  // idea as above, via "active" + "superseded_by_id" rather than editing a
+  // row's real content in place: renewing or correcting a licence inserts
+  // a new row and flips the old one's active flag off (pointing at the
+  // new row), so anything that already cited the old row's exact details
+  // still has them -- see staff_profile_review_flags below for how a
+  // change gets surfaced to whoever relied on it.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_profile_licences (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      issuing_body TEXT,
+      licence_number TEXT,
+      expiry_date DATE,
+      notes TEXT,
+      active BOOLEAN NOT NULL DEFAULT true,
+      superseded_by_id INTEGER REFERENCES staff_profile_licences(id) ON DELETE SET NULL,
+      recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      recorded_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL
+    );
+  `);
+
+  // Supporting evidence (a link or a description of something held on
+  // file elsewhere -- this app still has no binary upload storage, same
+  // as staff_induction_evidence above) attached to the profile directly
+  // rather than to one declaration, so it can be pointed at from many
+  // equipment records without uploading or re-describing it each time.
+  // "removed" soft-deletes (never a hard delete -- anything that already
+  // applied this evidence to a record keeps the application row and gets
+  // flagged for review instead of losing its history).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_profile_evidence (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      url TEXT,
+      notes TEXT,
+      removed BOOLEAN NOT NULL DEFAULT false,
+      removed_at TIMESTAMPTZ,
+      added_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      added_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // "Equipment groups the staff member has experience using" -- a claim
+  // against one of the existing induction_equipment_categories (Section 1
+  // groupings), used to pre-tick relevant items for them on the grouped
+  // self-assessment screen. A claim here is informational only: it never
+  // by itself changes any declaration/verification/authorisation status.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_profile_equipment_groups (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      category_id INTEGER NOT NULL REFERENCES induction_equipment_categories(id) ON DELETE CASCADE,
+      notes TEXT,
+      added_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (staff_id, category_id)
+    );
+  `);
+
+  // Records that a piece of profile evidence/licence was shown on, and
+  // relied on for, a particular equipment item -- this is what lets an
+  // item's record say "supported by: <profile evidence>" instead of that
+  // evidence being copied or re-uploaded onto the item. declaration_batch_id
+  // / verification_batch_id are set when the application happened as part
+  // of submitting one of the bulk screens below (null for a plain
+  // "apply this to the item" action with no declaration/verification
+  // attached yet) -- this is the traceable link a review flag (below)
+  // follows back from a changed licence/evidence to every record that used it.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_profile_evidence_applications (
+      id SERIAL PRIMARY KEY,
+      profile_evidence_id INTEGER NOT NULL REFERENCES staff_profile_evidence(id) ON DELETE CASCADE,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      declaration_batch_id INTEGER,
+      verification_batch_id INTEGER,
+      applied_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_profile_licence_applications (
+      id SERIAL PRIMARY KEY,
+      profile_licence_id INTEGER NOT NULL REFERENCES staff_profile_licences(id) ON DELETE CASCADE,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      declaration_batch_id INTEGER,
+      verification_batch_id INTEGER,
+      applied_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // "When qualifications, evidence or expiry dates change, flag affected
+  // records for review." Never deletes, revokes or auto-extends anything
+  // itself -- it just surfaces a prompt for an assessor to look again.
+  // induction_item_id is null for a profile-wide flag (e.g. the summary
+  // text changed) rather than one tied to a specific equipment record.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_profile_review_flags (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      induction_item_id INTEGER REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      reason TEXT NOT NULL,
+      source_type TEXT NOT NULL CHECK (source_type IN ('profile_updated','licence_superseded','licence_removed','evidence_removed')),
+      source_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved BOOLEAN NOT NULL DEFAULT false,
+      resolved_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      resolved_at TIMESTAMPTZ,
+      resolution_notes TEXT
+    );
+  `);
+
+  // The grouped self-assessment screen ("select several items and declare
+  // ... record one authenticated declaration with its date, the selected
+  // equipment and the evidence used"). One batch row per submission;
+  // batch_status is the status applied to the selection, but an item can
+  // carry its own different status in staff_declaration_batch_items below
+  // ("allow individual exceptions") -- submitting still writes/updates the
+  // real per-item staff_induction_declarations row for every item in the
+  // batch (see server.js), so this is an audit trail alongside the
+  // existing table, not a replacement for it.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_declaration_batches (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      batch_status TEXT NOT NULL CHECK (batch_status IN ('C','NYC','NA')),
+      confirmed_quals_support BOOLEAN NOT NULL DEFAULT false,
+      profile_version_id INTEGER REFERENCES staff_competency_profile_versions(id) ON DELETE SET NULL,
+      notes TEXT,
+      declared_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      declared_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_declaration_batch_items (
+      id SERIAL PRIMARY KEY,
+      batch_id INTEGER NOT NULL REFERENCES staff_declaration_batches(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      status TEXT NOT NULL CHECK (status IN ('C','NYC','NA')),
+      comment TEXT,
+      UNIQUE (batch_id, induction_item_id)
+    );
+  `);
+
+  // The experienced-staff review pathway -- an assessor reviewing the
+  // profile against several items together. "Only allow bulk
+  // verification where the assessor explicitly confirms the evidence
+  // supports each selected item" is confirmed_evidence_supports, required
+  // true to submit (enforced in server.js). "Keep a separate verification
+  // record for every item" is why submitting still writes one row per
+  // item into the existing staff_induction_competency_verifications table
+  // (see server.js) -- this batch is the record of the review session
+  // that produced them, not a substitute for the per-item rows.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_verification_batches (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      assessor_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      basis TEXT NOT NULL,
+      confirmed_evidence_supports BOOLEAN NOT NULL DEFAULT false,
+      remaining_requirements TEXT,
+      profile_version_id INTEGER REFERENCES staff_competency_profile_versions(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_verification_batch_items (
+      id SERIAL PRIMARY KEY,
+      batch_id INTEGER NOT NULL REFERENCES staff_verification_batches(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      gaps_or_restrictions TEXT,
+      UNIQUE (batch_id, induction_item_id)
+    );
+  `);
+
+  // Shared topics ("workshop emergency procedures and general workshop
+  // rules") recorded once and referenced by whichever equipment records
+  // an admin links them to, instead of being repeated as a machine-
+  // specific requirement on every item. Deliberately separate from
+  // staff_induction_steps/staff_induction_assessments, which stay
+  // machine-specific (SOP acknowledgement, practical assessment, etc.)
+  // -- a shared-topic acknowledgement never substitutes for those.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_shared_topics (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      archived BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_item_shared_topics (
+      topic_id INTEGER NOT NULL REFERENCES induction_shared_topics(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      PRIMARY KEY (topic_id, induction_item_id)
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_shared_topic_acknowledgements (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      topic_id INTEGER NOT NULL REFERENCES induction_shared_topics(id) ON DELETE CASCADE,
+      acknowledged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      acknowledged_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      notes TEXT,
+      UNIQUE (staff_id, topic_id)
+    );
+  `);
+
+  // Seed the two shared topics named explicitly in the spec -- nothing
+  // else invented. Admins can add more from the shared-topics admin page.
+  const sharedTopicCount = await pool.query('SELECT COUNT(*)::int AS count FROM induction_shared_topics');
+  if (sharedTopicCount.rows[0].count === 0) {
+    await pool.query(
+      `INSERT INTO induction_shared_topics (name, description, sort_order) VALUES
+       ('Workshop Emergency Procedures', 'Emergency stop locations, evacuation routes, first aid and incident reporting for this workshop.', 0),
+       ('General Workshop Rules', 'General conduct, PPE and housekeeping rules that apply across the whole workshop, not just one machine.', 1)`
+    );
+  }
 }
 
 module.exports = { pool, migrate };
