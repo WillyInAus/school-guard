@@ -5625,6 +5625,1549 @@ app.post('/admin/equipment/:id/delete', requireRole('admin'), async (req, res, n
   }
 });
 
+// ---------- Staff Equipment Induction ----------
+//
+// Built from the uploaded "Staff Equipment Induction Register" (Qld DETE
+// ITD template) plus Sean's written spec. Reuses staff_users (role
+// submitter = self-assessing staff member; approver = authorised
+// inductor/assessor; admin = authorised school leader + everything an
+// approver can do -- see canActAsAssessor/canAuthoriseSchoolLeader below),
+// equipment_items and pera_records rather than a second staff/equipment
+// list. See db.js for the full table set and the "why" behind each one.
+
+const INDUCTION_STEP_LABELS = {
+  1: 'Read and understand the SOP and risk assessment',
+  2: 'Practical instruction and demonstration from a competent person',
+  3: 'Hands-on practice / supervised logbook',
+  4: 'Content / theory competency test',
+  5: 'Induction record complete — inductor and inductee sign-off',
+};
+
+const DECLARATION_LABELS = {
+  not_assessed: 'Not assessed',
+  C: 'C — Self-assessed competent',
+  NYC: 'NYC — Not yet competent',
+  NA: 'Not applicable',
+};
+const DECLARATION_BADGE = {
+  not_assessed: 'badge-draft',
+  C: 'badge-approved',
+  NYC: 'badge-changes',
+  NA: 'badge-draft',
+};
+
+const STEP_STATUS_LABELS = { not_started: 'Not started', in_progress: 'In progress', complete: 'Complete' };
+const STEP_STATUS_BADGE = { not_started: 'badge-draft', in_progress: 'badge-pending', complete: 'badge-approved' };
+
+const ASSESSMENT_RESULT_LABELS = {
+  not_assessed: 'Not assessed',
+  demonstrated: 'Demonstrated',
+  not_yet_demonstrated: 'Not yet demonstrated',
+  not_applicable: 'Not applicable',
+};
+const ASSESSMENT_RESULT_BADGE = {
+  not_assessed: 'badge-draft',
+  demonstrated: 'badge-approved',
+  not_yet_demonstrated: 'badge-changes',
+  not_applicable: 'badge-draft',
+};
+
+// Brisbane (Qld) doesn't observe daylight saving, but we still ask the
+// Intl API for the named zone rather than hardcoding +10 so this stays
+// correct regardless of where the server itself is hosted.
+function formatBrisbaneDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Australia/Brisbane' });
+}
+function formatBrisbaneDateTime(d) {
+  if (!d) return '—';
+  const date = new Date(d);
+  const datePart = date.toLocaleDateString('en-AU', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Australia/Brisbane' });
+  const timePart = date.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Australia/Brisbane' });
+  return `${datePart}, ${timePart} (Brisbane)`;
+}
+function formatHours(minutes) {
+  if (!minutes) return '0 h';
+  return `${(minutes / 60).toFixed(1)} h`;
+}
+
+// Who can act as the inductor/assessor for someone else's induction
+// (verify steps, run a machine-competency assessment, verify a logbook
+// entry, record assessor-verified competency). Mapped onto the app's
+// existing three roles rather than inventing new ones -- see the note to
+// Sean in this round's write-up for how to ask for finer-grained roles
+// later if admin/approver turns out to be too coarse.
+function canActAsAssessor(role) {
+  return role === 'admin' || role === 'approver';
+}
+// Who can record school authorisation to operate equipment / supervise
+// students -- kept narrower than "assessor" on purpose (section 6 of the
+// spec treats this as a distinct school-leader decision).
+function canAuthoriseSchoolLeader(role) {
+  return role === 'admin';
+}
+// "Staff must not approve their own competency or authorisation" --
+// applied to every verify/sign/authorise action in this module,
+// regardless of the acting user's role (even an admin can't sign off on
+// themselves).
+function blockSelfAction(res, actorId, targetStaffId) {
+  if (Number(actorId) === Number(targetStaffId)) {
+    res.status(403).send('You cannot verify, sign off on, or authorise your own induction record. Ask another authorised staff member to do this. <a href="javascript:history.back()">Back</a>');
+    return true;
+  }
+  return false;
+}
+
+async function logInductionChange({ staffId, inductionItemId, contextType, contextId, summary, changedByStaffId }) {
+  await pool.query(
+    `INSERT INTO induction_change_log (staff_id, induction_item_id, context_type, context_id, summary, changed_by_staff_id)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [staffId, inductionItemId || null, contextType, contextId || null, summary, changedByStaffId || null]
+  );
+}
+
+async function getInductionCategoriesWithItems({ onlyAvailable = true } = {}) {
+  const { rows } = await pool.query(
+    `SELECT i.id, i.name, i.sort_order, i.category_id, i.pera_id, i.available_at_school,
+            c.name AS category_name, c.sort_order AS category_sort_order,
+            p.activity_name AS pera_name
+     FROM induction_equipment_items i
+     JOIN induction_equipment_categories c ON c.id = i.category_id
+     LEFT JOIN pera_records p ON p.id = i.pera_id
+     ${onlyAvailable ? 'WHERE i.available_at_school = true' : ''}
+     ORDER BY c.sort_order, i.sort_order`
+  );
+  const categories = [];
+  const byId = new Map();
+  for (const row of rows) {
+    if (!byId.has(row.category_id)) {
+      const cat = { id: row.category_id, name: row.category_name, items: [] };
+      byId.set(row.category_id, cat);
+      categories.push(cat);
+    }
+    byId.get(row.category_id).items.push(row);
+  }
+  return categories;
+}
+
+async function getActiveStaffList() {
+  const { rows } = await pool.query(`SELECT id, name, email, role FROM staff_users WHERE disabled = false ORDER BY name`);
+  return rows;
+}
+
+function inductionNavBody(active, inner) {
+  return `
+    <a class="back-link" href="/induction">← Staff Induction</a>
+    ${inner}
+  `;
+}
+
+// ---------- Induction: dashboard ----------
+
+app.get('/induction', async (req, res, next) => {
+  try {
+    const [trainingRequired, pendingVerification, staffCount, itemCount] = await Promise.all([
+      pool.query(`
+        SELECT COUNT(*)::int AS count FROM staff_induction_declarations d
+        JOIN staff_users s ON s.id = d.staff_id AND s.disabled = false
+        WHERE d.status = 'NYC'`),
+      pool.query(`
+        SELECT COUNT(*)::int AS count FROM staff_induction_declarations d
+        JOIN staff_users s ON s.id = d.staff_id AND s.disabled = false
+        WHERE d.status = 'C'
+        AND NOT EXISTS (
+          SELECT 1 FROM staff_induction_competency_verifications v
+          WHERE v.staff_id = d.staff_id AND v.induction_item_id = d.induction_item_id AND v.verified = true
+        )`),
+      pool.query(`SELECT COUNT(*)::int AS count FROM staff_users WHERE disabled = false`),
+      pool.query(`SELECT COUNT(*)::int AS count FROM induction_equipment_items WHERE available_at_school = true`),
+    ]);
+
+    const cards = [
+      ['/induction/me', 'My Induction', 'Your own equipment proficiency, induction progress, logbook and authorisations.'],
+      ['/induction/matrix', 'Staff / equipment matrix', 'School-wide view of every staff member against every piece of equipment.'],
+      ['/induction/training-required', `Training required (${trainingRequired.rows[0].count})`, 'Staff who have declared themselves not yet competent on an item.'],
+      ['/induction/pending-verification', `Pending verification (${pendingVerification.rows[0].count})`, 'Self-assessed "competent" declarations an assessor hasn\'t verified yet.'],
+    ];
+
+    const body = `
+      <h1 class="page-title">Staff Induction</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">Equipment proficiency, induction and competency verification for ${escapeHtml(String(staffCount.rows[0].count))} staff across ${escapeHtml(String(itemCount.rows[0].count))} equipment items.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-bottom:24px;">
+        ${cards.map(([href, title, desc]) => `
+          <a class="card" href="${href}" style="padding:20px;display:block;text-decoration:none;color:inherit;">
+            <div style="font-weight:700;font-size:15px;color:#1A1D1B;margin-bottom:6px;">${escapeHtml(title)}</div>
+            <div style="font-size:13px;color:#6B6659;">${escapeHtml(desc)}</div>
+          </a>
+        `).join('')}
+      </div>
+      ${req.staffUser.role === 'admin' || req.staffUser.role === 'approver' ? `
+      <div class="card" style="padding:20px;">
+        <div style="font-weight:700;font-size:14px;margin-bottom:10px;">Admin &amp; assessor tools</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <a href="/admin/induction/items" style="color:#1B5E52;font-weight:600;">Manage the equipment induction list (link to PERA, hide items not at this school) →</a>
+        </div>
+      </div>` : ''}
+    `;
+    res.send(page({ title: 'Staff Induction', active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/induction/me', (req, res) => {
+  res.redirect(`/induction/staff/${req.staffUser.id}`);
+});
+
+// ---------- Induction: staff profile (Section 1 — equipment proficiency register) ----------
+
+app.get('/induction/staff/:staffId', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const isSelf = staffId === req.staffUser.id;
+    if (!isSelf && !canActAsAssessor(req.staffUser.role)) {
+      return res.status(403).send('You can only view your own induction profile. <a href="/induction">Back</a>');
+    }
+    const staffResult = await pool.query('SELECT id, name, email, role FROM staff_users WHERE id = $1', [staffId]);
+    if (!staffResult.rows.length) return res.status(404).send('Staff member not found.');
+    const staff = staffResult.rows[0];
+
+    const [categories, declResult, verifResult, authResult, stepsResult] = await Promise.all([
+      getInductionCategoriesWithItems(),
+      pool.query('SELECT * FROM staff_induction_declarations WHERE staff_id = $1', [staffId]),
+      pool.query('SELECT * FROM staff_induction_competency_verifications WHERE staff_id = $1', [staffId]),
+      pool.query('SELECT * FROM staff_induction_authorisations WHERE staff_id = $1', [staffId]),
+      pool.query(`SELECT induction_item_id, COUNT(*) FILTER (WHERE status = 'complete')::int AS done, COUNT(*)::int AS total
+                  FROM staff_induction_steps WHERE staff_id = $1 GROUP BY induction_item_id`, [staffId]),
+    ]);
+    const declByItem = new Map(declResult.rows.map((d) => [d.induction_item_id, d]));
+    const verifByItem = new Map(verifResult.rows.map((v) => [v.induction_item_id, v]));
+    const authByItem = new Map();
+    for (const a of authResult.rows) {
+      if (!authByItem.has(a.induction_item_id)) authByItem.set(a.induction_item_id, {});
+      authByItem.get(a.induction_item_id)[a.authorisation_type] = a;
+    }
+    const stepsByItem = new Map(stepsResult.rows.map((s) => [s.induction_item_id, s]));
+
+    const categoryBlocks = categories.map((cat) => `
+      <div class="form-section-title" style="margin-top:24px;">${escapeHtml(cat.name)}</div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;color:#6B6659;border-bottom:1px solid #E4DFD3;">
+            <th style="padding:8px 6px;">Equipment / process</th>
+            <th style="padding:8px 6px;">Self-assessed</th>
+            <th style="padding:8px 6px;">Induction progress</th>
+            <th style="padding:8px 6px;">Verified competency</th>
+            <th style="padding:8px 6px;">Operate</th>
+            <th style="padding:8px 6px;">Supervise students</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${cat.items.map((item) => {
+            const decl = declByItem.get(item.id);
+            const status = decl ? decl.status : 'not_assessed';
+            const verif = verifByItem.get(item.id);
+            const auth = authByItem.get(item.id) || {};
+            const steps = stepsByItem.get(item.id);
+            const stepsText = steps ? `${steps.done}/5 steps` : '0/5 steps';
+            return `
+              <tr style="border-bottom:1px solid #F0EDE5;">
+                <td style="padding:8px 6px;font-size:13px;">${escapeHtml(item.name)}</td>
+                <td style="padding:8px 6px;"><span class="badge ${DECLARATION_BADGE[status]}">${escapeHtml(DECLARATION_LABELS[status])}</span></td>
+                <td style="padding:8px 6px;font-size:12px;color:#6B6659;">${escapeHtml(stepsText)}</td>
+                <td style="padding:8px 6px;"><span class="badge ${verif && verif.verified ? 'badge-approved' : 'badge-draft'}">${verif && verif.verified ? 'Verified' : 'Not verified'}</span></td>
+                <td style="padding:8px 6px;"><span class="badge ${auth.operate && auth.operate.authorised ? 'badge-approved' : 'badge-draft'}">${auth.operate && auth.operate.authorised ? 'Authorised' : 'Not authorised'}</span></td>
+                <td style="padding:8px 6px;"><span class="badge ${auth.supervise_students && auth.supervise_students.authorised ? 'badge-approved' : 'badge-draft'}">${auth.supervise_students && auth.supervise_students.authorised ? 'Authorised' : 'Not authorised'}</span></td>
+                <td style="padding:8px 6px;text-align:right;"><a href="/induction/staff/${staffId}/item/${item.id}" style="color:#1B5E52;font-weight:600;font-size:13px;">Open →</a></td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    `).join('');
+
+    const body = `
+      <a class="back-link" href="/induction">← Staff Induction</a>
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">${escapeHtml(staff.name)}</h1>
+          <p class="page-subtitle">${escapeHtml(staff.email)} · Faith Lutheran College${isSelf ? ' · This is your induction profile' : ''}</p>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <a class="btn btn-secondary" href="/induction/staff/${staffId}/print">Printable record</a>
+          <a class="btn btn-secondary" href="/induction/staff/${staffId}/export.pdf">PDF export</a>
+        </div>
+      </div>
+      <div class="note-box">Self-assessed ("C") is the staff member's own declaration only — it does not by itself authorise using the equipment or supervising students on it. Only a separate assessor-verified competency and school authorisation (right-hand columns) permit that.</div>
+      <div class="card" style="padding:22px;">
+        ${categoryBlocks}
+      </div>
+    `;
+    res.send(page({ title: `${staff.name} — Induction`, active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Induction: per-item workspace (declaration, 5-step workflow,
+// machine checklist, logbook, verification, authorisation — all for one
+// staff member × one equipment item) ----------
+
+async function getInductionItem(itemId) {
+  const { rows } = await pool.query(
+    `SELECT i.*, c.name AS category_name, p.activity_name AS pera_name
+     FROM induction_equipment_items i
+     JOIN induction_equipment_categories c ON c.id = i.category_id
+     LEFT JOIN pera_records p ON p.id = i.pera_id
+     WHERE i.id = $1`,
+    [itemId]
+  );
+  return rows[0] || null;
+}
+
+function evidenceListHtml(evidenceRows, staffNameById) {
+  if (!evidenceRows.length) return '<div class="form-section-hint" style="margin:4px 0 0;">No evidence attached.</div>';
+  return `<div style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">${evidenceRows.map((e) => `
+    <div style="font-size:12px;color:#6B6659;">
+      ${e.url ? `<a href="${escapeHtml(e.url)}" target="_blank" rel="noopener" style="color:#1B5E52;font-weight:600;">${escapeHtml(e.title)}</a>` : `<strong>${escapeHtml(e.title)}</strong>`}
+      ${e.notes ? ` — ${escapeHtml(e.notes)}` : ''}
+      <span style="color:#B0AA9A;"> · ${escapeHtml(staffNameById.get(e.added_by_staff_id) || 'Unknown')}, ${formatBrisbaneDateTime(e.added_at)}</span>
+    </div>`).join('')}</div>`;
+}
+
+app.get('/induction/staff/:staffId/item/:itemId', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const itemId = Number(req.params.itemId);
+    const isSelf = staffId === req.staffUser.id;
+    const isAssessor = canActAsAssessor(req.staffUser.role);
+    const isSchoolLeader = canAuthoriseSchoolLeader(req.staffUser.role);
+    if (!isSelf && !isAssessor) {
+      return res.status(403).send('You can only view your own induction profile. <a href="/induction">Back</a>');
+    }
+
+    const [staffResult, item, allStaff] = await Promise.all([
+      pool.query('SELECT id, name, email, role FROM staff_users WHERE id = $1', [staffId]),
+      getInductionItem(itemId),
+      getActiveStaffList(),
+    ]);
+    if (!staffResult.rows.length) return res.status(404).send('Staff member not found.');
+    if (!item) return res.status(404).send('Equipment item not found.');
+    const staff = staffResult.rows[0];
+    const staffNameById = new Map(allStaff.map((s) => [s.id, s.name]));
+
+    const physicalEquipment = item.pera_id
+      ? (await pool.query('SELECT id, name, status FROM equipment_items WHERE pera_id = $1 ORDER BY name', [item.pera_id])).rows
+      : [];
+
+    const [decl, steps, template, logbook, target, verif, authRows, changeLog] = await Promise.all([
+      pool.query('SELECT * FROM staff_induction_declarations WHERE staff_id = $1 AND induction_item_id = $2', [staffId, itemId]),
+      pool.query('SELECT * FROM staff_induction_steps WHERE staff_id = $1 AND induction_item_id = $2 ORDER BY step_number', [staffId, itemId]),
+      pool.query('SELECT * FROM induction_checklist_templates WHERE induction_item_id = $1 ORDER BY created_at DESC LIMIT 1', [itemId]),
+      pool.query('SELECT * FROM induction_logbook_entries WHERE staff_id = $1 AND induction_item_id = $2 ORDER BY session_date DESC, id DESC', [staffId, itemId]),
+      pool.query('SELECT * FROM induction_practice_targets WHERE staff_id = $1 AND induction_item_id = $2', [staffId, itemId]),
+      pool.query('SELECT * FROM staff_induction_competency_verifications WHERE staff_id = $1 AND induction_item_id = $2', [staffId, itemId]),
+      pool.query('SELECT * FROM staff_induction_authorisations WHERE staff_id = $1 AND induction_item_id = $2', [staffId, itemId]),
+      pool.query('SELECT * FROM induction_change_log WHERE staff_id = $1 AND induction_item_id = $2 ORDER BY changed_at DESC LIMIT 25', [staffId, itemId]),
+    ]);
+    const declaration = decl.rows[0] || null;
+
+    let criteria = [];
+    let latestAssessment = null;
+    let results = [];
+    if (template.rows.length) {
+      const tpl = template.rows[0];
+      const [critResult, assessResult] = await Promise.all([
+        pool.query('SELECT * FROM induction_checklist_criteria WHERE template_id = $1 ORDER BY sort_order', [tpl.id]),
+        pool.query('SELECT * FROM staff_induction_assessments WHERE staff_id = $1 AND template_id = $2 ORDER BY id DESC LIMIT 1', [staffId, tpl.id]),
+      ]);
+      criteria = critResult.rows;
+      latestAssessment = assessResult.rows[0] || null;
+      if (latestAssessment) {
+        results = (await pool.query('SELECT * FROM staff_induction_assessment_results WHERE assessment_id = $1', [latestAssessment.id])).rows;
+      }
+    }
+    const resultByCriterion = new Map(results.map((r) => [r.criterion_id, r]));
+
+    // Evidence: pull everything relevant to this staff+item in one go,
+    // keyed by its context so each section below can find its own.
+    const evidenceContextIds = {
+      declaration: declaration ? [declaration.id] : [],
+      step: steps.rows.map((s) => s.id),
+      assessment: latestAssessment ? [latestAssessment.id] : [],
+      verification: verif.rows.length ? [verif.rows[0].id] : [],
+      authorisation: authRows.rows.map((a) => a.id),
+      logbook: logbook.rows.map((l) => l.id),
+    };
+    const evidenceRows = {};
+    for (const [ctxType, ids] of Object.entries(evidenceContextIds)) {
+      if (!ids.length) { evidenceRows[ctxType] = new Map(); continue; }
+      const r = await pool.query('SELECT * FROM staff_induction_evidence WHERE context_type = $1 AND context_id = ANY($2::int[]) ORDER BY added_at', [ctxType, ids]);
+      const m = new Map();
+      for (const row of r.rows) {
+        if (!m.has(row.context_id)) m.set(row.context_id, []);
+        m.get(row.context_id).push(row);
+      }
+      evidenceRows[ctxType] = m;
+    }
+
+    const staffOptions = allStaff.filter((s) => s.id !== staffId).map((s) => `<option value="${s.id}">${escapeHtml(s.name)} (${s.role})</option>`).join('');
+
+    // ---- Declaration panel ----
+    const declStatus = declaration ? declaration.status : 'not_assessed';
+    const declarationPanel = `
+      <div class="card" style="padding:22px;margin-bottom:20px;">
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Self-assessed competence</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+          <span class="badge ${DECLARATION_BADGE[declStatus]}">${escapeHtml(DECLARATION_LABELS[declStatus])}</span>
+          ${declaration && declaration.declared_at ? `<span style="font-size:12px;color:#6B6659;">Declared ${formatBrisbaneDateTime(declaration.declared_at)}</span>` : ''}
+        </div>
+        ${declaration && declaration.qualifications_experience ? `<div class="detail-value" style="margin-bottom:8px;"><strong>Qualifications / experience:</strong> ${escapeHtml(declaration.qualifications_experience)}</div>` : ''}
+        ${evidenceListHtml(declaration ? (evidenceRows.declaration.get(declaration.id) || []) : [], staffNameById)}
+        <div style="margin-top:12px;font-size:13px;">
+          HOD acknowledgement: ${declaration && declaration.hod_ack_staff_id
+            ? `<span class="badge badge-approved">Acknowledged</span> <span style="color:#6B6659;">by ${escapeHtml(staffNameById.get(declaration.hod_ack_staff_id) || 'Unknown')}, ${formatBrisbaneDateTime(declaration.hod_ack_at)}</span>`
+            : '<span class="badge badge-draft">Not yet acknowledged</span>'}
+        </div>
+        ${(isSelf || req.staffUser.role === 'admin') ? `
+        <form method="post" action="/induction/staff/${staffId}/item/${itemId}/declare" style="margin-top:16px;border-top:1px solid #E4DFD3;padding-top:16px;">
+          <div class="form-row">
+            <label for="decl_status">Rate your competence</label>
+            <select id="decl_status" name="status">
+              ${Object.keys(DECLARATION_LABELS).map((k) => `<option value="${k}" ${declStatus === k ? 'selected' : ''}>${escapeHtml(DECLARATION_LABELS[k])}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="decl_quals">Qualifications / experience (required for "C")</label>
+            <textarea id="decl_quals" name="qualifications_experience" placeholder="e.g. Cert III Cabinet Making 2014; 8 years classroom use">${escapeHtml(declaration ? declaration.qualifications_experience || '' : '')}</textarea>
+          </div>
+          <div class="form-row"><label for="decl_ev_title">Evidence title (optional)</label><input type="text" id="decl_ev_title" name="evidence_title" placeholder="e.g. Trade certificate scan"></div>
+          <div class="form-row"><label for="decl_ev_url">Evidence link (optional)</label><input type="text" id="decl_ev_url" name="evidence_url" placeholder="https://..."></div>
+          <div class="form-row"><label for="decl_ev_notes">Evidence / comments (optional)</label><textarea id="decl_ev_notes" name="evidence_notes"></textarea></div>
+          <div class="form-actions"><button type="submit" class="btn btn-primary">Save declaration</button></div>
+        </form>` : ''}
+        ${(isAssessor && !isSelf && declaration) ? `
+        <form method="post" action="/induction/staff/${staffId}/item/${itemId}/declare/acknowledge" style="margin-top:12px;">
+          <button type="submit" class="btn btn-secondary">${declaration.hod_ack_staff_id ? 'Re-acknowledge' : 'Acknowledge this declaration (HOD)'}</button>
+        </form>` : ''}
+      </div>
+    `;
+
+    // ---- 5-step induction workflow ----
+    const stepByNumber = new Map(steps.rows.map((s) => [s.step_number, s]));
+    const stepsPanel = `
+      <div class="card" style="padding:22px;margin-bottom:20px;">
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Equipment induction process</div>
+        <div class="note-box">Required once an item is declared "NYC" — but an assessor can also use this to document a review pathway for an experienced staff member (e.g. "prior trade qualification sighted") rather than repeating every step from scratch.</div>
+        ${[1, 2, 3, 4, 5].map((n) => {
+          const s = stepByNumber.get(n) || { status: 'not_started' };
+          const canEditStep = isAssessor && !isSelf;
+          return `
+          <div style="border-top:1px solid #E4DFD3;padding:14px 0;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="badge ${STEP_STATUS_BADGE[s.status]}">${escapeHtml(STEP_STATUS_LABELS[s.status])}</span>
+              <strong style="font-size:13px;">${n}. ${escapeHtml(INDUCTION_STEP_LABELS[n])}</strong>
+            </div>
+            ${s.completed_at ? `<div style="font-size:12px;color:#6B6659;margin-top:4px;">Completed ${formatBrisbaneDateTime(s.completed_at)}${s.responsible_staff_id ? ` by ${escapeHtml(staffNameById.get(s.responsible_staff_id) || 'Unknown')}` : ''}</div>` : ''}
+            ${s.notes ? `<div class="detail-value" style="margin-top:4px;">${escapeHtml(s.notes)}</div>` : ''}
+            ${evidenceListHtml(s.id ? (evidenceRows.step.get(s.id) || []) : [], staffNameById)}
+            ${n === 5 ? `
+              <div style="margin-top:8px;font-size:12px;color:#6B6659;">
+                Inductee sign-off: ${s.inductee_signed_staff_id ? `<span class="badge badge-approved">Signed</span> ${escapeHtml(staffNameById.get(s.inductee_signed_staff_id) || '')}, ${formatBrisbaneDateTime(s.inductee_signed_at)}` : '<span class="badge badge-draft">Not signed</span>'}<br>
+                Inductor sign-off: ${s.inductor_signed_staff_id ? `<span class="badge badge-approved">Signed</span> ${escapeHtml(staffNameById.get(s.inductor_signed_staff_id) || '')}, ${formatBrisbaneDateTime(s.inductor_signed_at)}` : '<span class="badge badge-draft">Not signed</span>'}
+              </div>
+              <div style="display:flex;gap:8px;margin-top:8px;">
+                ${isSelf && !s.inductee_signed_staff_id ? `<form method="post" action="/induction/staff/${staffId}/item/${itemId}/step/5/sign"><input type="hidden" name="role" value="inductee"><button type="submit" class="btn btn-secondary">Sign as inductee</button></form>` : ''}
+                ${isAssessor && !isSelf && !s.inductor_signed_staff_id ? `<form method="post" action="/induction/staff/${staffId}/item/${itemId}/step/5/sign"><input type="hidden" name="role" value="inductor"><button type="submit" class="btn btn-secondary">Sign as inductor</button></form>` : ''}
+              </div>
+            ` : ''}
+            ${canEditStep ? `
+            <form method="post" action="/induction/staff/${staffId}/item/${itemId}/step/${n}" style="margin-top:10px;background:#FAF8F3;padding:12px;border-radius:8px;">
+              <div class="form-row">
+                <label>Status</label>
+                <select name="status">
+                  ${Object.keys(STEP_STATUS_LABELS).map((k) => `<option value="${k}" ${s.status === k ? 'selected' : ''}>${escapeHtml(STEP_STATUS_LABELS[k])}</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-row"><label>Responsible person</label><select name="responsible_staff_id"><option value="">— None —</option>${allStaff.map((st) => `<option value="${st.id}" ${s.responsible_staff_id === st.id ? 'selected' : ''}>${escapeHtml(st.name)}</option>`).join('')}</select></div>
+              <div class="form-row"><label>Notes</label><textarea name="notes" placeholder="What was covered / observed">${escapeHtml(s.notes || '')}</textarea></div>
+              <div class="form-row"><label>Session date (optional — logs a dated session without changing overall status)</label><input type="date" name="session_date"></div>
+              <div class="form-row"><label>Evidence title (optional)</label><input type="text" name="evidence_title"></div>
+              <div class="form-row"><label>Evidence link (optional)</label><input type="text" name="evidence_url"></div>
+              <div class="form-actions"><button type="submit" class="btn btn-primary">Save step ${n}</button></div>
+            </form>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    `;
+
+    // ---- Machine competency checklist ----
+    const checklistPanel = `
+      <div class="card" style="padding:22px;margin-bottom:20px;">
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Machine competency checklist</div>
+        ${!template.rows.length ? `
+          <div class="form-section-hint" style="margin:0;">No checklist template yet for this equipment type.</div>
+          ${isAssessor ? `<a class="btn btn-secondary" href="/induction/item/${itemId}/checklist" style="margin-top:10px;display:inline-block;">Create a checklist template</a>` : ''}
+        ` : `
+          <div style="font-size:12px;color:#6B6659;margin-bottom:10px;">
+            ${criteria.length} criteria · ${template.rows[0].approved_at ? `<span class="badge badge-approved">Approved</span> by ${escapeHtml(staffNameById.get(template.rows[0].approved_by_staff_id) || 'Unknown')}, ${formatBrisbaneDateTime(template.rows[0].approved_at)}` : '<span class="badge badge-pending">Draft — not yet approved</span>'}
+            ${isAssessor ? ` · <a href="/induction/item/${itemId}/checklist" style="color:#1B5E52;font-weight:600;">Edit template →</a>` : ''}
+          </div>
+          ${!criteria.length ? '<div class="form-section-hint" style="margin:0;">No criteria added yet — nothing can be assessed until a competent person adds some.</div>' : `
+            ${latestAssessment ? `
+              <div style="font-size:12px;color:#6B6659;margin-bottom:8px;">
+                Assessment ${latestAssessment.status === 'complete' ? `<span class="badge badge-approved">Complete</span>` : `<span class="badge badge-pending">In progress</span>`}
+                ${latestAssessment.assessor_staff_id ? ` · Assessor: ${escapeHtml(staffNameById.get(latestAssessment.assessor_staff_id) || 'Unknown')}` : ''}
+                ${latestAssessment.assessment_date ? ` · ${formatBrisbaneDate(latestAssessment.assessment_date)}` : ''}
+              </div>
+            ` : '<div class="form-section-hint" style="margin:0 0 8px;">No assessment started yet.</div>'}
+            <table style="width:100%;border-collapse:collapse;margin-bottom:10px;">
+              <tbody>
+                ${criteria.map((c) => {
+                  const r = resultByCriterion.get(c.id);
+                  const result = r ? r.result : 'not_assessed';
+                  return `<tr style="border-bottom:1px solid #F0EDE5;">
+                    <td style="padding:6px;font-size:13px;">${escapeHtml(c.description)}</td>
+                    <td style="padding:6px;"><span class="badge ${ASSESSMENT_RESULT_BADGE[result]}">${escapeHtml(ASSESSMENT_RESULT_LABELS[result])}</span>${r && r.na_reason ? ` <span style="font-size:11px;color:#6B6659;">(${escapeHtml(r.na_reason)})</span>` : ''}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+            ${latestAssessment && latestAssessment.operating_restrictions ? `<div class="detail-value"><strong>Operating restrictions:</strong> ${escapeHtml(latestAssessment.operating_restrictions)}</div>` : ''}
+            ${latestAssessment && latestAssessment.comments ? `<div class="detail-value" style="margin-top:4px;"><strong>Assessor comments:</strong> ${escapeHtml(latestAssessment.comments)}</div>` : ''}
+            ${latestAssessment && latestAssessment.assessor_competence_evidence ? `<div class="detail-value" style="margin-top:4px;"><strong>Assessor's competence/evidence:</strong> ${escapeHtml(latestAssessment.assessor_competence_evidence)}</div>` : ''}
+            ${isAssessor && !isSelf ? `
+            <form method="post" action="/induction/staff/${staffId}/item/${itemId}/assessment/save" style="margin-top:14px;border-top:1px solid #E4DFD3;padding-top:14px;">
+              <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;font-size:13px;">Record / update assessment</div>
+              ${criteria.map((c) => {
+                const r = resultByCriterion.get(c.id);
+                const result = r ? r.result : 'not_assessed';
+                return `
+                <div class="form-row">
+                  <label>${escapeHtml(c.description)}</label>
+                  <select name="result_${c.id}">
+                    ${Object.keys(ASSESSMENT_RESULT_LABELS).map((k) => `<option value="${k}" ${result === k ? 'selected' : ''}>${escapeHtml(ASSESSMENT_RESULT_LABELS[k])}</option>`).join('')}
+                  </select>
+                  <input type="text" name="na_reason_${c.id}" placeholder="Reason if Not applicable" value="${escapeHtml(r ? r.na_reason || '' : '')}" style="margin-top:4px;">
+                </div>`;
+              }).join('')}
+              <div class="form-row"><label>Assessor's relevant competence / supporting evidence</label><textarea name="assessor_competence_evidence">${escapeHtml(latestAssessment ? latestAssessment.assessor_competence_evidence || '' : '')}</textarea></div>
+              <div class="form-row"><label>Operating restrictions (if any)</label><textarea name="operating_restrictions">${escapeHtml(latestAssessment ? latestAssessment.operating_restrictions || '' : '')}</textarea></div>
+              <div class="form-row"><label>Comments</label><textarea name="comments">${escapeHtml(latestAssessment ? latestAssessment.comments || '' : '')}</textarea></div>
+              <div class="form-row"><label>Assessment date</label><input type="date" name="assessment_date" value="${latestAssessment && latestAssessment.assessment_date ? new Date(latestAssessment.assessment_date).toISOString().slice(0, 10) : ''}"></div>
+              <div class="form-row" style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" name="mark_complete" id="mark_complete" style="width:auto;"><label for="mark_complete" style="margin:0;">Mark this assessment complete (only allowed once every criterion above has a result)</label></div>
+              <div class="form-actions"><button type="submit" class="btn btn-primary">Save assessment</button></div>
+            </form>` : ''}
+          `}
+        `}
+      </div>
+    `;
+
+    // ---- Supervised equipment logbook ----
+    const totalVerifiedMinutes = logbook.rows.filter((l) => l.verified).reduce((sum, l) => sum + l.duration_minutes, 0);
+    const targetRow = target.rows[0];
+    const logbookPanel = `
+      <div class="card" style="padding:22px;margin-bottom:20px;">
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Supervised equipment logbook</div>
+        <div style="font-size:13px;margin-bottom:10px;">
+          Verified practice: <strong>${formatHours(totalVerifiedMinutes)}</strong>${targetRow ? ` of ${formatHours(targetRow.target_minutes)} agreed nominal hours` : ' · No nominal hours agreed yet'}
+          ${targetRow ? `<div style="font-size:11px;color:#6B6659;margin-top:2px;">Agreed by ${escapeHtml(staffNameById.get(targetRow.agreed_by_staff_id) || 'Unknown')}, ${formatBrisbaneDateTime(targetRow.agreed_at)}. Reaching this target does not by itself award competency.</div>` : ''}
+        </div>
+        ${isAssessor && !isSelf ? `
+        <form method="post" action="/induction/staff/${staffId}/item/${itemId}/target" style="margin-bottom:14px;">
+          <div class="form-row" style="flex-direction:row;gap:8px;align-items:flex-end;">
+            <div style="flex:1;"><label>Agreed nominal practice hours</label><input type="number" step="0.1" min="0.1" name="target_hours" value="${targetRow ? (targetRow.target_minutes / 60) : ''}"></div>
+            <button type="submit" class="btn btn-secondary">Set target</button>
+          </div>
+        </form>` : ''}
+        <table style="width:100%;border-collapse:collapse;margin-bottom:12px;">
+          <thead><tr style="text-align:left;font-size:11px;text-transform:uppercase;color:#6B6659;border-bottom:1px solid #E4DFD3;"><th style="padding:6px;">Date</th><th style="padding:6px;">Task</th><th style="padding:6px;">Duration</th><th style="padding:6px;">Supervisor</th><th style="padding:6px;">Verified</th></tr></thead>
+          <tbody>
+            ${logbook.rows.length ? logbook.rows.map((l) => `
+              <tr style="border-bottom:1px solid #F0EDE5;">
+                <td style="padding:6px;font-size:13px;">${formatBrisbaneDate(l.session_date)}</td>
+                <td style="padding:6px;font-size:13px;">${escapeHtml(l.task_description)}${l.feedback ? `<div style="font-size:11px;color:#6B6659;">${escapeHtml(l.feedback)}</div>` : ''}${evidenceListHtml(evidenceRows.logbook.get(l.id) || [], staffNameById)}</td>
+                <td style="padding:6px;font-size:13px;">${formatHours(l.duration_minutes)}</td>
+                <td style="padding:6px;font-size:13px;">${escapeHtml(staffNameById.get(l.supervisor_staff_id) || '—')}</td>
+                <td style="padding:6px;">
+                  ${l.verified ? `<span class="badge badge-approved">Verified</span>` : `<span class="badge badge-draft">Unverified</span>`}
+                  ${(!l.verified && isAssessor && req.staffUser.id !== staffId) ? `<form method="post" action="/induction/staff/${staffId}/item/${itemId}/logbook/${l.id}/verify" style="margin-top:4px;"><button type="submit" class="btn btn-secondary" style="font-size:11px;padding:4px 8px;">Verify</button></form>` : ''}
+                </td>
+              </tr>`).join('') : '<tr><td colspan="5" style="padding:6px;font-size:13px;color:#6B6659;">No sessions logged yet.</td></tr>'}
+          </tbody>
+        </table>
+        ${isSelf || isAssessor ? `
+        <form method="post" action="/induction/staff/${staffId}/item/${itemId}/logbook" style="border-top:1px solid #E4DFD3;padding-top:14px;">
+          <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;font-size:13px;">Log a session</div>
+          <div class="form-row"><label>Physical equipment (optional)</label><select name="equipment_id"><option value="">— Not specified —</option>${physicalEquipment.map((e) => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join('')}</select></div>
+          <div class="form-row"><label>Date</label><input type="date" name="session_date" required></div>
+          <div class="form-row"><label>Task / process completed</label><textarea name="task_description" required></textarea></div>
+          <div class="form-row"><label>Duration (hours)</label><input type="number" step="0.1" min="0.1" name="duration_hours" required></div>
+          <div class="form-row"><label>Supervisor</label><select name="supervisor_staff_id"><option value="">— None —</option>${allStaff.map((s) => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}</select></div>
+          <div class="form-row"><label>Feedback</label><textarea name="feedback"></textarea></div>
+          <div class="form-row"><label>Evidence title (optional)</label><input type="text" name="evidence_title"></div>
+          <div class="form-row"><label>Evidence link (optional)</label><input type="text" name="evidence_url"></div>
+          <div class="form-actions"><button type="submit" class="btn btn-primary">Add logbook entry</button></div>
+        </form>` : ''}
+      </div>
+    `;
+
+    // ---- Verification & authorisation ----
+    const verification = verif.rows[0];
+    const authByType = {};
+    for (const a of authRows.rows) authByType[a.authorisation_type] = a;
+    const verificationPanel = `
+      <div class="card" style="padding:22px;margin-bottom:20px;">
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Assessor-verified competency</div>
+        <div style="margin-bottom:10px;">
+          <span class="badge ${verification && verification.verified ? 'badge-approved' : 'badge-draft'}">${verification && verification.verified ? 'Verified' : 'Not verified'}</span>
+          ${verification && verification.verified ? ` <span style="font-size:12px;color:#6B6659;">by ${escapeHtml(staffNameById.get(verification.verified_by_staff_id) || 'Unknown')}, ${formatBrisbaneDateTime(verification.verified_at)}</span>` : ''}
+        </div>
+        ${verification && verification.basis ? `<div class="detail-value"><strong>Basis:</strong> ${escapeHtml(verification.basis)}</div>` : ''}
+        ${verification && verification.notes ? `<div class="detail-value" style="margin-top:4px;">${escapeHtml(verification.notes)}</div>` : ''}
+        ${verification && verification.review_date ? `<div style="font-size:12px;color:#6B6659;margin-top:4px;">Review due ${formatBrisbaneDate(verification.review_date)}</div>` : ''}
+        ${isAssessor && !isSelf ? `
+        <form method="post" action="/induction/staff/${staffId}/item/${itemId}/verify" style="margin-top:14px;border-top:1px solid #E4DFD3;padding-top:14px;">
+          <div class="form-row" style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" name="verified" id="verified" style="width:auto;" ${verification && verification.verified ? 'checked' : ''}><label for="verified" style="margin:0;">Competency verified</label></div>
+          <div class="form-row"><label>Basis (e.g. machine checklist completed, prior qualification reviewed)</label><input type="text" name="basis" value="${escapeHtml(verification ? verification.basis || '' : '')}"></div>
+          <div class="form-row"><label>Notes</label><textarea name="notes">${escapeHtml(verification ? verification.notes || '' : '')}</textarea></div>
+          <div class="form-row"><label>Review date</label><input type="date" name="review_date" value="${verification && verification.review_date ? new Date(verification.review_date).toISOString().slice(0, 10) : ''}"></div>
+          <div class="form-actions"><button type="submit" class="btn btn-primary">Save verification</button></div>
+        </form>` : ''}
+      </div>
+      <div class="card" style="padding:22px;margin-bottom:20px;">
+        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">School authorisation</div>
+        ${['operate', 'supervise_students'].map((type) => {
+          const a = authByType[type];
+          const label = type === 'operate' ? 'Authorised to operate this equipment' : 'Authorised to supervise student use';
+          return `
+          <div style="border-top:1px solid #E4DFD3;padding:14px 0;">
+            <div style="font-weight:600;font-size:13px;margin-bottom:6px;">${label}</div>
+            <span class="badge ${a && a.authorised ? 'badge-approved' : 'badge-draft'}">${a && a.authorised ? 'Authorised' : 'Not authorised'}</span>
+            ${a && a.authorised ? ` <span style="font-size:12px;color:#6B6659;">by ${escapeHtml(staffNameById.get(a.decision_by_staff_id) || 'Unknown')}, ${formatBrisbaneDateTime(a.decision_at)}</span>` : ''}
+            ${a && a.permitted_operations ? `<div class="detail-value" style="margin-top:4px;"><strong>Permitted:</strong> ${escapeHtml(a.permitted_operations)}</div>` : ''}
+            ${a && a.restrictions ? `<div class="detail-value" style="margin-top:4px;"><strong>Restrictions:</strong> ${escapeHtml(a.restrictions)}</div>` : ''}
+            ${a && a.review_date ? `<div style="font-size:12px;color:#6B6659;margin-top:4px;">Review due ${formatBrisbaneDate(a.review_date)}</div>` : ''}
+            ${evidenceListHtml(a ? (evidenceRows.authorisation.get(a.id) || []) : [], staffNameById)}
+            ${isSchoolLeader && !isSelf ? `
+            <form method="post" action="/induction/staff/${staffId}/item/${itemId}/authorise" style="margin-top:10px;background:#FAF8F3;padding:12px;border-radius:8px;">
+              <input type="hidden" name="authorisation_type" value="${type}">
+              <div class="form-row" style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" name="authorised" id="auth_${type}" style="width:auto;" ${a && a.authorised ? 'checked' : ''}><label for="auth_${type}" style="margin:0;">${label}</label></div>
+              <div class="form-row"><label>Permitted operations</label><textarea name="permitted_operations">${escapeHtml(a ? a.permitted_operations || '' : '')}</textarea></div>
+              <div class="form-row"><label>Restrictions</label><textarea name="restrictions">${escapeHtml(a ? a.restrictions || '' : '')}</textarea></div>
+              <div class="form-row"><label>Review date</label><input type="date" name="review_date" value="${a && a.review_date ? new Date(a.review_date).toISOString().slice(0, 10) : ''}"></div>
+              <div class="form-actions"><button type="submit" class="btn btn-primary">Save authorisation</button></div>
+            </form>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    `;
+
+    const changeLogPanel = `
+      <details class="card" style="padding:22px;">
+        <summary class="form-section-title" style="cursor:pointer;margin-top:0;padding-top:0;border-top:none;">Change history</summary>
+        ${changeLog.rows.length ? `<div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">${changeLog.rows.map((c) => `
+          <div style="font-size:12px;color:#6B6659;border-bottom:1px solid #F0EDE5;padding-bottom:8px;">
+            <strong style="color:#1A1D1B;">${escapeHtml(c.summary)}</strong><br>
+            ${escapeHtml(staffNameById.get(c.changed_by_staff_id) || 'Unknown')} · ${formatBrisbaneDateTime(c.changed_at)}
+          </div>`).join('')}</div>` : '<div class="form-section-hint" style="margin:8px 0 0;">No changes recorded yet.</div>'}
+      </details>
+    `;
+
+    const body = `
+      <a class="back-link" href="/induction/staff/${staffId}">← ${escapeHtml(staff.name)}'s induction profile</a>
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">${escapeHtml(item.name)}</h1>
+          <p class="page-subtitle">${escapeHtml(item.category_name)}${item.pera_name ? ` · Linked PERA: ${escapeHtml(item.pera_name)}` : ' · No PERA linked yet'} · For ${escapeHtml(staff.name)}</p>
+        </div>
+      </div>
+      ${physicalEquipment.length ? `
+      <div class="note-box">Physical equipment covered by this PERA: ${physicalEquipment.map((e) => `<a href="/equipment/${e.id}" style="color:#1B5E52;font-weight:600;">${escapeHtml(e.name)}</a> (${escapeHtml(e.status)})`).join(', ')}</div>
+      ` : ''}
+      ${declarationPanel}
+      ${stepsPanel}
+      ${checklistPanel}
+      ${logbookPanel}
+      ${verificationPanel}
+      ${changeLogPanel}
+    `;
+    res.send(page({ title: `${item.name} — ${staff.name}`, active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Induction: declaration ----------
+
+app.post('/induction/staff/:staffId/item/:itemId/declare', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const itemId = Number(req.params.itemId);
+    const isSelf = staffId === req.staffUser.id;
+    if (!isSelf && req.staffUser.role !== 'admin') {
+      return res.status(403).send('Only the staff member themselves (or an admin) can record this declaration. <a href="javascript:history.back()">Back</a>');
+    }
+    const { status, qualifications_experience, evidence_title, evidence_url, evidence_notes } = req.body;
+    if (!['not_assessed', 'C', 'NYC', 'NA'].includes(status)) return res.status(400).send('Invalid status.');
+    if (status === 'C' && !normalizeText(qualifications_experience || '').trim()) {
+      return res.status(400).send('A "C — Self-assessed competent" declaration needs the qualifications/experience that support it. <a href="javascript:history.back()">Back</a>');
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO staff_induction_declarations (staff_id, induction_item_id, status, qualifications_experience, declared_at)
+       VALUES ($1,$2,$3,$4,now())
+       ON CONFLICT (staff_id, induction_item_id) DO UPDATE SET
+         status = EXCLUDED.status, qualifications_experience = EXCLUDED.qualifications_experience,
+         declared_at = now(), updated_at = now()
+       RETURNING id`,
+      [staffId, itemId, status, normalizeText(qualifications_experience) || null]
+    );
+    const declarationId = rows[0].id;
+
+    if (normalizeText(evidence_title || '').trim()) {
+      await pool.query(
+        `INSERT INTO staff_induction_evidence (context_type, context_id, title, url, notes, added_by_staff_id) VALUES ('declaration',$1,$2,$3,$4,$5)`,
+        [declarationId, normalizeText(evidence_title), normalizeText(evidence_url) || null, normalizeText(evidence_notes) || null, req.staffUser.id]
+      );
+    }
+
+    await logInductionChange({
+      staffId, inductionItemId: itemId, contextType: 'declaration', contextId: declarationId,
+      summary: `Self-declaration set to "${DECLARATION_LABELS[status]}"`, changedByStaffId: req.staffUser.id,
+    });
+
+    res.redirect(`/induction/staff/${staffId}/item/${itemId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/item/:itemId/declare/acknowledge', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const itemId = Number(req.params.itemId);
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+    if (blockSelfAction(res, req.staffUser.id, staffId)) return;
+
+    const { rows } = await pool.query(
+      `UPDATE staff_induction_declarations SET hod_ack_staff_id = $1, hod_ack_at = now(), updated_at = now()
+       WHERE staff_id = $2 AND induction_item_id = $3 RETURNING id`,
+      [req.staffUser.id, staffId, itemId]
+    );
+    if (!rows.length) return res.status(404).send('No declaration to acknowledge yet.');
+
+    await logInductionChange({
+      staffId, inductionItemId: itemId, contextType: 'declaration', contextId: rows[0].id,
+      summary: 'Declaration acknowledged by HOD', changedByStaffId: req.staffUser.id,
+    });
+    res.redirect(`/induction/staff/${staffId}/item/${itemId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Induction: five-step workflow ----------
+
+app.post('/induction/staff/:staffId/item/:itemId/step/:stepNumber', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const itemId = Number(req.params.itemId);
+    const stepNumber = Number(req.params.stepNumber);
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+    if (blockSelfAction(res, req.staffUser.id, staffId)) return;
+    if (!(stepNumber >= 1 && stepNumber <= 5)) return res.status(400).send('Invalid step.');
+
+    const { status, responsible_staff_id, notes, session_date, evidence_title, evidence_url } = req.body;
+    if (!['not_started', 'in_progress', 'complete'].includes(status)) return res.status(400).send('Invalid status.');
+
+    const { rows } = await pool.query(
+      `INSERT INTO staff_induction_steps (staff_id, induction_item_id, step_number, status, completed_at, responsible_staff_id, notes, updated_at)
+       VALUES ($1,$2,$3,$4,CASE WHEN $4 = 'complete' THEN now() ELSE NULL END,$5,$6,now())
+       ON CONFLICT (staff_id, induction_item_id, step_number) DO UPDATE SET
+         status = EXCLUDED.status,
+         completed_at = CASE WHEN EXCLUDED.status = 'complete' THEN now() ELSE NULL END,
+         responsible_staff_id = EXCLUDED.responsible_staff_id, notes = EXCLUDED.notes, updated_at = now()
+       RETURNING id`,
+      [staffId, itemId, stepNumber, status, responsible_staff_id || null, normalizeText(notes) || null]
+    );
+    const stepId = rows[0].id;
+
+    if (session_date) {
+      await pool.query(
+        `INSERT INTO staff_induction_step_sessions (step_id, session_date, notes, recorded_by_staff_id) VALUES ($1,$2,$3,$4)`,
+        [stepId, session_date, normalizeText(notes) || null, req.staffUser.id]
+      );
+    }
+    if (normalizeText(evidence_title || '').trim()) {
+      await pool.query(
+        `INSERT INTO staff_induction_evidence (context_type, context_id, title, url, added_by_staff_id) VALUES ('step',$1,$2,$3,$4)`,
+        [stepId, normalizeText(evidence_title), normalizeText(evidence_url) || null, req.staffUser.id]
+      );
+    }
+
+    await logInductionChange({
+      staffId, inductionItemId: itemId, contextType: 'step', contextId: stepId,
+      summary: `Step ${stepNumber} (${INDUCTION_STEP_LABELS[stepNumber]}) set to "${STEP_STATUS_LABELS[status]}"`,
+      changedByStaffId: req.staffUser.id,
+    });
+    res.redirect(`/induction/staff/${staffId}/item/${itemId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/item/:itemId/step/5/sign', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const itemId = Number(req.params.itemId);
+    const { role } = req.body;
+    if (!['inductor', 'inductee'].includes(role)) return res.status(400).send('Invalid role.');
+    const isSelf = staffId === req.staffUser.id;
+    if (role === 'inductee' && !isSelf) return res.status(403).send('Only the inductee themselves can sign as inductee.');
+    if (role === 'inductor') {
+      if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+      if (blockSelfAction(res, req.staffUser.id, staffId)) return;
+    }
+
+    await pool.query(
+      `INSERT INTO staff_induction_steps (staff_id, induction_item_id, step_number, status) VALUES ($1,$2,5,'in_progress')
+       ON CONFLICT (staff_id, induction_item_id, step_number) DO NOTHING`,
+      [staffId, itemId]
+    );
+    const col = role === 'inductee' ? 'inductee_signed_staff_id' : 'inductor_signed_staff_id';
+    const atCol = role === 'inductee' ? 'inductee_signed_at' : 'inductor_signed_at';
+    const { rows } = await pool.query(
+      `UPDATE staff_induction_steps SET ${col} = $1, ${atCol} = now(), updated_at = now()
+       WHERE staff_id = $2 AND induction_item_id = $3 AND step_number = 5 RETURNING *`,
+      [req.staffUser.id, staffId, itemId]
+    );
+    const step = rows[0];
+    if (step.inductee_signed_staff_id && step.inductor_signed_staff_id && step.status !== 'complete') {
+      await pool.query(`UPDATE staff_induction_steps SET status = 'complete', completed_at = now() WHERE id = $1`, [step.id]);
+    }
+
+    await logInductionChange({
+      staffId, inductionItemId: itemId, contextType: 'step', contextId: step.id,
+      summary: `Step 5 signed off by ${role}`, changedByStaffId: req.staffUser.id,
+    });
+    res.redirect(`/induction/staff/${staffId}/item/${itemId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Induction: machine competency checklist template ----------
+// A competent person develops the criteria list here, then approves it.
+// Deliberately seeded with nothing -- the source register doesn't supply
+// machine performance criteria, and none should be invented (see spec).
+
+async function getOrCreateChecklistTemplate(itemId, createdByStaffId) {
+  const existing = await pool.query('SELECT * FROM induction_checklist_templates WHERE induction_item_id = $1 ORDER BY created_at DESC LIMIT 1', [itemId]);
+  if (existing.rows.length) return existing.rows[0];
+  const { rows } = await pool.query(
+    'INSERT INTO induction_checklist_templates (induction_item_id, created_by_staff_id) VALUES ($1,$2) RETURNING *',
+    [itemId, createdByStaffId]
+  );
+  return rows[0];
+}
+
+app.get('/induction/item/:itemId/checklist', async (req, res, next) => {
+  try {
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that. <a href="/induction">Back</a>');
+    const itemId = Number(req.params.itemId);
+    const item = await getInductionItem(itemId);
+    if (!item) return res.status(404).send('Equipment item not found.');
+    const template = await pool.query('SELECT * FROM induction_checklist_templates WHERE induction_item_id = $1 ORDER BY created_at DESC LIMIT 1', [itemId]);
+    const tpl = template.rows[0] || null;
+    const criteria = tpl ? (await pool.query('SELECT * FROM induction_checklist_criteria WHERE template_id = $1 ORDER BY sort_order', [tpl.id])).rows : [];
+    const staffList = await getActiveStaffList();
+    const staffNameById = new Map(staffList.map((s) => [s.id, s.name]));
+
+    const body = `
+      <a class="back-link" href="/induction">← Staff Induction</a>
+      <h1 class="page-title">Machine competency checklist — ${escapeHtml(item.name)}</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">Built and approved by a person competent in the use of this item. No criteria are pre-filled — add exactly what this school checks for.</p>
+      <div class="card" style="padding:22px;">
+        ${tpl ? `
+          <div style="margin-bottom:14px;">
+            ${tpl.approved_at
+              ? `<span class="badge badge-approved">Approved</span> by ${escapeHtml(staffNameById.get(tpl.approved_by_staff_id) || 'Unknown')}, ${formatBrisbaneDateTime(tpl.approved_at)}`
+              : `<span class="badge badge-pending">Draft — not yet approved</span>`}
+          </div>
+          <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
+            <tbody>
+              ${criteria.map((c) => `
+                <tr style="border-bottom:1px solid #F0EDE5;">
+                  <td style="padding:8px 6px;font-size:13px;">${escapeHtml(c.description)}</td>
+                  <td style="padding:8px 6px;text-align:right;">
+                    <form method="post" action="/induction/item/${itemId}/checklist/criteria/${c.id}/delete" style="display:inline;">
+                      <button type="submit" class="btn btn-secondary" style="font-size:12px;padding:4px 10px;">Remove</button>
+                    </form>
+                  </td>
+                </tr>`).join('') || '<tr><td style="padding:8px 6px;font-size:13px;color:#6B6659;">No criteria yet.</td></tr>'}
+            </tbody>
+          </table>
+          <form method="post" action="/induction/item/${itemId}/checklist/criteria" style="margin-bottom:14px;">
+            <div class="form-row" style="flex-direction:row;gap:8px;align-items:flex-end;">
+              <div style="flex:1;"><label>Add a criterion</label><input type="text" name="description" placeholder="e.g. Sets blade guard to correct height before starting" required></div>
+              <button type="submit" class="btn btn-secondary">Add</button>
+            </div>
+          </form>
+          <form method="post" action="/induction/item/${itemId}/checklist/approve">
+            <button type="submit" class="btn btn-primary" ${criteria.length ? '' : 'disabled'}>${tpl.approved_at ? 'Re-approve template' : 'Approve template'}</button>
+          </form>
+        ` : `
+          <div class="form-section-hint" style="margin:0 0 14px;">No template started yet for this equipment item.</div>
+          <form method="post" action="/induction/item/${itemId}/checklist/criteria">
+            <div class="form-row"><label>First criterion</label><input type="text" name="description" placeholder="e.g. Checks guard and riving knife before use" required></div>
+            <div class="form-actions"><button type="submit" class="btn btn-primary">Start template</button></div>
+          </form>
+        `}
+      </div>
+    `;
+    res.send(page({ title: `Checklist — ${item.name}`, active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/item/:itemId/checklist/criteria', async (req, res, next) => {
+  try {
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+    const itemId = Number(req.params.itemId);
+    const description = normalizeText(req.body.description || '').trim();
+    if (!description) return res.status(400).send('A criterion needs a description. <a href="javascript:history.back()">Back</a>');
+
+    const tpl = await getOrCreateChecklistTemplate(itemId, req.staffUser.id);
+    const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM induction_checklist_criteria WHERE template_id = $1', [tpl.id]);
+    await pool.query('INSERT INTO induction_checklist_criteria (template_id, description, sort_order) VALUES ($1,$2,$3)', [tpl.id, description, countResult.rows[0].count]);
+
+    // Adding a criterion after an assessment was already marked complete
+    // means that assessment is now missing a result for it -- re-open it
+    // rather than silently leaving a "complete" assessment with a gap.
+    await pool.query(`UPDATE staff_induction_assessments SET status = 'in_progress', updated_at = now() WHERE template_id = $1 AND status = 'complete'`, [tpl.id]);
+
+    res.redirect(`/induction/item/${itemId}/checklist`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/item/:itemId/checklist/criteria/:critId/delete', async (req, res, next) => {
+  try {
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+    await pool.query('DELETE FROM induction_checklist_criteria WHERE id = $1', [req.params.critId]);
+    res.redirect(`/induction/item/${req.params.itemId}/checklist`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/item/:itemId/checklist/approve', async (req, res, next) => {
+  try {
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+    const itemId = Number(req.params.itemId);
+    const tpl = await pool.query('SELECT * FROM induction_checklist_templates WHERE induction_item_id = $1 ORDER BY created_at DESC LIMIT 1', [itemId]);
+    if (!tpl.rows.length) return res.status(404).send('No template to approve.');
+    const criteriaCount = await pool.query('SELECT COUNT(*)::int AS count FROM induction_checklist_criteria WHERE template_id = $1', [tpl.rows[0].id]);
+    if (criteriaCount.rows[0].count === 0) return res.status(400).send('Add at least one criterion before approving. <a href="javascript:history.back()">Back</a>');
+    await pool.query('UPDATE induction_checklist_templates SET approved_by_staff_id = $1, approved_at = now(), updated_at = now() WHERE id = $2', [req.staffUser.id, tpl.rows[0].id]);
+    res.redirect(`/induction/item/${itemId}/checklist`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Induction: machine competency assessment ----------
+
+app.post('/induction/staff/:staffId/item/:itemId/assessment/save', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const itemId = Number(req.params.itemId);
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+    if (blockSelfAction(res, req.staffUser.id, staffId)) return;
+
+    const tplResult = await pool.query('SELECT * FROM induction_checklist_templates WHERE induction_item_id = $1 ORDER BY created_at DESC LIMIT 1', [itemId]);
+    if (!tplResult.rows.length) return res.status(400).send('No checklist template exists for this item yet.');
+    const template = tplResult.rows[0];
+    const criteria = (await pool.query('SELECT * FROM induction_checklist_criteria WHERE template_id = $1', [template.id])).rows;
+    if (!criteria.length) return res.status(400).send('This template has no criteria yet — nothing to assess.');
+
+    const existing = await pool.query('SELECT * FROM staff_induction_assessments WHERE staff_id = $1 AND template_id = $2 ORDER BY id DESC LIMIT 1', [staffId, template.id]);
+    const { assessor_competence_evidence, operating_restrictions, comments, assessment_date, mark_complete } = req.body;
+
+    let assessmentId;
+    if (existing.rows.length) {
+      assessmentId = existing.rows[0].id;
+      await pool.query(
+        `UPDATE staff_induction_assessments SET assessor_staff_id = $1, assessor_competence_evidence = $2,
+         operating_restrictions = $3, comments = $4, assessment_date = $5, updated_at = now() WHERE id = $6`,
+        [req.staffUser.id, normalizeText(assessor_competence_evidence) || null, normalizeText(operating_restrictions) || null,
+         normalizeText(comments) || null, assessment_date || null, assessmentId]
+      );
+    } else {
+      const { rows } = await pool.query(
+        `INSERT INTO staff_induction_assessments (staff_id, template_id, assessor_staff_id, assessor_competence_evidence, operating_restrictions, comments, assessment_date)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [staffId, template.id, req.staffUser.id, normalizeText(assessor_competence_evidence) || null, normalizeText(operating_restrictions) || null,
+         normalizeText(comments) || null, assessment_date || null]
+      );
+      assessmentId = rows[0].id;
+    }
+
+    let unansweredCount = 0;
+    for (const c of criteria) {
+      const result = req.body[`result_${c.id}`] || 'not_assessed';
+      if (!['not_assessed', 'demonstrated', 'not_yet_demonstrated', 'not_applicable'].includes(result)) continue;
+      if (result === 'not_assessed') unansweredCount += 1;
+      const naReason = result === 'not_applicable' ? (normalizeText(req.body[`na_reason_${c.id}`]) || null) : null;
+      await pool.query(
+        `INSERT INTO staff_induction_assessment_results (assessment_id, criterion_id, result, na_reason)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (assessment_id, criterion_id) DO UPDATE SET result = EXCLUDED.result, na_reason = EXCLUDED.na_reason, updated_at = now()`,
+        [assessmentId, c.id, result, naReason]
+      );
+    }
+
+    // Non-negotiable: missing criteria can never produce a "complete"
+    // assessment, even if the assessor ticked the box.
+    const wantsComplete = mark_complete === 'on' || mark_complete === 'true';
+    const canComplete = wantsComplete && unansweredCount === 0;
+    await pool.query(
+      `UPDATE staff_induction_assessments SET status = $1, completed_at = CASE WHEN $1 = 'complete' THEN now() ELSE NULL END WHERE id = $2`,
+      [canComplete ? 'complete' : 'in_progress', assessmentId]
+    );
+
+    await logInductionChange({
+      staffId, inductionItemId: itemId, contextType: 'assessment', contextId: assessmentId,
+      summary: canComplete ? 'Machine competency assessment completed' : (wantsComplete ? `Assessment saved — could not be marked complete (${unansweredCount} criteria still not assessed)` : 'Machine competency assessment updated'),
+      changedByStaffId: req.staffUser.id,
+    });
+
+    if (wantsComplete && !canComplete) {
+      return res.status(400).send(`Saved, but could not be marked complete — ${unansweredCount} criteria still have no result. <a href="/induction/staff/${staffId}/item/${itemId}">Back to the assessment</a>`);
+    }
+    res.redirect(`/induction/staff/${staffId}/item/${itemId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Induction: supervised logbook ----------
+
+app.post('/induction/staff/:staffId/item/:itemId/logbook', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const itemId = Number(req.params.itemId);
+    const isSelf = staffId === req.staffUser.id;
+    if (!isSelf && !canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+
+    const { equipment_id, session_date, task_description, duration_hours, supervisor_staff_id, feedback, evidence_title, evidence_url } = req.body;
+    const minutes = Math.round(Number(duration_hours) * 60);
+    if (!session_date || !normalizeText(task_description || '').trim() || !(minutes > 0)) {
+      return res.status(400).send('Date, task description and a positive duration are required. <a href="javascript:history.back()">Back</a>');
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO induction_logbook_entries (staff_id, induction_item_id, equipment_id, session_date, task_description, duration_minutes, supervisor_staff_id, feedback)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [staffId, itemId, equipment_id || null, session_date, normalizeText(task_description), minutes, supervisor_staff_id || null, normalizeText(feedback) || null]
+    );
+    const entryId = rows[0].id;
+    if (normalizeText(evidence_title || '').trim()) {
+      await pool.query(
+        `INSERT INTO staff_induction_evidence (context_type, context_id, title, url, added_by_staff_id) VALUES ('logbook',$1,$2,$3,$4)`,
+        [entryId, normalizeText(evidence_title), normalizeText(evidence_url) || null, req.staffUser.id]
+      );
+    }
+    await logInductionChange({
+      staffId, inductionItemId: itemId, contextType: 'logbook', contextId: entryId,
+      summary: `Logbook entry added (${formatHours(minutes)})`, changedByStaffId: req.staffUser.id,
+    });
+    res.redirect(`/induction/staff/${staffId}/item/${itemId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/item/:itemId/logbook/:entryId/verify', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const itemId = Number(req.params.itemId);
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+    if (blockSelfAction(res, req.staffUser.id, staffId)) return;
+
+    const { rows } = await pool.query(
+      `UPDATE induction_logbook_entries SET verified = true, verified_by_staff_id = $1, verified_at = now()
+       WHERE id = $2 AND staff_id = $3 RETURNING id, duration_minutes`,
+      [req.staffUser.id, req.params.entryId, staffId]
+    );
+    if (!rows.length) return res.status(404).send('Logbook entry not found.');
+    await logInductionChange({
+      staffId, inductionItemId: itemId, contextType: 'logbook', contextId: rows[0].id,
+      summary: `Logbook entry verified (${formatHours(rows[0].duration_minutes)} now counts toward practice hours)`,
+      changedByStaffId: req.staffUser.id,
+    });
+    res.redirect(`/induction/staff/${staffId}/item/${itemId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/item/:itemId/target', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const itemId = Number(req.params.itemId);
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+    if (blockSelfAction(res, req.staffUser.id, staffId)) return;
+
+    const minutes = Math.round(Number(req.body.target_hours) * 60);
+    if (!(minutes > 0)) return res.status(400).send('Enter a positive number of hours. <a href="javascript:history.back()">Back</a>');
+
+    await pool.query(
+      `INSERT INTO induction_practice_targets (staff_id, induction_item_id, target_minutes, agreed_by_staff_id, agreed_at)
+       VALUES ($1,$2,$3,$4,now())
+       ON CONFLICT (staff_id, induction_item_id) DO UPDATE SET target_minutes = EXCLUDED.target_minutes, agreed_by_staff_id = EXCLUDED.agreed_by_staff_id, agreed_at = now()`,
+      [staffId, itemId, minutes, req.staffUser.id]
+    );
+    await logInductionChange({
+      staffId, inductionItemId: itemId, contextType: 'logbook', contextId: null,
+      summary: `Agreed nominal practice hours set to ${formatHours(minutes)}`, changedByStaffId: req.staffUser.id,
+    });
+    res.redirect(`/induction/staff/${staffId}/item/${itemId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Induction: verification & authorisation ----------
+
+app.post('/induction/staff/:staffId/item/:itemId/verify', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const itemId = Number(req.params.itemId);
+    if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
+    if (blockSelfAction(res, req.staffUser.id, staffId)) return;
+
+    const verified = req.body.verified === 'on' || req.body.verified === 'true';
+    const { basis, notes, review_date } = req.body;
+    const { rows } = await pool.query(
+      `INSERT INTO staff_induction_competency_verifications (staff_id, induction_item_id, verified, verified_by_staff_id, verified_at, basis, notes, review_date)
+       VALUES ($1,$2,$3,$4,now(),$5,$6,$7)
+       ON CONFLICT (staff_id, induction_item_id) DO UPDATE SET
+         verified = EXCLUDED.verified, verified_by_staff_id = EXCLUDED.verified_by_staff_id, verified_at = now(),
+         basis = EXCLUDED.basis, notes = EXCLUDED.notes, review_date = EXCLUDED.review_date, updated_at = now()
+       RETURNING id`,
+      [staffId, itemId, verified, req.staffUser.id, normalizeText(basis) || null, normalizeText(notes) || null, review_date || null]
+    );
+    await logInductionChange({
+      staffId, inductionItemId: itemId, contextType: 'verification', contextId: rows[0].id,
+      summary: `Assessor-verified competency set to "${verified ? 'Verified' : 'Not verified'}"`, changedByStaffId: req.staffUser.id,
+    });
+    res.redirect(`/induction/staff/${staffId}/item/${itemId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/induction/staff/:staffId/item/:itemId/authorise', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    const itemId = Number(req.params.itemId);
+    if (!canAuthoriseSchoolLeader(req.staffUser.role)) return res.status(403).send('Only an authorised school leader can record this.');
+    if (blockSelfAction(res, req.staffUser.id, staffId)) return;
+
+    const { authorisation_type, permitted_operations, restrictions, review_date } = req.body;
+    if (!['operate', 'supervise_students'].includes(authorisation_type)) return res.status(400).send('Invalid authorisation type.');
+    const authorised = req.body.authorised === 'on' || req.body.authorised === 'true';
+
+    const { rows } = await pool.query(
+      `INSERT INTO staff_induction_authorisations (staff_id, induction_item_id, authorisation_type, authorised, permitted_operations, restrictions, decision_by_staff_id, decision_at, review_date)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,now(),$8)
+       ON CONFLICT (staff_id, induction_item_id, authorisation_type) DO UPDATE SET
+         authorised = EXCLUDED.authorised, permitted_operations = EXCLUDED.permitted_operations, restrictions = EXCLUDED.restrictions,
+         decision_by_staff_id = EXCLUDED.decision_by_staff_id, decision_at = now(), review_date = EXCLUDED.review_date, updated_at = now()
+       RETURNING id`,
+      [staffId, itemId, authorisation_type, authorised, normalizeText(permitted_operations) || null, normalizeText(restrictions) || null, req.staffUser.id, review_date || null]
+    );
+    await logInductionChange({
+      staffId, inductionItemId: itemId, contextType: 'authorisation', contextId: rows[0].id,
+      summary: `School authorisation to ${authorisation_type === 'operate' ? 'operate this equipment' : 'supervise student use'} set to "${authorised ? 'Authorised' : 'Not authorised'}"`,
+      changedByStaffId: req.staffUser.id,
+    });
+    res.redirect(`/induction/staff/${staffId}/item/${itemId}`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Induction: reports ----------
+
+app.get('/induction/matrix', async (req, res, next) => {
+  try {
+    const [categories, staffList, declResult] = await Promise.all([
+      getInductionCategoriesWithItems(),
+      getActiveStaffList(),
+      pool.query('SELECT staff_id, induction_item_id, status FROM staff_induction_declarations'),
+    ]);
+    const declByKey = new Map(declResult.rows.map((d) => [`${d.staff_id}:${d.induction_item_id}`, d.status]));
+
+    const categoryBlocks = categories.map((cat) => `
+      <div class="form-section-title" style="margin-top:20px;">${escapeHtml(cat.name)}</div>
+      <div style="overflow-x:auto;">
+      <table style="border-collapse:collapse;min-width:100%;">
+        <thead>
+          <tr style="text-align:left;font-size:11px;text-transform:uppercase;color:#6B6659;border-bottom:1px solid #E4DFD3;">
+            <th style="padding:6px;position:sticky;left:0;background:#fff;">Equipment</th>
+            ${staffList.map((s) => `<th style="padding:6px;white-space:nowrap;">${escapeHtml(s.name)}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${cat.items.map((item) => `
+            <tr style="border-bottom:1px solid #F0EDE5;">
+              <td style="padding:6px;font-size:12px;white-space:nowrap;position:sticky;left:0;background:#fff;">${escapeHtml(item.name)}</td>
+              ${staffList.map((s) => {
+                const status = declByKey.get(`${s.id}:${item.id}`) || 'not_assessed';
+                return `<td style="padding:6px;text-align:center;"><a href="/induction/staff/${s.id}/item/${item.id}" class="badge ${DECLARATION_BADGE[status]}" style="text-decoration:none;">${status === 'not_assessed' ? '—' : escapeHtml(status)}</a></td>`;
+              }).join('')}
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      </div>
+    `).join('');
+
+    const body = `
+      <a class="back-link" href="/induction">← Staff Induction</a>
+      <h1 class="page-title">Staff / equipment matrix</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">Self-assessed status for every active staff member against every equipment item available at this school. Click a cell to open that record.</p>
+      <div class="card" style="padding:22px;">${categoryBlocks}</div>
+    `;
+    res.send(page({ title: 'Staff / Equipment Matrix', active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/induction/training-required', async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT s.id AS staff_id, s.name AS staff_name, i.id AS item_id, i.name AS item_name, c.name AS category_name,
+        (SELECT COUNT(*)::int FROM staff_induction_steps st WHERE st.staff_id = s.id AND st.induction_item_id = i.id AND st.status = 'complete') AS steps_done
+      FROM staff_induction_declarations d
+      JOIN staff_users s ON s.id = d.staff_id AND s.disabled = false
+      JOIN induction_equipment_items i ON i.id = d.induction_item_id AND i.available_at_school = true
+      JOIN induction_equipment_categories c ON c.id = i.category_id
+      WHERE d.status = 'NYC'
+      ORDER BY s.name, c.sort_order, i.sort_order
+    `);
+    const body = `
+      <a class="back-link" href="/induction">← Staff Induction</a>
+      <h1 class="page-title">Training required</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">Staff who have declared themselves "not yet competent" on an item, with how far the induction process has got.</p>
+      <div class="card" style="padding:22px;">
+        ${rows.length ? `
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr style="text-align:left;font-size:11px;text-transform:uppercase;color:#6B6659;border-bottom:1px solid #E4DFD3;"><th style="padding:6px;">Staff</th><th style="padding:6px;">Equipment</th><th style="padding:6px;">Induction progress</th><th></th></tr></thead>
+          <tbody>
+            ${rows.map((r) => `
+              <tr style="border-bottom:1px solid #F0EDE5;">
+                <td style="padding:8px 6px;font-size:13px;">${escapeHtml(r.staff_name)}</td>
+                <td style="padding:8px 6px;font-size:13px;">${escapeHtml(r.category_name)} — ${escapeHtml(r.item_name)}</td>
+                <td style="padding:8px 6px;"><span class="badge ${r.steps_done === 5 ? 'badge-approved' : (r.steps_done > 0 ? 'badge-pending' : 'badge-draft')}">${r.steps_done}/5 steps</span></td>
+                <td style="padding:8px 6px;text-align:right;"><a href="/induction/staff/${r.staff_id}/item/${r.item_id}" style="color:#1B5E52;font-weight:600;font-size:13px;">Open →</a></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>` : '<div class="empty-state">Nothing outstanding — no staff currently declare themselves not yet competent on an available item.</div>'}
+      </div>
+    `;
+    res.send(page({ title: 'Training Required', active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/induction/pending-verification', async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT s.id AS staff_id, s.name AS staff_name, i.id AS item_id, i.name AS item_name, c.name AS category_name, d.declared_at
+      FROM staff_induction_declarations d
+      JOIN staff_users s ON s.id = d.staff_id AND s.disabled = false
+      JOIN induction_equipment_items i ON i.id = d.induction_item_id AND i.available_at_school = true
+      JOIN induction_equipment_categories c ON c.id = i.category_id
+      WHERE d.status = 'C'
+      AND NOT EXISTS (
+        SELECT 1 FROM staff_induction_competency_verifications v
+        WHERE v.staff_id = d.staff_id AND v.induction_item_id = d.induction_item_id AND v.verified = true
+      )
+      ORDER BY d.declared_at ASC
+    `);
+    const body = `
+      <a class="back-link" href="/induction">← Staff Induction</a>
+      <h1 class="page-title">Pending verification</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">Staff who have self-declared "C — competent" but an assessor hasn't yet recorded verified competency. A self-declaration alone never authorises use.</p>
+      <div class="card" style="padding:22px;">
+        ${rows.length ? `
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr style="text-align:left;font-size:11px;text-transform:uppercase;color:#6B6659;border-bottom:1px solid #E4DFD3;"><th style="padding:6px;">Staff</th><th style="padding:6px;">Equipment</th><th style="padding:6px;">Declared</th><th></th></tr></thead>
+          <tbody>
+            ${rows.map((r) => `
+              <tr style="border-bottom:1px solid #F0EDE5;">
+                <td style="padding:8px 6px;font-size:13px;">${escapeHtml(r.staff_name)}</td>
+                <td style="padding:8px 6px;font-size:13px;">${escapeHtml(r.category_name)} — ${escapeHtml(r.item_name)}</td>
+                <td style="padding:8px 6px;font-size:12px;color:#6B6659;">${formatBrisbaneDateTime(r.declared_at)}</td>
+                <td style="padding:8px 6px;text-align:right;"><a href="/induction/staff/${r.staff_id}/item/${r.item_id}" style="color:#1B5E52;font-weight:600;font-size:13px;">Review →</a></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>` : '<div class="empty-state">Nothing pending — every "C" declaration has been verified or is no longer current.</div>'}
+      </div>
+    `;
+    res.send(page({ title: 'Pending Verification', active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/induction/item/:itemId/history', async (req, res, next) => {
+  try {
+    const itemId = Number(req.params.itemId);
+    const item = await getInductionItem(itemId);
+    if (!item) return res.status(404).send('Equipment item not found.');
+    const { rows } = await pool.query(`
+      SELECT s.id AS staff_id, s.name AS staff_name,
+        d.status AS decl_status, d.declared_at,
+        (SELECT COUNT(*)::int FROM staff_induction_steps st WHERE st.staff_id = s.id AND st.induction_item_id = $1 AND st.status = 'complete') AS steps_done,
+        v.verified, v.verified_at,
+        ao.authorised AS operate_authorised, asup.authorised AS supervise_authorised
+      FROM staff_users s
+      LEFT JOIN staff_induction_declarations d ON d.staff_id = s.id AND d.induction_item_id = $1
+      LEFT JOIN staff_induction_competency_verifications v ON v.staff_id = s.id AND v.induction_item_id = $1
+      LEFT JOIN staff_induction_authorisations ao ON ao.staff_id = s.id AND ao.induction_item_id = $1 AND ao.authorisation_type = 'operate'
+      LEFT JOIN staff_induction_authorisations asup ON asup.staff_id = s.id AND asup.induction_item_id = $1 AND asup.authorisation_type = 'supervise_students'
+      WHERE s.disabled = false
+      ORDER BY s.name
+    `, [itemId]);
+    const body = `
+      <a class="back-link" href="/induction">← Staff Induction</a>
+      <h1 class="page-title">${escapeHtml(item.name)} — training history</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">${escapeHtml(item.category_name)}${item.pera_name ? ` · Linked PERA: ${escapeHtml(item.pera_name)}` : ''}</p>
+      <div class="card" style="padding:22px;">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr style="text-align:left;font-size:11px;text-transform:uppercase;color:#6B6659;border-bottom:1px solid #E4DFD3;"><th style="padding:6px;">Staff</th><th style="padding:6px;">Self-assessed</th><th style="padding:6px;">Steps</th><th style="padding:6px;">Verified</th><th style="padding:6px;">Operate</th><th style="padding:6px;">Supervise</th><th></th></tr></thead>
+          <tbody>
+            ${rows.map((r) => {
+              const status = r.decl_status || 'not_assessed';
+              return `<tr style="border-bottom:1px solid #F0EDE5;">
+                <td style="padding:8px 6px;font-size:13px;">${escapeHtml(r.staff_name)}</td>
+                <td style="padding:8px 6px;"><span class="badge ${DECLARATION_BADGE[status]}">${escapeHtml(DECLARATION_LABELS[status])}</span></td>
+                <td style="padding:8px 6px;font-size:12px;color:#6B6659;">${r.steps_done || 0}/5</td>
+                <td style="padding:8px 6px;"><span class="badge ${r.verified ? 'badge-approved' : 'badge-draft'}">${r.verified ? 'Verified' : 'No'}</span></td>
+                <td style="padding:8px 6px;"><span class="badge ${r.operate_authorised ? 'badge-approved' : 'badge-draft'}">${r.operate_authorised ? 'Yes' : 'No'}</span></td>
+                <td style="padding:8px 6px;"><span class="badge ${r.supervise_authorised ? 'badge-approved' : 'badge-draft'}">${r.supervise_authorised ? 'Yes' : 'No'}</span></td>
+                <td style="padding:8px 6px;text-align:right;"><a href="/induction/staff/${r.staff_id}/item/${itemId}" style="color:#1B5E52;font-weight:600;font-size:13px;">Open →</a></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+    res.send(page({ title: `${item.name} — History`, active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Induction: printable record & PDF export ----------
+
+async function buildInductionRecordRows(staffId) {
+  const [categories, declResult, verifResult, authResult, stepsResult] = await Promise.all([
+    getInductionCategoriesWithItems(),
+    pool.query('SELECT * FROM staff_induction_declarations WHERE staff_id = $1', [staffId]),
+    pool.query('SELECT * FROM staff_induction_competency_verifications WHERE staff_id = $1', [staffId]),
+    pool.query('SELECT * FROM staff_induction_authorisations WHERE staff_id = $1', [staffId]),
+    pool.query(`SELECT induction_item_id, COUNT(*) FILTER (WHERE status = 'complete')::int AS done FROM staff_induction_steps WHERE staff_id = $1 GROUP BY induction_item_id`, [staffId]),
+  ]);
+  const declByItem = new Map(declResult.rows.map((d) => [d.induction_item_id, d]));
+  const verifByItem = new Map(verifResult.rows.map((v) => [v.induction_item_id, v]));
+  const authByItem = new Map();
+  for (const a of authResult.rows) {
+    if (!authByItem.has(a.induction_item_id)) authByItem.set(a.induction_item_id, {});
+    authByItem.get(a.induction_item_id)[a.authorisation_type] = a;
+  }
+  const stepsByItem = new Map(stepsResult.rows.map((s) => [s.induction_item_id, s.done]));
+
+  const out = [];
+  for (const cat of categories) {
+    for (const item of cat.items) {
+      const decl = declByItem.get(item.id);
+      if (!decl || decl.status === 'not_assessed') continue; // only print items with an actual record
+      out.push({
+        category: cat.name,
+        item: item.name,
+        status: decl.status,
+        declaredAt: decl.declared_at,
+        stepsDone: stepsByItem.get(item.id) || 0,
+        verified: !!(verifByItem.get(item.id) && verifByItem.get(item.id).verified),
+        operate: !!((authByItem.get(item.id) || {}).operate && (authByItem.get(item.id) || {}).operate.authorised),
+        supervise: !!((authByItem.get(item.id) || {}).supervise_students && (authByItem.get(item.id) || {}).supervise_students.authorised),
+      });
+    }
+  }
+  return out;
+}
+
+app.get('/induction/staff/:staffId/print', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    if (staffId !== req.staffUser.id && !canActAsAssessor(req.staffUser.role)) {
+      return res.status(403).send('You can only print your own induction record.');
+    }
+    const staffResult = await pool.query('SELECT id, name, email FROM staff_users WHERE id = $1', [staffId]);
+    if (!staffResult.rows.length) return res.status(404).send('Staff member not found.');
+    const staff = staffResult.rows[0];
+    const rows = await buildInductionRecordRows(staffId);
+
+    res.send(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Staff Induction Record — ${escapeHtml(staff.name)}</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  body { background:#fff; padding:32px; }
+  .print-btn { margin-bottom:16px; }
+  table { width:100%; border-collapse:collapse; margin-top:12px; }
+  th, td { padding:6px 8px; font-size:12px; text-align:left; border-bottom:1px solid #E4DFD3; }
+  th { text-transform:uppercase; letter-spacing:0.04em; color:#6B6659; font-size:10px; }
+  @media print { .print-btn { display:none; } }
+</style>
+</head>
+<body>
+  <button class="btn btn-primary print-btn" onclick="window.print()">Print</button>
+  <h1 class="page-title">Staff Equipment Induction Record</h1>
+  <p class="page-subtitle">${escapeHtml(staff.name)} · ${escapeHtml(staff.email)} · Faith Lutheran College · Generated ${escapeHtml(formatBrisbaneDateTime(new Date()))}</p>
+  <table>
+    <thead><tr><th>Category</th><th>Equipment</th><th>Self-assessed</th><th>Induction steps</th><th>Verified competency</th><th>Authorised: operate</th><th>Authorised: supervise students</th></tr></thead>
+    <tbody>
+      ${rows.length ? rows.map((r) => `<tr>
+        <td>${escapeHtml(r.category)}</td>
+        <td>${escapeHtml(r.item)}</td>
+        <td>${escapeHtml(DECLARATION_LABELS[r.status])}</td>
+        <td>${r.stepsDone}/5</td>
+        <td>${r.verified ? 'Verified' : 'Not verified'}</td>
+        <td>${r.operate ? 'Yes' : 'No'}</td>
+        <td>${r.supervise ? 'Yes' : 'No'}</td>
+      </tr>`).join('') : '<tr><td colspan="7">No equipment items assessed yet.</td></tr>'}
+    </tbody>
+  </table>
+</body>
+</html>`);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/induction/staff/:staffId/export.pdf', async (req, res, next) => {
+  try {
+    const staffId = Number(req.params.staffId);
+    if (staffId !== req.staffUser.id && !canActAsAssessor(req.staffUser.role)) {
+      return res.status(403).send('You can only export your own induction record.');
+    }
+    const staffResult = await pool.query('SELECT id, name, email FROM staff_users WHERE id = $1', [staffId]);
+    if (!staffResult.rows.length) return res.status(404).send('Staff member not found.');
+    const staff = staffResult.rows[0];
+    const rows = await buildInductionRecordRows(staffId);
+
+    const safeName = (staff.name || 'Staff').replace(/[^a-z0-9 \-_.]/gi, '').trim() || 'Staff';
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Staff Induction Record - ${safeName}.pdf"`);
+
+    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
+    doc.pipe(res);
+
+    doc.fontSize(16).fillColor('#1A1D1B').text('Staff Equipment Induction Record', { align: 'left' });
+    doc.moveDown(0.3);
+    doc.fontSize(10).fillColor('#6B6659').text(`${staff.name} — ${staff.email} — Faith Lutheran College`);
+    doc.text(`Generated ${formatBrisbaneDateTime(new Date())}`);
+    doc.moveDown(1);
+
+    let currentCategory = null;
+    for (const r of rows) {
+      if (doc.y > 720) doc.addPage();
+      if (r.category !== currentCategory) {
+        currentCategory = r.category;
+        doc.moveDown(0.4);
+        doc.fontSize(12).fillColor('#1B5E52').text(currentCategory);
+        doc.moveDown(0.2);
+      }
+      doc.fontSize(10).fillColor('#1A1D1B').text(r.item, { continued: false });
+      doc.fontSize(9).fillColor('#6B6659').text(
+        `Self-assessed: ${DECLARATION_LABELS[r.status]}   ·   Induction steps: ${r.stepsDone}/5   ·   Verified competency: ${r.verified ? 'Yes' : 'No'}   ·   Authorised to operate: ${r.operate ? 'Yes' : 'No'}   ·   Authorised to supervise students: ${r.supervise ? 'Yes' : 'No'}`
+      );
+      doc.moveDown(0.5);
+    }
+    if (!rows.length) {
+      doc.fontSize(10).fillColor('#6B6659').text('No equipment items assessed yet.');
+    }
+
+    doc.end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Induction: admin — equipment list management ----------
+
+app.get('/admin/induction/items', requireRole('admin'), async (req, res, next) => {
+  try {
+    const [categories, peraResult] = await Promise.all([
+      getInductionCategoriesWithItems({ onlyAvailable: false }),
+      pool.query('SELECT id, activity_name FROM pera_records WHERE archived = false ORDER BY activity_name'),
+    ]);
+    const peraOptions = peraResult.rows.map((p) => `<option value="${p.id}">${escapeHtml(p.activity_name)}</option>`).join('');
+
+    const body = `
+      <a class="back-link" href="/induction">← Staff Induction</a>
+      <h1 class="page-title">Manage the equipment induction list</h1>
+      <p class="page-subtitle" style="margin-bottom:24px;">Link each item to its PERA (this also shows the matching physical equipment), and hide anything that isn't actually at this school.</p>
+      <div class="card" style="padding:22px;">
+        ${categories.map((cat) => `
+          <div class="form-section-title" style="margin-top:20px;">${escapeHtml(cat.name)}</div>
+          ${cat.items.map((item) => `
+            <form method="post" action="/admin/induction/items/${item.id}" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #F0EDE5;">
+              <div style="flex:1;font-size:13px;${item.available_at_school ? '' : 'color:#B0AA9A;text-decoration:line-through;'}">${escapeHtml(item.name)}</div>
+              <select name="pera_id" style="max-width:260px;">
+                <option value="">— No PERA linked —</option>
+                ${peraResult.rows.map((p) => `<option value="${p.id}" ${item.pera_id === p.id ? 'selected' : ''}>${escapeHtml(p.activity_name)}</option>`).join('')}
+              </select>
+              <label style="display:flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap;">
+                <input type="checkbox" name="available_at_school" style="width:auto;" ${item.available_at_school ? 'checked' : ''}> At this school
+              </label>
+              <button type="submit" class="btn btn-secondary" style="font-size:12px;padding:4px 10px;">Save</button>
+            </form>
+          `).join('')}
+        `).join('')}
+      </div>
+    `;
+    res.send(page({ title: 'Manage Induction Equipment List', active: 'induction', body }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/induction/items/:id', requireRole('admin'), async (req, res, next) => {
+  try {
+    const availableAtSchool = req.body.available_at_school === 'on';
+    await pool.query(
+      'UPDATE induction_equipment_items SET pera_id = $1, available_at_school = $2, updated_at = now() WHERE id = $3',
+      [req.body.pera_id || null, availableAtSchool, req.params.id]
+    );
+    res.redirect('/admin/induction/items');
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ---------- Health check ----------
 
 app.get('/healthz', async (req, res) => {

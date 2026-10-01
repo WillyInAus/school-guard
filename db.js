@@ -835,6 +835,296 @@ async function migrate() {
   // an uploaded file type thumbnails aren't generated for (Word/Excel/
   // PowerPoint/text), which just show a generic icon instead.
   await pool.query(`ALTER TABLE pera_documents ADD COLUMN IF NOT EXISTS thumbnail_data BYTEA;`);
+
+  // ---------------------------------------------------------------
+  // Staff Equipment Induction module (section references below match the
+  // spec this was built from). Reuses staff_users, equipment_items and
+  // pera_records rather than introducing a second staff/equipment list.
+  // Every "who did this" column is a real FK to staff_users (not a plain
+  // TEXT snapshot like the older change-log tables above) so server-side
+  // checks can compare IDs -- e.g. "staff must not approve their own
+  // competency or authorisation" needs the actual id, not just a name.
+
+  // The master equipment list (Section 1), grouped the way the source
+  // register groups it. Seeded below from the uploaded Staff Equipment
+  // Induction Register. available_at_school lets an admin hide an item
+  // that doesn't exist at this school without deleting its history ("only
+  // items that are located at your school need to be responded to -- the
+  // table can be edited to suit").
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_equipment_categories (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_equipment_items (
+      id SERIAL PRIMARY KEY,
+      category_id INTEGER NOT NULL REFERENCES induction_equipment_categories(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      pera_id INTEGER REFERENCES pera_records(id) ON DELETE SET NULL,
+      available_at_school BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Section 1 -- one row per staff member per equipment item: the self
+  // declaration. Starts 'not_assessed' for everyone (never preselected).
+  // A 'C' (self-assessed competent) is explicitly just a declaration --
+  // see server.js, which never flips any authorisation table off the back
+  // of this row alone.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_induction_declarations (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'not_assessed' CHECK (status IN ('not_assessed','C','NYC','NA')),
+      qualifications_experience TEXT,
+      declared_at TIMESTAMPTZ,
+      hod_ack_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      hod_ack_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (staff_id, induction_item_id)
+    );
+  `);
+
+  // Evidence/comments attached to a declaration, an induction step, a
+  // machine-competency assessment, or an authorisation decision --
+  // title + link + notes, the same shape as the existing pera_documents
+  // table, since this app has no binary file-upload storage today (see
+  // the delivery notes for this round). context_type/context_id is a
+  // light polymorphic link rather than four near-identical tables.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_induction_evidence (
+      id SERIAL PRIMARY KEY,
+      context_type TEXT NOT NULL CHECK (context_type IN ('declaration','step','assessment','authorisation','verification','logbook')),
+      context_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      url TEXT,
+      notes TEXT,
+      added_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      added_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Section "Equipment induction workflow" -- the five steps from the
+  // register, tracked per staff per item. Step 5 carries its own
+  // inductor/inductee sign-off columns (left null on steps 1-4).
+  // responsible_staff_id is whoever delivered/oversaw that step (the
+  // inductor for steps 2-4). Multiple sessions before a step is marked
+  // complete are logged in staff_induction_step_sessions below, so e.g.
+  // "hands-on practice" can span several dates.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_induction_steps (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      step_number INTEGER NOT NULL CHECK (step_number BETWEEN 1 AND 5),
+      status TEXT NOT NULL DEFAULT 'not_started' CHECK (status IN ('not_started','in_progress','complete')),
+      completed_at TIMESTAMPTZ,
+      responsible_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      notes TEXT,
+      sop_pera_id INTEGER REFERENCES pera_records(id) ON DELETE SET NULL,
+      inductee_signed_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      inductee_signed_at TIMESTAMPTZ,
+      inductor_signed_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      inductor_signed_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (staff_id, induction_item_id, step_number)
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_induction_step_sessions (
+      id SERIAL PRIMARY KEY,
+      step_id INTEGER NOT NULL REFERENCES staff_induction_steps(id) ON DELETE CASCADE,
+      session_date DATE NOT NULL,
+      notes TEXT,
+      recorded_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // "Machine competency checklist" -- editable templates, not seeded with
+  // any criteria (the source register doesn't supply performance criteria,
+  // and none should be invented). A competent person builds the criteria
+  // list for an equipment item and an assessor (ideally someone else)
+  // approves it before it's used for real assessments.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_checklist_templates (
+      id SERIAL PRIMARY KEY,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      created_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      approved_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      approved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_checklist_criteria (
+      id SERIAL PRIMARY KEY,
+      template_id INTEGER NOT NULL REFERENCES induction_checklist_templates(id) ON DELETE CASCADE,
+      description TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+
+  // An assessment attempt against a template. status can only become
+  // 'complete' once every criterion on the template has a result row that
+  // isn't 'not_assessed' -- enforced in server.js, not just here, since a
+  // criterion added after the fact must re-open a previously "complete"
+  // assessment rather than silently leaving a gap.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_induction_assessments (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      template_id INTEGER NOT NULL REFERENCES induction_checklist_templates(id) ON DELETE CASCADE,
+      assessor_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      assessor_competence_evidence TEXT,
+      assessment_date DATE,
+      operating_restrictions TEXT,
+      comments TEXT,
+      status TEXT NOT NULL DEFAULT 'in_progress' CHECK (status IN ('in_progress','complete')),
+      completed_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_induction_assessment_results (
+      id SERIAL PRIMARY KEY,
+      assessment_id INTEGER NOT NULL REFERENCES staff_induction_assessments(id) ON DELETE CASCADE,
+      criterion_id INTEGER NOT NULL REFERENCES induction_checklist_criteria(id) ON DELETE CASCADE,
+      result TEXT NOT NULL DEFAULT 'not_assessed' CHECK (result IN ('not_assessed','demonstrated','not_yet_demonstrated','not_applicable')),
+      na_reason TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (assessment_id, criterion_id)
+    );
+  `);
+
+  // Section "Supervised equipment logbook". duration_minutes keeps the
+  // arithmetic exact (summed for the hours-vs-target display); verified
+  // defaults false, so an entry contributes to "completed hours" only once
+  // a supervisor who isn't the staff member themselves has signed off on
+  // it (enforced in server.js).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_logbook_entries (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      equipment_id INTEGER REFERENCES equipment_items(id) ON DELETE SET NULL,
+      session_date DATE NOT NULL,
+      task_description TEXT NOT NULL,
+      duration_minutes INTEGER NOT NULL CHECK (duration_minutes > 0),
+      supervisor_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      feedback TEXT,
+      verified BOOLEAN NOT NULL DEFAULT false,
+      verified_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      verified_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Nominal practice hours, agreed per staff member per item (never one
+  // fixed figure for every machine) by whoever is supervising them.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_practice_targets (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      target_minutes INTEGER NOT NULL CHECK (target_minutes > 0),
+      agreed_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      agreed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (staff_id, induction_item_id)
+    );
+  `);
+
+  // Section "Verification and authorisation" -- kept as separate rows
+  // from the self-declaration and the raw checklist data on purpose (see
+  // spec: "keep separate fields for ..."). 'basis' documents a review
+  // pathway (e.g. "prior trade qualification reviewed") rather than
+  // forcing every experienced staff member through the full five-step
+  // process from scratch.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_induction_competency_verifications (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      verified BOOLEAN NOT NULL DEFAULT false,
+      verified_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      verified_at TIMESTAMPTZ,
+      basis TEXT,
+      notes TEXT,
+      review_date DATE,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (staff_id, induction_item_id)
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_induction_authorisations (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      authorisation_type TEXT NOT NULL CHECK (authorisation_type IN ('operate','supervise_students')),
+      authorised BOOLEAN NOT NULL DEFAULT false,
+      permitted_operations TEXT,
+      restrictions TEXT,
+      decision_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      decision_at TIMESTAMPTZ,
+      review_date DATE,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (staff_id, induction_item_id, authorisation_type)
+    );
+  `);
+
+  // One shared history log across every part of this module -- "keep
+  // version history for changes to evidence, assessment and
+  // authorisation". Every write route in the induction module appends one
+  // row here alongside its real update, in the same transaction.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_change_log (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      induction_item_id INTEGER REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      context_type TEXT NOT NULL,
+      context_id INTEGER,
+      summary TEXT NOT NULL,
+      changed_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Seed the master equipment list from the Staff Equipment Induction
+  // Register (Section 1 table) -- only runs once, the same guarded-insert
+  // pattern as the Maintenance/Inspection libraries above.
+  const inductionCategoryCount = await pool.query('SELECT COUNT(*)::int AS count FROM induction_equipment_categories');
+  if (inductionCategoryCount.rows[0].count === 0) {
+    const INDUCTION_EQUIPMENT_LIBRARY = [
+      ['Wood - Portable Tools (Electrical & battery powered)', ['Electrical Drill', 'Screwdriver - battery', 'Belt sander <75mm', 'Belt sander >75mm <100mm', 'Biscuit cutter/jointer', 'Electric planner < 90mm', 'Orbital sander', 'Ramdom orbit sander', 'Router - hand/plunge', 'Scroll saw', 'Trimmer - laminate', 'Pokerwork tool - hot wire', 'Jig saw', 'Domino machine', 'Circular Saw (185mm)', 'Wet Stone Grinder', 'Electric glue gun']],
+      ['Fixed - Wood - Machinery', ['Bandsaw', 'Bench drill (pedestal)', 'Disc and belt linisher sander', 'Disc sander', 'Drop and slide combin. saw', 'Drum sander', 'Jointer/planer', 'Table circular saw', 'Thicknesser', 'Lathe, woodturning', 'Router table/spindle moulder', 'Chisel mortising machine', 'Bobbin Sander', 'Vertical Sheet saw']],
+      ['Metal - Fixed Machinery', ['Bench grinder (pedestal)', 'Buffing wheel (pedestal)', 'Guillotine (Foot operated)', 'Panbrake bending machine', 'Metal lathe (long bed)', 'Metal lathe (short bed)', 'Pedestal Drill (Vertical)', 'Bar bending machine', 'Cold Saw', 'Shears, bench, metal']],
+      ['Metal - Portable Tools', ['Horizontal Bandsaw', 'Nibbler, portable', 'Metal Craft equipment', 'Electric arc welding - stick', 'MIG electric welding', 'Oxy-Acetylene equipment', 'Spot Welder', 'Soldering iron, electric']],
+      ['Plastic – Portable Tools', ['Buffing machine', 'Strip heater', 'Vacuum forming machine', 'Hot air welder', 'Oven (Plastics)']],
+      ['Compressed Air Tools', ['Impact wrench', 'Nail gun (Framer)', 'Nail gun (Finisher)', 'Stapler', 'Orbital Sander', 'Portable drills', 'Screw drivers', 'Spray painting equipment', 'Portable Air Compressor Units']],
+      ['Construction Equipment', ['Concrete Mixer', 'Laser Level', 'Optic Dumpy Level', 'Water Level', 'Jack Hammer', 'Impact Hammer Drill', 'Brick laying hand tools', 'Plastering hand tools', 'Concreting hand tools', 'Landscaping hand tools (mattock, pick, crowbar, shovels, rakes, sledge hammer, etc)', 'Electric Screw Driver/Drill']],
+    ];
+    for (let ci = 0; ci < INDUCTION_EQUIPMENT_LIBRARY.length; ci += 1) {
+      const [name, items] = INDUCTION_EQUIPMENT_LIBRARY[ci];
+      const catResult = await pool.query(
+        'INSERT INTO induction_equipment_categories (name, sort_order) VALUES ($1,$2) RETURNING id',
+        [name, ci]
+      );
+      const categoryId = catResult.rows[0].id;
+      for (let ii = 0; ii < items.length; ii += 1) {
+        await pool.query(
+          'INSERT INTO induction_equipment_items (category_id, name, sort_order) VALUES ($1,$2,$3)',
+          [categoryId, items[ii], ii]
+        );
+      }
+    }
+  }
 }
 
 module.exports = { pool, migrate };

@@ -43,6 +43,7 @@ const ICONS = {
   admin: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5l6 2.2v4.3c0 4.3-2.6 6.9-6 8.5-3.4-1.6-6-4.2-6-8.5V4.7l6-2.2Z"/><circle cx="10" cy="9" r="2"/><path d="M10 11v3"/></svg>',
   cara: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.8h7.2L16 6.6v10.6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V3.8a1 1 0 0 1 1-1Z"/><path d="M12 2.8v3.6a1 1 0 0 0 1 1H16"/><path d="M6.6 10.5h6.4M6.6 13.2h6.4M6.6 7.8h2.6"/></svg>',
   equipment: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13.4 3.4a3 3 0 0 0-4 3.9L3.6 13a1.6 1.6 0 0 0 2.3 2.3l5.7-5.8a3 3 0 0 0 3.9-4l-2 2-1.7-.5-.5-1.7 2.1-2Z"/></svg>',
+  induction: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5.5l7-3 7 3-7 3-7-3Z"/><path d="M6 8v4.2c0 .8 1.8 2.3 4 2.3s4-1.5 4-2.3V8"/><path d="M17 5.5V11"/></svg>',
 };
 
 function page({ title, active, body }) {
@@ -67,6 +68,7 @@ function page({ title, active, body }) {
       ${navLink('/pera', 'PERA', ICONS.risk, active === 'pera')}
       ${navLink('/cara', 'CARA', ICONS.cara, active === 'cara')}
       ${navLink('/equipment', 'Equipment', ICONS.equipment, active === 'equipment')}
+      ${navLink('/induction', 'Staff Induction', ICONS.induction, active === 'induction')}
     </nav>
     <nav class="sidebar-nav-bottom">
       ${navLink('/admin', 'Admin', ICONS.admin, active === 'admin')}
@@ -92,6 +94,7 @@ function page({ title, active, body }) {
     ${bottomNavLink('/pera', 'PERA', ICONS.risk, active === 'pera')}
     ${bottomNavLink('/cara', 'CARA', ICONS.cara, active === 'cara')}
     ${bottomNavLink('/equipment', 'Equip.', ICONS.equipment, active === 'equipment')}
+    ${bottomNavLink('/induction', 'Induct.', ICONS.induction, active === 'induction')}
     ${bottomNavLink('/admin', 'Admin', ICONS.admin, active === 'admin')}
   </nav>
 </div>
