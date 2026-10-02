@@ -7354,10 +7354,9 @@ app.get('/induction/staff/:staffId/profile', async (req, res, next) => {
     if (!staffResult.rows.length) return res.status(404).send('Staff member not found.');
     const staff = staffResult.rows[0];
 
-    const [profile, licences, evidence, groups, categories] = await Promise.all([
+    const [profile, licences, groups, categories] = await Promise.all([
       getCurrentProfileVersion(staffId),
       getActiveLicences(staffId),
-      getActiveEvidence(staffId),
       getProfileEquipmentGroups(staffId),
       getInductionCategoriesWithItems(),
     ]);
@@ -7377,16 +7376,6 @@ app.get('/induction/staff/:staffId/profile', async (req, res, next) => {
         </td>
       </tr>`;
     }).join('');
-
-    const evidenceRowsHtml = evidence.map((e) => `
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #F0EDE5;">
-        <div>
-          ${e.url ? `<a href="${escapeHtml(e.url)}" target="_blank" rel="noopener" style="color:#1B5E52;font-weight:600;font-size:13px;">${escapeHtml(e.title)}</a>` : `<strong style="font-size:13px;">${escapeHtml(e.title)}</strong>`}
-          ${e.notes ? `<div style="font-size:12px;color:#6B6659;">${escapeHtml(e.notes)}</div>` : ''}
-        </div>
-        ${canEdit ? `<form method="post" action="/induction/staff/${staffId}/profile/evidence/${e.id}/remove" onsubmit="return confirm('Remove this evidence? Records that already applied it will be flagged for review.');"><button type="submit" class="btn btn-secondary" style="padding:4px 10px;font-size:12px;flex-shrink:0;">Remove</button></form>` : ''}
-      </div>
-    `).join('');
 
     const groupCheckboxesHtml = categories.map((cat) => `
       <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;">
@@ -7420,6 +7409,7 @@ app.get('/induction/staff/:staffId/profile', async (req, res, next) => {
       </form>
 
       <div class="form-section-title" style="margin-top:28px;">Licences &amp; certificates</div>
+      <div class="form-section-hint" style="margin:0 0 10px;">Full certificate details are kept on file at the school — refer to HR for the original document. Just the name and expiry are tracked here.</div>
       <div class="card">
         <table style="width:100%;border-collapse:collapse;">
           <tbody>${licenceRowsHtml || `<tr><td style="padding:16px;text-align:center;color:#6B6659;">No licences recorded yet.</td></tr>`}</tbody>
@@ -7428,22 +7418,8 @@ app.get('/induction/staff/:staffId/profile', async (req, res, next) => {
       ${canEdit ? `
       <form class="form-card" method="post" action="/induction/staff/${staffId}/profile/licences" style="max-width:560px;margin-top:12px;">
         <div class="form-row"><label for="licence_name">Licence / certificate name</label><input type="text" id="licence_name" name="name" required placeholder="e.g. White Card"></div>
-        <div class="form-row"><label for="issuing_body">Issuing body</label><input type="text" id="issuing_body" name="issuing_body"></div>
-        <div class="form-row"><label for="licence_number">Licence number</label><input type="text" id="licence_number" name="licence_number"></div>
         <div class="form-row"><label for="expiry_date">Expiry date</label><input type="date" id="expiry_date" name="expiry_date"></div>
         <div class="form-actions"><button type="submit" class="btn btn-secondary">Add licence</button></div>
-      </form>` : ''}
-
-      <div class="form-section-title" style="margin-top:28px;">Supporting evidence</div>
-      <div class="card" style="padding:16px 18px;">
-        ${evidenceRowsHtml || '<div class="empty-state">No supporting evidence yet.</div>'}
-      </div>
-      ${canEdit ? `
-      <form class="form-card" method="post" action="/induction/staff/${staffId}/profile/evidence" style="max-width:560px;margin-top:12px;">
-        <div class="form-row"><label for="evidence_title">Title</label><input type="text" id="evidence_title" name="title" required placeholder="e.g. Trade certificate — Carpentry"></div>
-        <div class="form-row"><label for="evidence_url">Link (optional)</label><input type="text" id="evidence_url" name="url" placeholder="https://..."></div>
-        <div class="form-row"><label for="evidence_notes">Notes</label><input type="text" id="evidence_notes" name="notes"></div>
-        <div class="form-actions"><button type="submit" class="btn btn-secondary">Add evidence</button></div>
       </form>` : ''}
 
       <div class="form-section-title" style="margin-top:28px;">Equipment groups with experience</div>
@@ -7640,12 +7616,11 @@ app.get('/induction/staff/:staffId/assess', async (req, res, next) => {
     if (!staffResult.rows.length) return res.status(404).send('Staff member not found.');
     const staff = staffResult.rows[0];
 
-    const [categories, declResult, profile, licences, evidence, groups] = await Promise.all([
+    const [categories, declResult, profile, licences, groups] = await Promise.all([
       getInductionCategoriesWithItems(),
       pool.query('SELECT induction_item_id, status FROM staff_induction_declarations WHERE staff_id = $1', [staffId]),
       getCurrentProfileVersion(staffId),
       getActiveLicences(staffId),
-      getActiveEvidence(staffId),
       getProfileEquipmentGroups(staffId),
     ]);
     const declByItem = new Map(declResult.rows.map((d) => [d.induction_item_id, d.status]));
@@ -7678,12 +7653,6 @@ app.get('/induction/staff/:staffId/assess', async (req, res, next) => {
       </table>
     `).join('');
 
-    const evidenceCheckboxes = evidence.map((e) => `
-      <label style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:13px;">
-        <input type="checkbox" name="evidence_id" value="${e.id}">
-        <span>${escapeHtml(e.title)}${e.notes ? ` — <span style="color:#6B6659;">${escapeHtml(e.notes)}</span>` : ''}</span>
-      </label>`).join('') || '<div class="form-section-hint">No profile evidence yet — add some on your Competency Profile page.</div>';
-
     const licenceCheckboxes = licences.map((l) => `
       <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;">
         <input type="checkbox" name="licence_id" value="${l.id}">
@@ -7695,7 +7664,7 @@ app.get('/induction/staff/:staffId/assess', async (req, res, next) => {
       <h1 class="page-title">Self-assessment — ${escapeHtml(staff.name)}</h1>
       <p class="page-subtitle" style="margin-bottom:18px;">Select the equipment this applies to, declare a status, and submit one authenticated declaration. Untouched items stay "Not assessed".</p>
       <div class="note-box">A "Competent" declaration here is still only a self-declaration — it does not by itself authorise using the equipment or supervising students. <a href="/induction/staff/${staffId}/profile">Edit your Competency Profile</a> first if it needs updating.</div>
-      ${!hasProfileText ? `<div class="note-box" style="border-color:#C9A227;">Your Competency Profile has no qualifications/experience text yet — add some, or cite supporting evidence below, before declaring "Competent".</div>` : ''}
+      ${!hasProfileText ? `<div class="note-box" style="border-color:#C9A227;">Your Competency Profile has no qualifications/experience text yet — add some, or cite a supporting licence below, before declaring "Competent".</div>` : ''}
       <form class="form-card" method="post" action="/induction/staff/${staffId}/assess">
         <div class="form-row">
           <label>Declare selected items as</label>
@@ -7707,11 +7676,9 @@ app.get('/induction/staff/:staffId/assess', async (req, res, next) => {
         </div>
         <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:10px 0;">
           <input type="checkbox" name="confirmed_quals_support" value="on">
-          I confirm the qualifications and experience in my Competency Profile (and/or the evidence selected below) support competence for every item I've selected as Competent.
+          I confirm the qualifications and experience in my Competency Profile (and/or the licence(s) selected below) support competence for every item I've selected as Competent.
         </label>
-        <div class="form-section-title">Cite supporting profile evidence (optional, reused — not re-uploaded)</div>
-        ${evidenceCheckboxes}
-        ${licenceCheckboxes ? `<div style="margin-top:8px;">${licenceCheckboxes}</div>` : ''}
+        ${licenceCheckboxes ? `<div class="form-section-title">Cite supporting profile licences (optional, reused)</div><div style="margin-top:8px;">${licenceCheckboxes}</div>` : ''}
         <div class="form-row" style="margin-top:14px;">
           <label for="notes">Notes (applies to the whole declaration)</label>
           <textarea id="notes" name="notes" rows="2"></textarea>
@@ -7770,7 +7737,7 @@ app.post('/induction/staff/:staffId/assess', async (req, res, next) => {
     const profile = await getCurrentProfileVersion(staffId);
     const hasProfileSupport = Boolean(profile && (profile.qualifications_trade || profile.teaching_industry_experience)) || evidenceIds.length > 0 || licenceIds.length > 0;
     if (anyCompetent && !hasProfileSupport) {
-      return res.status(400).send('Add qualifications/experience or supporting evidence to your Competency Profile before declaring an item competent. <a href="javascript:history.back()">Back</a>');
+      return res.status(400).send('Add qualifications/experience or a licence to your Competency Profile before declaring an item competent. <a href="javascript:history.back()">Back</a>');
     }
 
     const batchResult = await pool.query(
@@ -7843,13 +7810,12 @@ app.get('/induction/staff/:staffId/review', async (req, res, next) => {
     if (!staffResult.rows.length) return res.status(404).send('Staff member not found.');
     const staff = staffResult.rows[0];
 
-    const [categories, declResult, verifResult, profile, licences, evidence] = await Promise.all([
+    const [categories, declResult, verifResult, profile, licences] = await Promise.all([
       getInductionCategoriesWithItems(),
       pool.query('SELECT induction_item_id, status FROM staff_induction_declarations WHERE staff_id = $1', [staffId]),
       pool.query('SELECT induction_item_id, verified FROM staff_induction_competency_verifications WHERE staff_id = $1', [staffId]),
       getCurrentProfileVersion(staffId),
       getActiveLicences(staffId),
-      getActiveEvidence(staffId),
     ]);
     const declByItem = new Map(declResult.rows.map((d) => [d.induction_item_id, d.status]));
     const verifByItem = new Map(verifResult.rows.map((v) => [v.induction_item_id, v.verified]));
@@ -7875,7 +7841,6 @@ app.get('/induction/staff/:staffId/review', async (req, res, next) => {
       </table>
     `).join('');
 
-    const evidenceList = evidence.map((e) => `<li style="font-size:13px;">${escapeHtml(e.title)}${e.notes ? ` — <span style="color:#6B6659;">${escapeHtml(e.notes)}</span>` : ''}</li>`).join('') || '<li style="color:#6B6659;font-size:13px;">None recorded.</li>';
     const licenceList = licences.map((l) => `<li style="font-size:13px;">${escapeHtml(l.name)}${l.expiry_date ? ` (expires ${formatBrisbaneDate(l.expiry_date)})` : ''}</li>`).join('') || '<li style="color:#6B6659;font-size:13px;">None recorded.</li>';
 
     const body = `
@@ -7886,18 +7851,17 @@ app.get('/induction/staff/:staffId/review', async (req, res, next) => {
         <div class="form-section-title" style="margin-top:0;">Profile summary</div>
         <div style="font-size:13px;white-space:pre-wrap;">${escapeHtml(profile ? (profile.qualifications_trade || '') : '') || '<span style="color:#6B6659;">No qualifications/trade background recorded.</span>'}</div>
         <div style="font-size:13px;white-space:pre-wrap;margin-top:6px;">${escapeHtml(profile ? (profile.teaching_industry_experience || '') : '') || '<span style="color:#6B6659;">No teaching/industry experience recorded.</span>'}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;">
-          <div><div style="font-size:11px;text-transform:uppercase;color:#6B6659;">Licences</div><ul style="margin:4px 0 0 18px;">${licenceList}</ul></div>
-          <div><div style="font-size:11px;text-transform:uppercase;color:#6B6659;">Evidence</div><ul style="margin:4px 0 0 18px;">${evidenceList}</ul></div>
+        <div style="margin-top:12px;">
+          <div style="font-size:11px;text-transform:uppercase;color:#6B6659;">Licences</div><ul style="margin:4px 0 0 18px;">${licenceList}</ul>
         </div>
         <a href="/induction/staff/${staffId}/profile" style="display:inline-block;margin-top:10px;color:#1B5E52;font-weight:600;font-size:13px;">Open full Competency Profile →</a>
       </div>
-      <div class="note-box">Bulk verification only proceeds once you explicitly confirm the evidence above supports every item selected. A separate verification record is still kept for each one.</div>
+      <div class="note-box">Bulk verification only proceeds once you explicitly confirm the profile above supports every item selected. A separate verification record is still kept for each one.</div>
       <form class="form-card" method="post" action="/induction/staff/${staffId}/review">
         <div class="form-row"><label for="basis">Basis for recognising existing competence</label><textarea id="basis" name="basis" rows="3" required placeholder="e.g. Qualified trade carpenter (Cert III Carpentry, sighted), 8 years industry experience operating fixed wood machinery."></textarea></div>
         <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:10px 0;">
           <input type="checkbox" name="confirmed_evidence_supports" value="on" required>
-          I confirm the profile and evidence above support verified competency for every item I've selected below.
+          I confirm the profile and licence(s) above support verified competency for every item I've selected below.
         </label>
         <div class="form-row"><label for="remaining_requirements">Any remaining local induction requirements</label><textarea id="remaining_requirements" name="remaining_requirements" rows="2" placeholder="e.g. Still needs this school's workshop-specific emergency procedures."></textarea></div>
         <div class="form-section-title">Equipment</div>
@@ -7920,7 +7884,7 @@ app.post('/induction/staff/:staffId/review', async (req, res, next) => {
     const { basis, remaining_requirements } = req.body;
     if (!normalizeText(basis || '').trim()) return res.status(400).send('A basis for recognising existing competence is required. <a href="javascript:history.back()">Back</a>');
     const confirmedEvidenceSupports = req.body.confirmed_evidence_supports === 'on' || req.body.confirmed_evidence_supports === 'true';
-    if (!confirmedEvidenceSupports) return res.status(400).send('Bulk verification requires confirming the evidence supports every selected item. <a href="javascript:history.back()">Back</a>');
+    if (!confirmedEvidenceSupports) return res.status(400).send('Bulk verification requires confirming the profile supports every selected item. <a href="javascript:history.back()">Back</a>');
 
     let itemIds = req.body.item_id;
     if (!itemIds) itemIds = [];
