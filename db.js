@@ -534,6 +534,13 @@ async function migrate() {
     END $$;
   `);
 
+  // Minimum safety requirements were simplified to just Current / Required.
+  // Older rows marked "Due Soon" (still current, review coming up) become
+  // Current; "Missing" (not met) becomes Required. Notes are kept. The
+  // wider CHECK above is left as-is so this never fails on old data.
+  await pool.query(`UPDATE pera_min_requirements SET status = 'Current', met = true WHERE status = 'Due Soon';`);
+  await pool.query(`UPDATE pera_min_requirements SET status = 'Required', met = false WHERE status = 'Missing';`);
+
   await pool.query(`ALTER TABLE pera_annual_reviews ADD COLUMN IF NOT EXISTS risk_unchanged BOOLEAN;`);
   await pool.query(`ALTER TABLE pera_annual_reviews ADD COLUMN IF NOT EXISTS controls_unchanged BOOLEAN;`);
   await pool.query(`ALTER TABLE pera_annual_reviews ADD COLUMN IF NOT EXISTS staffing_unchanged BOOLEAN;`);

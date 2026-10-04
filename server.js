@@ -40,7 +40,7 @@ const CONTROL_TYPES = ['Engineering', 'Administrative', 'PPE', 'Procedural'];
 const APPROVAL_DECISIONS = ['Approved as submitted', 'Approved with conditions', 'Not approved'];
 const APPROVAL_REQUIRED_LEVELS = ['Principal', 'Delegate', 'HOD', 'WHS Officer'];
 const HAZARD_APPLIES_TO = ['Staff', 'Students', 'Both'];
-const MIN_REQUIREMENT_STATUSES = ['Current', 'Required', 'Due Soon', 'Missing'];
+const MIN_REQUIREMENT_STATUSES = ['Current', 'Required'];
 const DOCUMENT_CATEGORIES = ['SOP', 'Manufacturer manual', 'Equipment Maintenance Record', 'Student induction record', 'Staff competency record', 'Previous risk assessment', 'Other'];
 
 // Related documents on a PERA can now be an actual uploaded file (stored
