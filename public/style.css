@@ -24,10 +24,20 @@ a { color: inherit; }
 }
 
 .sidebar-brand {
-  padding: 0 24px 28px 24px;
+  padding: 0 24px 10px 24px;
   display: flex;
   align-items: center;
   gap: 10px;
+  text-decoration: none;
+}
+
+.sidebar-brand:hover span { text-decoration: underline; text-underline-offset: 3px; }
+.sidebar-brand:focus-visible { outline: 2px solid #FF8A80; outline-offset: 2px; border-radius: 6px; }
+
+.sidebar-user {
+  padding: 0 24px 18px 58px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
 }
 
 .sidebar-brand span {

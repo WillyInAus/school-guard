@@ -112,9 +112,13 @@ function page({ title, active, body }) {
 <body>
 <div class="app-shell">
   <div class="sidebar">
-    <div class="sidebar-brand">
+    <a class="sidebar-brand" href="/admin/login" aria-label="${BRAND} main page">
       <svg aria-hidden="true" focusable="false" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8.4-7 10-3.8-1.6-7-5-7-10V6l7-3Z"/><path d="M9 12l2.2 2.2L15.5 9.5"/></svg>
       <span>${BRAND}</span>
+    </a>
+    <div class="sidebar-user">
+      <div class="sidebar-footer-label">Signed in as</div>
+      <div class="sidebar-footer-name">${user ? `${escapeHtml(user.name)} · ${escapeHtml(ROLE_LABELS[user.role] || user.role)}` : 'Not signed in'}</div>
     </div>
     <nav class="sidebar-nav">
       ${navLink('/', 'Dashboard', ICONS.dashboard, active === 'dashboard')}
@@ -124,10 +128,6 @@ function page({ title, active, body }) {
       ${navLink('/induction', 'Staff Induction', ICONS.induction, active === 'induction')}
     </nav>
     ${adminMenu(user, path)}
-    <div class="sidebar-footer">
-      <div class="sidebar-footer-label">Signed in as</div>
-      <div class="sidebar-footer-name">${user ? `${escapeHtml(user.name)} · ${escapeHtml(ROLE_LABELS[user.role] || user.role)}` : 'Not signed in'}</div>
-    </div>
   </div>
   <div class="main-column">
     <div class="topbar">
