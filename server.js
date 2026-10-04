@@ -4562,6 +4562,7 @@ app.post('/admin/setup', async (req, res, next) => {
 // title-plus-sign-out-button row that sits above it on every tab.
 function adminTabs(activeTab) {
   const tabs = [
+    { key: 'dashboard', href: '/admin', label: 'Dashboard' },
     { key: 'staff', href: '/admin/staff', label: 'Manage Staff' },
     { key: 'pera', href: '/admin/pera', label: 'PERA' },
     { key: 'pera-archive', href: '/admin/pera/archive', label: 'PERA Archive' },
@@ -4590,8 +4591,8 @@ function adminHeader(title, subtitle) {
   `;
 }
 
-app.get('/admin', requireRole('admin'), (req, res) => {
-  res.redirect('/admin/pera');
+require('./admin-dashboard')(app, {
+  pool, page, escapeHtml, requireRole, adminTabs, adminHeader, riskBadgeClass, statusBadgeClass, formatBrisbaneDate,
 });
 
 app.get('/admin/pera', requireRole('admin'), async (req, res, next) => {
