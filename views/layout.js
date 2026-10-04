@@ -44,6 +44,10 @@ function bottomNavLink(href, label, iconSvg, active) {
 // after each redeploy, without giving up caching in between deploys.
 const ASSET_VERSION = Date.now();
 
+// Product name shown to users. Internal identifiers (package name, database
+// name/user, Docker service names) intentionally keep the old "school-guard" names.
+const BRAND = 'PracReady';
+
 const ICONS = {
   dashboard: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="6.5" height="6.5" rx="1.3"/><rect x="11" y="2.5" width="6.5" height="6.5" rx="1.3"/><rect x="2.5" y="11" width="6.5" height="6.5" rx="1.3"/><rect x="11" y="11" width="6.5" height="6.5" rx="1.3"/></svg>',
   risk: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="12" height="14" rx="2"/><path d="M7.5 3.5h5v1.6a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1V3.5Z"/><path d="M7.3 11.2l1.8 1.8 3.6-4"/></svg>',
@@ -100,7 +104,8 @@ function page({ title, active, body }) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)} — School Guard</title>
+<title>${escapeHtml(title)} — ${BRAND}</title>
+<meta name="application-name" content="${BRAND}">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Permanent+Marker&display=swap">
 <link rel="stylesheet" href="/style.css?v=${ASSET_VERSION}">
 </head>
@@ -108,8 +113,8 @@ function page({ title, active, body }) {
 <div class="app-shell">
   <div class="sidebar">
     <div class="sidebar-brand">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8.4-7 10-3.8-1.6-7-5-7-10V6l7-3Z"/><path d="M9 12l2.2 2.2L15.5 9.5"/></svg>
-      <span>School Guard</span>
+      <svg aria-hidden="true" focusable="false" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8.4-7 10-3.8-1.6-7-5-7-10V6l7-3Z"/><path d="M9 12l2.2 2.2L15.5 9.5"/></svg>
+      <span>${BRAND}</span>
     </div>
     <nav class="sidebar-nav">
       ${navLink('/', 'Dashboard', ICONS.dashboard, active === 'dashboard')}
@@ -148,4 +153,4 @@ function page({ title, active, body }) {
 </html>`;
 }
 
-module.exports = { page, escapeHtml, requestContext, ASSET_VERSION };
+module.exports = { page, escapeHtml, requestContext, ASSET_VERSION, BRAND };

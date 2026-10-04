@@ -9,7 +9,7 @@ const PDFDocument = require('pdfkit');
 const multer = require('multer');
 const sharp = require('sharp');
 const { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS } = require('./db');
-const { page, escapeHtml, requestContext } = require('./views/layout');
+const { page, escapeHtml, requestContext, BRAND } = require('./views/layout');
 const { renderLanding } = require('./landing');
 
 // Faith Lutheran College — Plainland letterhead, shown at the top of CARA PDF
@@ -2864,7 +2864,7 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="CARA - ${safeName}.pdf"`);
 
-    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
+    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true, info: { Creator: BRAND } });
     doc.pipe(res);
 
     const GREEN = '#1B5E52';
@@ -2964,7 +2964,7 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
       doc.moveDown(0.3);
     }
 
-    doc.fontSize(9).fillColor(MUTED).text('School Guard', { align: 'left' });
+    doc.fontSize(9).fillColor(MUTED).text(BRAND, { align: 'left' });
     doc.moveDown(0.3);
     doc.fontSize(16).fillColor(GREEN).text('Curriculum Activity Risk Assessment (CARA)');
     doc.moveDown(0.2);
@@ -3058,7 +3058,7 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
 
     doc.moveDown(1.2);
     doc.fontSize(8).fillColor('#999999').text(
-      `Generated ${new Date().toLocaleString('en-AU')} — School Guard`,
+      `Generated ${new Date().toLocaleString('en-AU')} — ${BRAND}`,
       { align: 'center' }
     );
 
@@ -7212,7 +7212,7 @@ app.get('/induction/staff/:staffId/print', async (req, res, next) => {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Staff Induction Record — ${escapeHtml(staff.name)}</title>
+<title>Staff Induction Record — ${escapeHtml(staff.name)} — ${BRAND}</title>
 <link rel="stylesheet" href="/style.css">
 <style>
   body { background:#fff; padding:32px; }
@@ -7226,7 +7226,7 @@ app.get('/induction/staff/:staffId/print', async (req, res, next) => {
 <body>
   <button class="btn btn-primary print-btn" onclick="window.print()">Print</button>
   <h1 class="page-title">Staff Equipment Induction Record</h1>
-  <p class="page-subtitle">${escapeHtml(staff.name)} · ${escapeHtml(staff.email)} · Faith Lutheran College · Generated ${escapeHtml(formatBrisbaneDateTime(new Date()))}</p>
+  <p class="page-subtitle">${escapeHtml(staff.name)} · ${escapeHtml(staff.email)} · Faith Lutheran College · Generated ${escapeHtml(formatBrisbaneDateTime(new Date()))} · ${BRAND}</p>
   <table>
     <thead><tr><th>Category</th><th>Equipment</th><th>Self-assessed</th><th>Induction steps</th><th>Verified competency</th><th>Authorised: operate</th><th>Authorised: supervise students</th></tr></thead>
     <tbody>
@@ -7263,13 +7263,13 @@ app.get('/induction/staff/:staffId/export.pdf', async (req, res, next) => {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="Staff Induction Record - ${safeName}.pdf"`);
 
-    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
+    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true, info: { Creator: BRAND } });
     doc.pipe(res);
 
     doc.fontSize(16).fillColor('#1A1D1B').text('Staff Equipment Induction Record', { align: 'left' });
     doc.moveDown(0.3);
     doc.fontSize(10).fillColor('#6B6659').text(`${staff.name} — ${staff.email} — Faith Lutheran College`);
-    doc.text(`Generated ${formatBrisbaneDateTime(new Date())}`);
+    doc.text(`Generated ${formatBrisbaneDateTime(new Date())} — ${BRAND}`);
     doc.moveDown(1);
 
     let currentCategory = null;
@@ -8290,7 +8290,7 @@ app.use((err, req, res, next) => {
 migrate()
   .then(() => {
     app.listen(PORT, () => {
-      console.log(`School Guard listening on port ${PORT}`);
+      console.log(`${BRAND} listening on port ${PORT}`);
     });
   })
   .catch((err) => {

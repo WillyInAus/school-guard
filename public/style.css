@@ -1241,7 +1241,7 @@ tr.row-link:hover {
 .lp-h2 .lp-marker { display: inline-block; }
 .lp-section-lead { text-align: center; color: #6B6659; font-size: 17px; margin: 0 auto 8px; max-width: 620px; }
 .lp-flow-section { background: #fff; padding: 36px 0 28px; }
-.sg-flow-bare .sg-flow { max-width: 760px; margin-top: 8px; }
+.sg-flow-bare .sg-flow { max-width: 800px; margin-top: 8px; }
 .lp-features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 32px; }
 .lp-feature { background: #fff; border: 1px solid #E6E1D8; border-radius: 12px; padding: 22px; }
 .lp-feature-icon { width: 44px; height: 44px; border-radius: 10px; background: #E6F0ED; color: #1B5E52; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; }
@@ -1278,7 +1278,7 @@ tr.row-link:hover {
   box-shadow: 0 0 0 4px rgba(255, 138, 128, 0.18); }
 .lp-soon::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #8E1B15; }
 .lp-soon-light { font-size: 11.5px; padding: 4px 10px 4px 9px; margin-right: 8px; box-shadow: none; vertical-align: 1px; }
-.lp-ticks-label { margin: 0 0 10px; font-size: 13px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: #9FD3C7; }
+.lp-ticks-label { margin: 0 0 10px; font-size: 15px; font-weight: 600; color: #9FD3C7; }
 .lp-ticks li::before { width: 10px; height: 10px; left: 3px; top: 4px; border: 2.5px dashed #FF8A80; border-radius: 50%; transform: none; }
 .lp-signin-note-top { margin: 0 0 4px; }
 .lp-section-eyebrow { text-align: center; text-transform: uppercase; letter-spacing: 1.5px; font-size: 12.5px; font-weight: 600; color: #1B5E52; margin: 0 0 6px; }
@@ -1292,3 +1292,6 @@ tr.row-link:hover {
   .lp-flow-section .lp-h2 { font-size: 24px; }
   .lp-soon { font-size: 12px; }
 }
+
+.lp-product { display: block; font-size: 30px; font-weight: 700; letter-spacing: 0.5px; color: #9FD3C7; margin-bottom: 8px; }
+@media (max-width: 640px) { .lp-product { font-size: 24px; } }

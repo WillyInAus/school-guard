@@ -76,7 +76,7 @@ module.exports = function registerAdminDashboard(app, deps) {
       const short = (s) => String(s || '').replace(' — Plant & Equipment Risk Assessment', '');
 
       const body = `
-        ${adminHeader('Admin dashboard', 'What needs your attention across School Guard')}
+        ${adminHeader('Admin dashboard', 'What needs your attention across PracReady')}
         ${adminTabs('dashboard')}
 
         ${group('Approvals', [

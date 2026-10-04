@@ -1,17 +1,17 @@
 // Public front page: "coming soon" landing page with the staff testing sign-in form.
 // Shown at / when nobody is signed in, and at /admin/login.
 
-const { escapeHtml, ASSET_VERSION } = require('./views/layout');
+const { escapeHtml, ASSET_VERSION, BRAND } = require('./views/layout');
 const { safetyFlowSvg } = require('./front-flow');
 
 const FLOW_STEPS = [
-  { title: 'ASSESS', sub: 'PERA + SOP for each tool' },
+  { title: 'ASSESS', sub: 'Equipment risks and safe operating procedures' },
   { title: 'APPROVE', sub: 'Authorised approver signs off' },
-  { title: 'INDUCT', sub: 'Staff read, confirm, verified' },
-  { title: 'PLAN', sub: 'CARA for the class activity' },
-  { title: 'CHECK', sub: 'Gear tagged, guarded, ready' },
-  { title: 'TEACH!', sub: 'Students work safely' },
-  { title: 'REVIEW', sub: 'Yearly or after a change' },
+  { title: 'INDUCT', sub: 'Staff instruction and competency verification' },
+  { title: 'PLAN', sub: 'Class and activity risk assessment' },
+  { title: 'CHECK', sub: 'Equipment, workspace and student readiness' },
+  { title: 'TEACH', sub: 'Practical learning with appropriate supervision' },
+  { title: 'REVIEW', sub: 'Regularly and when circumstances change' },
 ];
 
 const FEATURES = [
@@ -88,15 +88,16 @@ function renderLanding({ next = '/', error = '', user = null, email = '' } = {})
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>School Guard — Coming soon</title>
-<meta name="description" content="School Guard is in development: a simpler way for schools to manage workshop risk assessments, equipment and staff induction.">
+<title>${BRAND} — Coming soon</title>
+<meta name="application-name" content="${BRAND}">
+<meta name="description" content="${BRAND} is in development: a simpler way for schools to manage workshop risk assessments, equipment and staff induction.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Permanent+Marker&display=swap">
 <link rel="stylesheet" href="/style.css?v=${ASSET_VERSION}">
 </head>
 <body class="lp-body">
   <header class="lp-top">
     <div class="lp-wrap lp-top-inner">
-      <a class="lp-brand" href="/">${icon(SHIELD, 26)}<span>School Guard</span></a>
+      <a class="lp-brand" href="/" aria-label="${BRAND} home">${icon(SHIELD, 26)}<span>${BRAND}</span></a>
       <a class="lp-btn lp-btn-ghost" href="${user ? '/' : '#signin'}">${user ? 'Dashboard' : 'Staff sign-in'}</a>
     </div>
   </header>
@@ -105,9 +106,9 @@ function renderLanding({ next = '/', error = '', user = null, email = '' } = {})
     <div class="lp-wrap lp-hero-inner">
       <div class="lp-hero-copy">
         <p class="lp-badge-row"><span class="lp-soon">Coming soon</span><span class="lp-eyebrow">WHS for school workshops</span></p>
-        <h1 class="lp-h1">Safe workshops,<br><span class="lp-marker">minus the paper pile.</span></h1>
-        <p class="lp-lead">School Guard is in development. We’re building a simpler way for schools to manage workshop risk assessments, equipment and staff induction.</p>
-        <p class="lp-ticks-label" id="lp-dev-label">Capabilities in development</p>
+        <h1 class="lp-h1"><span class="lp-product">${BRAND}</span>Safe workshops,<br><span class="lp-marker">minus the paper pile.</span></h1>
+        <p class="lp-lead">${BRAND} is in development. We’re building a simpler way for schools to manage workshop risk assessments, equipment and staff induction.</p>
+        <p class="lp-ticks-label" id="lp-dev-label">Being developed to support:</p>
         <ul class="lp-ticks" aria-labelledby="lp-dev-label">
           <li>Risk assessments and SOPs in one place</li>
           <li>Class CARAs built from an equipment library</li>
@@ -147,8 +148,7 @@ function renderLanding({ next = '/', error = '', user = null, email = '' } = {})
   <section class="lp-section lp-built">
     <div class="lp-wrap lp-built-inner">
       <div>
-        <h2 class="lp-h2 lp-h2-light">Built in a real school workshop</h2>
-        <p>Designed alongside Queensland staff who run woodwork, metalwork and VET trade classes, around the paperwork they already have to keep.</p>
+        <h2 class="lp-h2 lp-h2-light">Built for practical learning</h2>
         <p class="lp-built-status"><span class="lp-soon lp-soon-light">Coming soon</span> Currently being developed and tested for school workshop use.</p>
       </div>
       <a class="lp-btn lp-btn-light" href="${user ? '/' : '#signin'}">${user ? 'Go to dashboard' : 'Staff testing sign-in'}</a>
@@ -156,7 +156,7 @@ function renderLanding({ next = '/', error = '', user = null, email = '' } = {})
   </section>
 
   <footer class="lp-footer">
-    <div class="lp-wrap">© ${new Date().getFullYear()} School Guard · eduwhs.com · In development</div>
+    <div class="lp-wrap">© ${new Date().getFullYear()} ${BRAND} · eduwhs.com</div>
   </footer>
 <script>
 (function () {

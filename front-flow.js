@@ -3,14 +3,31 @@
 
 const { escapeHtml } = require('./views/layout');
 
-const CX = 390;
-const CY = 212;
-const RX = 300;
-const RY = 165;
+const CX = 420;
+const CY = 222;
+const RX = 318;
+const RY = 168;
 
 function pointAt(deg, rx = RX, ry = RY) {
   const r = (deg * Math.PI) / 180;
   return { x: CX + rx * Math.cos(r), y: CY + ry * Math.sin(r) };
+}
+
+// Split a caption into short lines so long captions stay inside the drawing.
+function wrapLines(text, max = 24) {
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    if (line && (line + ' ' + w).length > max) {
+      lines.push(line);
+      line = w;
+    } else {
+      line = line ? line + ' ' + w : w;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
 }
 
 function fmt(n) {
@@ -39,14 +56,21 @@ function safetyFlowSvg(steps, opts = {}) {
 
   const nodes = steps
     .map((step, i) => {
-      const p = pointAt(angles[i]);
+      const lines = wrapLines(step.sub);
+      const lift = (lines.length - 1) * 8;
+      const p0 = pointAt(angles[i]);
+      const p = { x: p0.x, y: p0.y - lift };
+      const subText = lines
+        .map((l, k) => `<tspan x="${fmt(p.x)}" dy="${k === 0 ? 0 : 16}">${escapeHtml(l)}</tspan>`)
+        .join('');
+      const badgeY = p.y + 18 + lines.length * 16 + 4;
       const inner = `
-        <rect class="sg-flow-hit" x="${fmt(p.x - 78)}" y="${fmt(p.y - 34)}" width="156" height="${step.badge ? 84 : 66}" rx="14"/>
+        <rect class="sg-flow-hit" x="${fmt(p.x - 90)}" y="${fmt(p.y - 34)}" width="180" height="${fmt(badgeY - p.y + (step.badge ? 44 : 26))}" rx="14"/>
         <text class="sg-flow-title" x="${fmt(p.x)}" y="${fmt(p.y - 2)}" text-anchor="middle">${escapeHtml(step.title)}</text>
-        <text class="sg-flow-sub" x="${fmt(p.x)}" y="${fmt(p.y + 18)}" text-anchor="middle">${escapeHtml(step.sub)}</text>
+        <text class="sg-flow-sub" x="${fmt(p.x)}" y="${fmt(p.y + 18)}" text-anchor="middle">${subText}</text>
         ${
           step.badge
-            ? `<text class="sg-flow-badge sg-flow-badge-${step.badgeTone || 'plain'}" x="${fmt(p.x)}" y="${fmt(p.y + 38)}" text-anchor="middle">${escapeHtml(step.badge)}</text>`
+            ? `<text class="sg-flow-badge sg-flow-badge-${step.badgeTone || 'plain'}" x="${fmt(p.x)}" y="${fmt(badgeY)}" text-anchor="middle">${escapeHtml(step.badge)}</text>`
             : ''
         }`;
       const body = step.href
@@ -62,7 +86,7 @@ function safetyFlowSvg(steps, opts = {}) {
       ${heading ? `<h2 class="sg-flow-heading">${escapeHtml(heading)}</h2>` : ''}
       ${intro ? `<p class="sg-flow-intro">${escapeHtml(intro)}</p>` : ''}
     </div>` : ''}
-    <svg class="sg-flow" viewBox="0 0 780 424" role="img" aria-labelledby="sg-flow-t">
+    <svg class="sg-flow" viewBox="0 0 840 444" role="img" aria-labelledby="sg-flow-t">
       <title id="sg-flow-t">Safety cycle: ${steps.map((s) => escapeHtml(s.title)).join(', then ')}, then back to the start.</title>
       <defs>
         <filter id="sg-flow-rough" x="-5%" y="-5%" width="110%" height="110%">

@@ -42,7 +42,7 @@ function page({ title, active, body }) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)} — School Guard</title>
+<title>${escapeHtml(title)} — PracReady</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -50,7 +50,7 @@ function page({ title, active, body }) {
   <div class="sidebar">
     <div class="sidebar-brand">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8.4-7 10-3.8-1.6-7-5-7-10V6l7-3Z"/><path d="M9 12l2.2 2.2L15.5 9.5"/></svg>
-      <span>School Guard</span>
+      <span>PracReady</span>
     </div>
     <nav class="sidebar-nav">
       ${navLink('/', 'Dashboard', ICONS.dashboard, active === 'dashboard')}

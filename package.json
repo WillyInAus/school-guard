@@ -2,7 +2,7 @@
   "name": "school-guard",
   "version": "1.0.0",
   "private": true,
-  "description": "School Guard - WHS and VET compliance platform",
+  "description": "PracReady - WHS and VET compliance platform",
   "main": "server.js",
   "engines": {
     "node": ">=18"
