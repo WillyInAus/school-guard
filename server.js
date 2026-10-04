@@ -10,7 +10,7 @@ const multer = require('multer');
 const sharp = require('sharp');
 const { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS } = require('./db');
 const { page, escapeHtml, requestContext } = require('./views/layout');
-const { safetyFlowSvg } = require('./front-flow');
+const { renderLanding } = require('./landing');
 
 // Faith Lutheran College — Plainland letterhead, shown at the top of CARA PDF
 // exports (see GET /cara/:id/pdf below). Read once at startup; if the file
@@ -286,7 +286,7 @@ function requireRole(...roles) {
 // (Static files under /public are already handled above and never reach
 // here.) Individual routes layer requireRole(...) on top of this where a
 // specific role is required (see the admin/approve routes further down).
-const PUBLIC_PATHS = new Set(['/admin/login', '/admin/setup', '/admin/logout', '/healthz']);
+const PUBLIC_PATHS = new Set(['/', '/admin/login', '/admin/setup', '/admin/logout', '/healthz']);
 app.use((req, res, next) => {
   if (PUBLIC_PATHS.has(req.path)) return next();
   return requireAuth(req, res, next);
@@ -540,6 +540,7 @@ function normalizeText(v) {
 
 app.get('/', async (req, res, next) => {
   try {
+    if (!req.staffUser) return res.send(renderLanding({ next: '/' }));
     const totalResult = await pool.query('SELECT COUNT(*)::int AS count FROM pera_records WHERE archived = false');
     const pendingResult = await pool.query(
       "SELECT COUNT(*)::int AS count FROM pera_records WHERE status = 'Pending approval' AND archived = false"
@@ -552,31 +553,6 @@ app.get('/', async (req, res, next) => {
     const equipmentAttentionResult = await pool.query(
       "SELECT COUNT(*)::int AS count FROM equipment_items WHERE status != 'Operational'"
     );
-
-    const canApprove = req.staffUser && ['admin', 'approver'].includes(req.staffUser.role);
-    const pendingApprovals = pendingResult.rows[0].count + caraPendingResult.rows[0].count;
-    const attention = equipmentAttentionResult.rows[0].count;
-    const flowHtml = safetyFlowSvg([
-      { title: 'ASSESS', sub: 'PERA + SOP for the tool', href: '/pera', badge: `${totalResult.rows[0].count} PERAs` },
-      {
-        title: 'APPROVE',
-        sub: 'WHS Coordinator signs off',
-        href: canApprove ? '/admin/approvals' : '/pera',
-        badge: pendingApprovals ? `${pendingApprovals} waiting` : 'All clear',
-        badgeTone: pendingApprovals ? 'warn' : 'ok',
-      },
-      { title: 'INDUCT', sub: 'Staff read, confirm, verified', href: '/induction/me', badge: 'My induction' },
-      { title: 'PLAN', sub: 'CARA for the class activity', href: '/cara', badge: `${caraTotalResult.rows[0].count} CARAs` },
-      {
-        title: 'CHECK',
-        sub: 'Gear tagged, guarded, ready',
-        href: '/equipment',
-        badge: attention ? `${attention} need attention` : 'All operational',
-        badgeTone: attention ? 'warn' : 'ok',
-      },
-      { title: 'TEACH!', sub: 'Students work safely' },
-      { title: 'REVIEW', sub: 'Yearly or after a change', href: '/pera' },
-    ]);
 
     const body = `
       <div class="page-header">
@@ -611,7 +587,6 @@ app.get('/', async (req, res, next) => {
           <div class="stat-value">${equipmentAttentionResult.rows[0].count}</div>
         </div>
       </div>
-      ${flowHtml}
       <div class="card" style="padding: 24px;">
         <p style="margin:0;font-size:14px;color:#6B6659;">
           <a href="/pera" style="color:#1B5E52;font-weight:600;">PERA</a> holds the equipment/tool
@@ -4477,43 +4452,24 @@ app.post('/equipment/:id/return-to-service', async (req, res, next) => {
 // ---------- Staff: login / logout ----------
 
 app.get('/admin/login', (req, res) => {
-  const next = typeof req.query.next === 'string' && req.query.next.startsWith('/') ? req.query.next : '/';
-  const body = `
-    <div class="form-card" style="max-width:380px;margin:60px auto;">
-      <h1 class="page-title" style="margin-bottom:20px;">Staff sign in</h1>
-      <form method="post" action="/admin/login">
-        <input type="hidden" name="next" value="${escapeHtml(next)}">
-        <div class="form-row">
-          <label for="email">Email</label>
-          <input type="email" id="email" name="email" required autofocus>
-        </div>
-        <div class="form-row">
-          <label for="password">Password</label>
-          <input type="password" id="password" name="password" required>
-        </div>
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary" style="width:100%;">Sign in</button>
-        </div>
-      </form>
-    </div>
-  `;
-  res.send(page({ title: 'Staff sign in', active: '', body }));
+  const next = typeof req.query.next === 'string' && req.query.next.startsWith('/') && !req.query.next.startsWith('//') ? req.query.next : '/';
+  res.send(renderLanding({ next, user: req.staffUser || null }));
 });
 
 app.post('/admin/login', async (req, res, next) => {
   try {
     const { email, password } = req.body;
-    const target = typeof req.body.next === 'string' && req.body.next.startsWith('/') ? req.body.next : '/';
+    const target = typeof req.body.next === 'string' && req.body.next.startsWith('/') && !req.body.next.startsWith('//') ? req.body.next : '/';
     const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
 
     if (!normalizedEmail || !password) {
-      return res.status(401).send('Email and password are required. <a href="/admin/login">Try again</a>');
+      return res.status(401).send(renderLanding({ next: target, error: 'Enter your email and password.' }));
     }
 
     const { rows } = await pool.query('SELECT * FROM staff_users WHERE lower(email) = $1', [normalizedEmail]);
     const user = rows[0];
     if (!user || user.disabled || !verifyPassword(password, user.password_hash)) {
-      return res.status(401).send('Incorrect email or password. <a href="/admin/login">Try again</a>');
+      return res.status(401).send(renderLanding({ next: target, error: 'Incorrect email or password.' }));
     }
 
     setSessionCookie(res, user.id);

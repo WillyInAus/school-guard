@@ -148,4 +148,4 @@ function page({ title, active, body }) {
 </html>`;
 }
 
-module.exports = { page, escapeHtml, requestContext };
+module.exports = { page, escapeHtml, requestContext, ASSET_VERSION };

@@ -18,7 +18,9 @@ function fmt(n) {
 }
 
 // steps: [{ title, sub, href, badge, badgeTone }]
-function safetyFlowSvg(steps) {
+function safetyFlowSvg(steps, opts = {}) {
+  const heading = opts.heading === undefined ? 'How we keep the workshop safe' : opts.heading;
+  const intro = opts.intro === undefined ? 'Every tool and every class goes round this loop. Tap a step to jump to it.' : opts.intro;
   const n = steps.length;
   const angles = steps.map((_, i) => -90 + (360 / n) * i);
 
@@ -55,11 +57,11 @@ function safetyFlowSvg(steps) {
     .join('');
 
   return `
-  <div class="card sg-flow-card">
-    <div class="sg-flow-head">
-      <h2 class="sg-flow-heading">How we keep the workshop safe</h2>
-      <p class="sg-flow-intro">Every tool and every class goes round this loop. Tap a step to jump to it.</p>
-    </div>
+  <div class="${opts.bare ? 'sg-flow-bare' : 'card sg-flow-card'}">
+    ${heading || intro ? `<div class="sg-flow-head">
+      ${heading ? `<h2 class="sg-flow-heading">${escapeHtml(heading)}</h2>` : ''}
+      ${intro ? `<p class="sg-flow-intro">${escapeHtml(intro)}</p>` : ''}
+    </div>` : ''}
     <svg class="sg-flow" viewBox="0 0 780 590" role="img" aria-labelledby="sg-flow-t">
       <title id="sg-flow-t">Safety cycle: ${steps.map((s) => escapeHtml(s.title)).join(', then ')}, then back to the start.</title>
       <defs>
