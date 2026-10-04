@@ -1148,3 +1148,54 @@ tr.row-link:hover {
 }
 .sidebar-sublink:hover { background: rgba(255,255,255,0.06); color: #FFFFFF; }
 .sidebar-sublink.active { background: #1B5E52; color: #FFFFFF; }
+
+/* ---------- Front page safety cycle flowchart ---------- */
+.sg-flow-card { padding: 24px 24px 12px; margin-bottom: 20px; overflow: hidden; }
+.sg-flow-heading { font-family: 'Permanent Marker', 'IBM Plex Sans', cursive; font-weight: 400; font-size: 22px; color: #B3261E; margin: 0 0 4px; }
+.sg-flow-intro { margin: 0; font-size: 14px; color: #6B6659; }
+.sg-flow { display: block; width: 100%; max-width: 780px; height: auto; margin: 4px auto 0; }
+.sg-flow-arrow { fill: none; stroke: #C62828; stroke-width: 3.2; stroke-linecap: round;
+  stroke-dasharray: 400; stroke-dashoffset: 400; animation: sgFlowDraw 0.7s ease-out forwards; animation-delay: var(--d); }
+.sg-flow-headpath { fill: none; stroke: #C62828; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.sg-flow-ring { fill: none; stroke: #C62828; stroke-width: 3; }
+.sg-flow-ring2 { stroke-width: 1.6; opacity: 0.6; }
+.sg-flow-centre-text { font-family: 'Permanent Marker', cursive; font-size: 30px; fill: #B3261E; letter-spacing: 1px; }
+.sg-flow-title { font-family: 'Permanent Marker', cursive; font-size: 27px; fill: #B3261E; letter-spacing: 0.5px; }
+.sg-flow-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 13.5px; fill: #4A463D; }
+.sg-flow-badge { font-family: 'IBM Plex Sans', sans-serif; font-size: 12.5px; font-weight: 600; fill: #1B5E52; }
+.sg-flow-badge-warn { fill: #B26A00; }
+.sg-flow-badge-ok { fill: #2E7D32; }
+.sg-flow-hit { fill: transparent; transition: fill 0.15s; }
+.sg-flow-node { opacity: 0; animation: sgFlowPop 0.45s ease-out forwards; animation-delay: var(--d);
+  transform-box: fill-box; transform-origin: center; }
+.sg-flow-link { cursor: pointer; }
+.sg-flow-link:hover .sg-flow-hit, .sg-flow-link:focus .sg-flow-hit { fill: rgba(198, 40, 40, 0.07); }
+.sg-flow-link:hover .sg-flow-title { fill: #8E1B15; }
+.sg-flow-link:focus { outline: none; }
+.sg-flow-link:focus-visible .sg-flow-hit { stroke: #1B5E52; stroke-width: 2; }
+@keyframes sgFlowDraw { to { stroke-dashoffset: 0; } }
+@keyframes sgFlowPop { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .sg-flow-arrow { animation: none; stroke-dashoffset: 0; }
+  .sg-flow-node { animation: none; opacity: 1; }
+}
+.sg-flow-list { display: none; }
+@media (max-width: 640px) {
+  .sg-flow-card { padding: 18px 16px 14px; }
+  .sg-flow { display: none; }
+  .sg-flow-list { display: block; list-style: none; margin: 14px 0 0; padding: 0; }
+  .sg-flow-list li { position: relative; margin: 0 0 30px; }
+  .sg-flow-list li:not(.sg-flow-list-loop)::after { content: ''; position: absolute; left: 30px; bottom: -26px; width: 3px; height: 20px;
+    background: #C62828; border-radius: 2px; transform: rotate(4deg); }
+  .sg-flow-list li:not(.sg-flow-list-loop)::before { content: ''; position: absolute; left: 25px; bottom: -28px; width: 9px; height: 9px;
+    border-right: 3px solid #C62828; border-bottom: 3px solid #C62828; transform: rotate(45deg); }
+  .sg-flow-list a, .sg-flow-list li > div { display: block; padding: 10px 14px; border: 2.5px solid #C62828;
+    border-radius: 18px 12px 20px 10px / 12px 20px 10px 18px; text-decoration: none; color: inherit; background: #fff; }
+  .sg-flow-list a:active { background: rgba(198, 40, 40, 0.06); }
+  .sg-flow-list-title { display: block; font-family: 'Permanent Marker', 'IBM Plex Sans', cursive; font-size: 22px; color: #B3261E; line-height: 1.2; }
+  .sg-flow-list-sub { display: block; font-size: 14px; color: #4A463D; }
+  .sg-flow-badge-html { display: inline-block; margin-top: 4px; font-size: 13px; font-weight: 600; color: #1B5E52; }
+  .sg-flow-badge-html.sg-flow-badge-warn { color: #B26A00; }
+  .sg-flow-badge-html.sg-flow-badge-ok { color: #2E7D32; }
+  .sg-flow-list-loop { font-family: 'Permanent Marker', 'IBM Plex Sans', cursive; font-size: 18px; color: #B3261E; margin: 0; text-align: center; }
+}

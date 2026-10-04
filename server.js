@@ -10,6 +10,7 @@ const multer = require('multer');
 const sharp = require('sharp');
 const { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS } = require('./db');
 const { page, escapeHtml, requestContext } = require('./views/layout');
+const { safetyFlowSvg } = require('./front-flow');
 
 // Faith Lutheran College — Plainland letterhead, shown at the top of CARA PDF
 // exports (see GET /cara/:id/pdf below). Read once at startup; if the file
@@ -552,6 +553,31 @@ app.get('/', async (req, res, next) => {
       "SELECT COUNT(*)::int AS count FROM equipment_items WHERE status != 'Operational'"
     );
 
+    const canApprove = req.staffUser && ['admin', 'approver'].includes(req.staffUser.role);
+    const pendingApprovals = pendingResult.rows[0].count + caraPendingResult.rows[0].count;
+    const attention = equipmentAttentionResult.rows[0].count;
+    const flowHtml = safetyFlowSvg([
+      { title: 'ASSESS', sub: 'PERA + SOP for the tool', href: '/pera', badge: `${totalResult.rows[0].count} PERAs` },
+      {
+        title: 'APPROVE',
+        sub: 'WHS Coordinator signs off',
+        href: canApprove ? '/admin/approvals' : '/pera',
+        badge: pendingApprovals ? `${pendingApprovals} waiting` : 'All clear',
+        badgeTone: pendingApprovals ? 'warn' : 'ok',
+      },
+      { title: 'INDUCT', sub: 'Staff read, confirm, verified', href: '/induction/me', badge: 'My induction' },
+      { title: 'PLAN', sub: 'CARA for the class activity', href: '/cara', badge: `${caraTotalResult.rows[0].count} CARAs` },
+      {
+        title: 'CHECK',
+        sub: 'Gear tagged, guarded, ready',
+        href: '/equipment',
+        badge: attention ? `${attention} need attention` : 'All operational',
+        badgeTone: attention ? 'warn' : 'ok',
+      },
+      { title: 'TEACH!', sub: 'Students work safely' },
+      { title: 'REVIEW', sub: 'Yearly or after a change', href: '/pera' },
+    ]);
+
     const body = `
       <div class="page-header">
         <div>
@@ -585,6 +611,7 @@ app.get('/', async (req, res, next) => {
           <div class="stat-value">${equipmentAttentionResult.rows[0].count}</div>
         </div>
       </div>
+      ${flowHtml}
       <div class="card" style="padding: 24px;">
         <p style="margin:0;font-size:14px;color:#6B6659;">
           <a href="/pera" style="color:#1B5E52;font-weight:600;">PERA</a> holds the equipment/tool
