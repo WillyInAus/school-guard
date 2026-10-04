@@ -4588,22 +4588,11 @@ app.post('/admin/setup', async (req, res, next) => {
 // Equipment), each its own page/URL rather than one long scrolling page.
 // adminTabs() renders the shared tab bar; adminHeader() the shared
 // title-plus-sign-out-button row that sits above it on every tab.
-function adminTabs(activeTab) {
-  const tabs = [
-    { key: 'dashboard', href: '/admin', label: 'Dashboard' },
-    { key: 'approvals', href: '/admin/approvals', label: 'Approvals' },
-    { key: 'staff', href: '/admin/staff', label: 'Manage Staff' },
-    { key: 'cara', href: '/admin/cara', label: 'CARA' },
-    { key: 'pera', href: '/admin/pera', label: 'PERA' },
-    { key: 'pera-archive', href: '/admin/pera/archive', label: 'PERA Archive' },
-    { key: 'equipment', href: '/admin/equipment', label: 'Equipment' },
-    { key: 'rooms', href: '/admin/rooms', label: 'Rooms' },
-  ];
-  return `
-    <div class="admin-tabs">
-      ${tabs.map((t) => `<a href="${t.href}" class="admin-tab${t.key === activeTab ? ' active' : ''}">${escapeHtml(t.label)}</a>`).join('')}
-    </div>
-  `;
+// The admin pages used to carry a row of tabs; those links now live in the
+// sidebar's Admin section (views/layout.js), so this renders nothing. Kept
+// as a function so the existing calls on each admin page stay harmless.
+function adminTabs() {
+  return '';
 }
 
 function adminHeader(title, subtitle) {
