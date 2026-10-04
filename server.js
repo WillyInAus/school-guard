@@ -1390,7 +1390,7 @@ app.get('/pera/:id', async (req, res, next) => {
           </div>
           <div class="form-row">
             <label for="approver">Approver name</label>
-            <input type="text" id="approver" name="approver" placeholder="Name of approver" value="Workplace Health and Safety Officer" required>
+            <input type="text" id="approver" name="approver" placeholder="Name of approver" value="${escapeHtml(req.staffUser.name)}" required>
           </div>
           <div class="form-row">
             <label for="approver_role">Approver role</label>
@@ -1549,6 +1549,13 @@ app.post('/pera/:id/submit', async (req, res, next) => {
   }
 });
 
+
+// Approval forms can be submitted from the record page or from the admin
+// approvals queue; only ever redirect back to one of those two places.
+function approvalRedirect(req, fallback) {
+  return req.body && req.body.redirect_to === '/admin/approvals' ? '/admin/approvals' : fallback;
+}
+
 app.post('/pera/:id/approve', requireRole('admin', 'approver'), async (req, res, next) => {
   try {
     const { decision, approval_conditions, approver, approver_role, review_notes, approval_required_level } = req.body;
@@ -1557,8 +1564,16 @@ app.post('/pera/:id/approve', requireRole('admin', 'approver'), async (req, res,
       return res.status(404).send('PERA record not found.');
     }
     const before = existingResult.rows[0];
+    if (before.archived || !['Pending approval', 'Changes requested'].includes(before.status)) {
+      return res.status(400).send(`This PERA is "${escapeHtml(before.status)}" and isn't waiting for a decision. <a href="/pera/${before.id}">Back</a>`);
+    }
     const requiredLevel = APPROVAL_REQUIRED_LEVELS.includes(approval_required_level) ? approval_required_level : null;
+    const approverName = normalizeText(approver) || req.staffUser.name;
+    const loggedBy = approverName === req.staffUser.name ? approverName : `${approverName} (recorded by ${req.staffUser.name})`;
 
+    if (decision === 'Not approved' && !normalizeText(review_notes || '').trim()) {
+      return res.status(400).send('Add a note saying what needs to change before marking this Not approved. <a href="javascript:history.back()">Back</a>');
+    }
     if (decision === 'Not approved') {
       await pool.query(
         `UPDATE pera_records
@@ -1569,7 +1584,7 @@ app.post('/pera/:id/approve', requireRole('admin', 'approver'), async (req, res,
       );
       await pool.query(
         `INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1,$2,'Not approved',$3,$4,'Not approved')`,
-        [req.params.id, normalizeText(approver) || req.staffUser.name, before.version, review_notes ? `Not approved: ${normalizeText(review_notes)}` : 'Not approved']
+        [req.params.id, loggedBy, before.version, review_notes ? `Not approved: ${normalizeText(review_notes)}` : 'Not approved']
       );
     } else if (APPROVAL_DECISIONS.includes(decision)) {
       await pool.query(
@@ -1581,7 +1596,7 @@ app.post('/pera/:id/approve', requireRole('admin', 'approver'), async (req, res,
          WHERE id = $6`,
         [
           decision, decision === 'Approved with conditions' ? (normalizeText(approval_conditions) || null) : null,
-          normalizeText(approver) || null, normalizeText(approver_role) || null, requiredLevel, req.params.id,
+          approverName, normalizeText(approver_role) || null, requiredLevel, req.params.id,
         ]
       );
       const summary = decision === 'Approved with conditions'
@@ -1589,13 +1604,13 @@ app.post('/pera/:id/approve', requireRole('admin', 'approver'), async (req, res,
         : decision;
       await pool.query(
         `INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1,$2,'Approved',$3,$4,$5)`,
-        [req.params.id, normalizeText(approver) || req.staffUser.name, before.version, summary, decision]
+        [req.params.id, loggedBy, before.version, summary, decision]
       );
     } else {
       return res.status(400).send('A valid decision is required. <a href="/pera/' + req.params.id + '">Back</a>');
     }
 
-    res.redirect(`/pera/${req.params.id}`);
+    res.redirect(approvalRedirect(req, `/pera/${req.params.id}`));
   } catch (err) {
     next(err);
   }
@@ -2655,7 +2670,7 @@ app.get('/cara/:id', async (req, res, next) => {
         <form method="post" action="/cara/${r.id}/approve" style="margin-bottom:10px;">
           <div class="form-row">
             <label for="approver">Approved by</label>
-            <input type="text" id="approver" name="approver" placeholder="Principal / school leader name" required>
+            <input type="text" id="approver" name="approver" placeholder="Principal / school leader name" value="${escapeHtml(req.staffUser.name)}" required>
           </div>
           <button type="submit" class="btn btn-primary" style="width:100%;">Approve</button>
         </form>
@@ -3075,15 +3090,22 @@ app.post('/cara/:id/submit', async (req, res, next) => {
 
 app.post('/cara/:id/approve', requireRole('admin', 'approver'), async (req, res, next) => {
   try {
-    const { approver } = req.body;
+    const existing = (await pool.query('SELECT id, status, archived FROM cara_records WHERE id = $1', [req.params.id])).rows[0];
+    if (!existing) return res.status(404).send('CARA record not found.');
+    if (existing.archived || !['Pending approval', 'Changes requested'].includes(existing.status)) {
+      return res.status(400).send(`This CARA is "${escapeHtml(existing.status)}" and isn't waiting for a decision. <a href="/cara/${existing.id}">Back</a>`);
+    }
+    const approverName = normalizeText(req.body.approver) || req.staffUser.name;
     await pool.query(
       `UPDATE cara_records
        SET status = 'Approved', approver = $1, approved_at = now(),
            next_review_date = (now() + interval '1 year')::date, updated_at = now()
        WHERE id = $2`,
-      [approver || null, req.params.id]
+      [approverName, req.params.id]
     );
-    res.redirect(`/cara/${req.params.id}`);
+    await pool.query('INSERT INTO cara_change_log (cara_id, changed_by, summary) VALUES ($1,$2,$3)',
+      [req.params.id, req.staffUser.name, `Approved (approver: ${approverName})`]);
+    res.redirect(approvalRedirect(req, `/cara/${req.params.id}`));
   } catch (err) {
     next(err);
   }
@@ -3092,13 +3114,18 @@ app.post('/cara/:id/approve', requireRole('admin', 'approver'), async (req, res,
 app.post('/cara/:id/reject', requireRole('admin', 'approver'), async (req, res, next) => {
   try {
     const { review_notes } = req.body;
+    if (!normalizeText(review_notes || '').trim()) {
+      return res.status(400).send('Add a note saying what needs to change. <a href="javascript:history.back()">Back</a>');
+    }
     await pool.query(
       `UPDATE cara_records
        SET status = 'Changes requested', review_notes = $1, updated_at = now()
        WHERE id = $2`,
-      [review_notes || null, req.params.id]
+      [normalizeText(review_notes), req.params.id]
     );
-    res.redirect(`/cara/${req.params.id}`);
+    await pool.query('INSERT INTO cara_change_log (cara_id, changed_by, summary) VALUES ($1,$2,$3)',
+      [req.params.id, req.staffUser.name, `Changes requested: ${normalizeText(review_notes)}`]);
+    res.redirect(approvalRedirect(req, `/cara/${req.params.id}`));
   } catch (err) {
     next(err);
   }
@@ -4563,6 +4590,7 @@ app.post('/admin/setup', async (req, res, next) => {
 function adminTabs(activeTab) {
   const tabs = [
     { key: 'dashboard', href: '/admin', label: 'Dashboard' },
+    { key: 'approvals', href: '/admin/approvals', label: 'Approvals' },
     { key: 'staff', href: '/admin/staff', label: 'Manage Staff' },
     { key: 'pera', href: '/admin/pera', label: 'PERA' },
     { key: 'pera-archive', href: '/admin/pera/archive', label: 'PERA Archive' },
@@ -4591,6 +4619,10 @@ function adminHeader(title, subtitle) {
   `;
 }
 
+require('./admin-approvals')(app, {
+  pool, page, escapeHtml, requireRole, adminTabs, adminHeader, riskBadgeClass, statusBadgeClass, formatBrisbaneDate,
+  approvalRequirement, caraApprovalRequirement, APPROVAL_DECISIONS, APPROVAL_REQUIRED_LEVELS,
+});
 require('./admin-dashboard')(app, {
   pool, page, escapeHtml, requireRole, adminTabs, adminHeader, riskBadgeClass, statusBadgeClass, formatBrisbaneDate,
 });
