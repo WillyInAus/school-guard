@@ -1132,3 +1132,19 @@ tr.row-link:hover {
 .min-req-item.min-req-not-applicable { border-left-color: #E4DFD3; background: #FAF9F6; }
 .min-req-item.min-req-not-applicable .min-req-name { color: #6B6659; }
 .min-req-pill-not-applicable input:checked + span { background: #E9E6DE; color: #4A463D; }
+
+/* ---------- Sidebar admin section ---------- */
+.sidebar { overflow-y: auto; }
+.sidebar-divider { height: 1px; background: rgba(255,255,255,0.14); margin: 14px 24px; }
+.sidebar-section-label {
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px 24px; font-size: 14px; font-weight: 600; color: #FFFFFF;
+}
+.sidebar-section-label svg { color: #CFE3DD; }
+.sidebar-subnav { display: flex; flex-direction: column; gap: 1px; padding: 2px 12px 0 12px; }
+.sidebar-sublink {
+  display: block; padding: 7px 12px 7px 42px; border-radius: 8px;
+  font-size: 13px; font-weight: 500; color: #CFE3DD; text-decoration: none;
+}
+.sidebar-sublink:hover { background: rgba(255,255,255,0.06); color: #FFFFFF; }
+.sidebar-sublink.active { background: #1B5E52; color: #FFFFFF; }

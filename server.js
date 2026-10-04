@@ -9,7 +9,7 @@ const PDFDocument = require('pdfkit');
 const multer = require('multer');
 const sharp = require('sharp');
 const { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS } = require('./db');
-const { page, escapeHtml } = require('./views/layout');
+const { page, escapeHtml, requestContext } = require('./views/layout');
 
 // Faith Lutheran College — Plainland letterhead, shown at the top of CARA PDF
 // exports (see GET /cara/:id/pdf below). Read once at startup; if the file
@@ -252,6 +252,7 @@ async function loadStaffUser(req, res, next) {
   next();
 }
 app.use(loadStaffUser);
+app.use((req, res, next) => requestContext.run({ user: req.staffUser || null, path: req.path }, next));
 
 function requireAuth(req, res, next) {
   if (req.staffUser) return next();
@@ -4592,9 +4593,9 @@ function adminTabs(activeTab) {
     { key: 'dashboard', href: '/admin', label: 'Dashboard' },
     { key: 'approvals', href: '/admin/approvals', label: 'Approvals' },
     { key: 'staff', href: '/admin/staff', label: 'Manage Staff' },
+    { key: 'cara', href: '/admin/cara', label: 'CARA' },
     { key: 'pera', href: '/admin/pera', label: 'PERA' },
     { key: 'pera-archive', href: '/admin/pera/archive', label: 'PERA Archive' },
-    { key: 'cara', href: '/admin/cara', label: 'CARA' },
     { key: 'equipment', href: '/admin/equipment', label: 'Equipment' },
     { key: 'rooms', href: '/admin/rooms', label: 'Rooms' },
   ];

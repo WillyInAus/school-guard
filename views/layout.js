@@ -1,3 +1,10 @@
+const { AsyncLocalStorage } = require('async_hooks');
+
+// Per-request context (signed-in user + path) so the shared page layout can
+// show the right menu and name without every route having to pass them in.
+// server.js wraps each request in requestContext.run({ user, path }, ...).
+const requestContext = new AsyncLocalStorage();
+
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
   return String(str)
@@ -46,7 +53,48 @@ const ICONS = {
   induction: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5.5l7-3 7 3-7 3-7-3Z"/><path d="M6 8v4.2c0 .8 1.8 2.3 4 2.3s4-1.5 4-2.3V8"/><path d="M17 5.5V11"/></svg>',
 };
 
+const ROLE_LABELS = { admin: 'Administrator', approver: 'Approver', submitter: 'Staff' };
+
+function initials(user) {
+  if (!user || !user.name) return '';
+  return user.name.replace(/[^A-Za-z\s.]/g, ' ').split(/[\s.]+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+}
+
+// Admin section of the sidebar: a divider under the main links, an "Admin"
+// heading, then every admin page as an indented link. Admins see all of
+// them; approvers see only Approvals; other staff see no admin section.
+const ADMIN_LINKS = [
+  { href: '/admin', label: 'Dashboard', roles: ['admin'] },
+  { href: '/admin/approvals', label: 'Approvals', roles: ['admin', 'approver'] },
+  { href: '/admin/staff', label: 'Manage Staff', roles: ['admin'] },
+  { href: '/admin/cara', label: 'CARA', roles: ['admin'] },
+  { href: '/admin/pera', label: 'PERA', roles: ['admin'] },
+  { href: '/admin/pera/archive', label: 'PERA Archive', roles: ['admin'] },
+  { href: '/admin/equipment', label: 'Equipment', roles: ['admin'] },
+  { href: '/admin/rooms', label: 'Rooms', roles: ['admin'] },
+];
+
+function adminMenu(user, path) {
+  if (!user) return '';
+  const links = ADMIN_LINKS.filter((l) => l.roles.includes(user.role));
+  if (!links.length) return '';
+  // Highlight the most specific matching link (so /admin/pera/archive
+  // highlights "PERA Archive", not "PERA" or "Dashboard").
+  const current = links
+    .filter((l) => path === l.href || (l.href !== '/admin' && path.startsWith(`${l.href}/`)))
+    .sort((a, b) => b.href.length - a.href.length)[0];
+  return `
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-section-label">${ICONS.admin}<span>Admin</span></div>
+    <nav class="sidebar-subnav">
+      ${links.map((l) => `<a href="${l.href}" class="sidebar-sublink${current === l ? ' active' : ''}">${escapeHtml(l.label)}</a>`).join('')}
+    </nav>`;
+}
+
 function page({ title, active, body }) {
+  const ctx = requestContext.getStore() || {};
+  const user = ctx.user || null;
+  const path = ctx.path || '';
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -70,19 +118,17 @@ function page({ title, active, body }) {
       ${navLink('/equipment', 'Equipment', ICONS.equipment, active === 'equipment')}
       ${navLink('/induction', 'Staff Induction', ICONS.induction, active === 'induction')}
     </nav>
-    <nav class="sidebar-nav-bottom">
-      ${navLink('/admin', 'Admin', ICONS.admin, active === 'admin')}
-    </nav>
+    ${adminMenu(user, path)}
     <div class="sidebar-footer">
       <div class="sidebar-footer-label">Signed in as</div>
-      <div class="sidebar-footer-name">S. Willmott · WHS Coordinator</div>
+      <div class="sidebar-footer-name">${user ? `${escapeHtml(user.name)} · ${escapeHtml(ROLE_LABELS[user.role] || user.role)}` : 'Not signed in'}</div>
     </div>
   </div>
   <div class="main-column">
     <div class="topbar">
       <div class="school-switch">Faith Lutheran College — Plainland</div>
       <div class="topbar-right">
-        <div class="avatar">SW</div>
+        <div class="avatar">${escapeHtml(initials(user))}</div>
       </div>
     </div>
     <div class="content">
@@ -95,11 +141,11 @@ function page({ title, active, body }) {
     ${bottomNavLink('/pera', 'PERA', ICONS.risk, active === 'pera')}
     ${bottomNavLink('/equipment', 'Equip.', ICONS.equipment, active === 'equipment')}
     ${bottomNavLink('/induction', 'Induct.', ICONS.induction, active === 'induction')}
-    ${bottomNavLink('/admin', 'Admin', ICONS.admin, active === 'admin')}
+    ${user && (user.role === 'admin' || user.role === 'approver') ? bottomNavLink(user.role === 'admin' ? '/admin' : '/admin/approvals', 'Admin', ICONS.admin, active === 'admin') : ''}
   </nav>
 </div>
 </body>
 </html>`;
 }
 
-module.exports = { page, escapeHtml };
+module.exports = { page, escapeHtml, requestContext };
