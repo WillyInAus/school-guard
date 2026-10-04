@@ -65,8 +65,8 @@ function page({ title, active, body }) {
     </div>
     <nav class="sidebar-nav">
       ${navLink('/', 'Dashboard', ICONS.dashboard, active === 'dashboard')}
-      ${navLink('/pera', 'PERA', ICONS.risk, active === 'pera')}
       ${navLink('/cara', 'CARA', ICONS.cara, active === 'cara')}
+      ${navLink('/pera', 'PERA', ICONS.risk, active === 'pera')}
       ${navLink('/equipment', 'Equipment', ICONS.equipment, active === 'equipment')}
       ${navLink('/induction', 'Staff Induction', ICONS.induction, active === 'induction')}
     </nav>
@@ -91,8 +91,8 @@ function page({ title, active, body }) {
   </div>
   <nav class="bottom-nav">
     ${bottomNavLink('/', 'Home', ICONS.dashboard, active === 'dashboard')}
-    ${bottomNavLink('/pera', 'PERA', ICONS.risk, active === 'pera')}
     ${bottomNavLink('/cara', 'CARA', ICONS.cara, active === 'cara')}
+    ${bottomNavLink('/pera', 'PERA', ICONS.risk, active === 'pera')}
     ${bottomNavLink('/equipment', 'Equip.', ICONS.equipment, active === 'equipment')}
     ${bottomNavLink('/induction', 'Induct.', ICONS.induction, active === 'induction')}
     ${bottomNavLink('/admin', 'Admin', ICONS.admin, active === 'admin')}
