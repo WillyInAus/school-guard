@@ -8,7 +8,7 @@ const { execFile } = require('child_process');
 const PDFDocument = require('pdfkit');
 const multer = require('multer');
 const sharp = require('sharp');
-const { pool, migrate } = require('./db');
+const { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS } = require('./db');
 const { page, escapeHtml } = require('./views/layout');
 
 // Faith Lutheran College — Plainland letterhead, shown at the top of CARA PDF
@@ -134,22 +134,24 @@ async function renderPdfFirstPageThumbnail(buffer) {
   }
 }
 
-// Seeded onto every new PERA as pera_min_requirements rows (see POST /pera
-// below), each starting at status 'Required' until someone marks it
-// Current/Due Soon/Missing. Editing this list only changes what future
-// PERAs are seeded with -- it never touches rows already saved against
-// existing records.
-const MIN_SAFETY_REQUIREMENTS = [
-  'Competent teacher/operator',
-  'Student induction',
-  'SOP available',
-  'Guards checked',
-  'Safe working zone',
-  'Required PPE available',
-  'Equipment maintenance record current',
-  'Electrical inspection/tagging current where applicable',
-  'Emergency stop operational where applicable',
-];
+// The checklist items themselves live in db.js (MIN_SAFETY_REQUIREMENTS),
+// so the startup migration and new-PERA seeding always use the same list.
+// What each item means, from the Queensland ITD reference PERA's minimum
+// standards and electrical controls -- shown under each item on the PERA.
+const MIN_REQUIREMENT_HINTS = {
+  'Competent teacher/operator': 'Registered teacher with knowledge, experience and demonstrated competency in the safe use of this equipment; any staff training needs identified.',
+  'Student induction': 'How student use is managed is stated (e.g. workshop safety induction) and inductions are recorded in a student induction register.',
+  "Operator's manual available": "The manufacturer's operator manual is available in the school.",
+  'SOP available': 'A current Safe Operating Procedure is available (and displayed at the equipment).',
+  'Equipment maintenance record current': 'An Equipment Maintenance Record (EMR) is kept, including electrical maintenance.',
+  'Guards checked': 'All guards are in place and in good working order.',
+  'Safe working zone': 'Safe working zones are defined, e.g. yellow floor lines and/or signage.',
+  'Required PPE available': 'Suitable personal protective equipment is available for all operators.',
+  'Complies with relevant safety standards': 'The equipment complies with the relevant safety standards.',
+  'Electrical inspection/tagging current where applicable': 'Electrical safety inspection/test and tag completed as per guidelines; leads, plugs and switches visually checked; Lock Out/Danger tags used during repair.',
+  'Emergency stop operational where applicable': 'Isolating switch and emergency stop buttons fitted, prominent and working.',
+};
+
 
 // ---------- Staff auth (individual accounts, roles) ----------
 // Replaces the old single shared ADMIN_PASSWORD. Three roles:
@@ -831,7 +833,9 @@ app.post('/pera', async (req, res, next) => {
       );
     }
 
+    const isHandTools = /^\s*hand tools\s*$/i.test(class_unit || '');
     for (let i = 0; i < MIN_SAFETY_REQUIREMENTS.length; i++) {
+      if (isHandTools && ELECTRICAL_REQUIREMENTS.includes(MIN_SAFETY_REQUIREMENTS[i])) continue;
       await pool.query(
         `INSERT INTO pera_min_requirements (pera_id, requirement, sort_order) VALUES ($1,$2,$3)`,
         [peraId, MIN_SAFETY_REQUIREMENTS[i], i]
@@ -1246,7 +1250,7 @@ app.get('/pera/:id', async (req, res, next) => {
             ${requirementsResult.rows.map((item) => `
               <div class="min-req-item min-req-${escapeHtml(item.status.toLowerCase().replace(/\s+/g, '-'))}">
                 <div class="min-req-main">
-                  <div class="min-req-name">${escapeHtml(item.requirement)}</div>
+                  <div class="min-req-name">${escapeHtml(item.requirement)}${MIN_REQUIREMENT_HINTS[item.requirement] ? `<div class="min-req-hint">${escapeHtml(MIN_REQUIREMENT_HINTS[item.requirement])}</div>` : ''}</div>
                   <div class="min-req-pills" role="radiogroup" aria-label="${escapeHtml(item.requirement)} status">
                     ${MIN_REQUIREMENT_STATUSES.map((st) => `
                       <label class="min-req-pill min-req-pill-${escapeHtml(st.toLowerCase().replace(/\s+/g, '-'))}">

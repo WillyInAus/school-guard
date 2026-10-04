@@ -1122,3 +1122,10 @@ tr.row-link:hover {
   .min-req-pills { width: 100%; justify-content: space-between; }
   .min-req-pill span { padding: 5px 8px; }
 }
+.min-req-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: #6B6659;
+  margin-top: 3px;
+  line-height: 1.4;
+}

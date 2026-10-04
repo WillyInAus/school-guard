@@ -1,5 +1,27 @@
 const { Pool } = require('pg');
 
+// The PERA "Minimum Safety Requirements" checklist, in the order the
+// Queensland ITD reference PERA lists its minimum standards (qualified
+// operator, student use, supporting documents, guards, safe working zone,
+// PPE, standards compliance), followed by the two electrical controls from
+// its hazard section. Seeded onto new PERAs (server.js) and brought into
+// line on existing ones at startup (below). The two "where applicable"
+// electrical items are left off PERAs whose class/unit is "Hand tools".
+const MIN_SAFETY_REQUIREMENTS = [
+  'Competent teacher/operator',
+  'Student induction',
+  "Operator's manual available",
+  'SOP available',
+  'Equipment maintenance record current',
+  'Guards checked',
+  'Safe working zone',
+  'Required PPE available',
+  'Complies with relevant safety standards',
+  'Electrical inspection/tagging current where applicable',
+  'Emergency stop operational where applicable',
+];
+const ELECTRICAL_REQUIREMENTS = MIN_SAFETY_REQUIREMENTS.slice(-2);
+
 const connectionString = process.env.DATABASE_URL;
 
 if (!connectionString) {
@@ -540,6 +562,35 @@ async function migrate() {
   // wider CHECK above is left as-is so this never fails on old data.
   await pool.query(`UPDATE pera_min_requirements SET status = 'Current', met = true WHERE status = 'Due Soon';`);
   await pool.query(`UPDATE pera_min_requirements SET status = 'Required', met = false WHERE status = 'Missing';`);
+
+  // Bring every existing checklist into line with MIN_SAFETY_REQUIREMENTS:
+  // add any missing items (as Required), put items in the reference order
+  // (any extra/custom items keep their place after the standard ones), and
+  // remove the electrical "where applicable" items from hand-tool PERAs
+  // only if they were never ticked or annotated. Idempotent.
+  await pool.query(
+    `INSERT INTO pera_min_requirements (pera_id, requirement, status, met, sort_order)
+     SELECT p.id, req.name, 'Required', false, req.ord
+     FROM pera_records p
+     CROSS JOIN unnest($1::text[]) WITH ORDINALITY AS req(name, ord)
+     WHERE EXISTS (SELECT 1 FROM pera_min_requirements m WHERE m.pera_id = p.id)
+       AND NOT EXISTS (SELECT 1 FROM pera_min_requirements m WHERE m.pera_id = p.id AND m.requirement = req.name)
+       AND NOT (COALESCE(p.class_unit, '') ILIKE 'hand tools' AND req.name = ANY($2::text[]))`,
+    [MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS]
+  );
+  await pool.query(
+    `DELETE FROM pera_min_requirements m USING pera_records p
+     WHERE p.id = m.pera_id AND COALESCE(p.class_unit, '') ILIKE 'hand tools'
+       AND m.requirement = ANY($1::text[]) AND m.status = 'Required' AND COALESCE(m.notes, '') = ''`,
+    [ELECTRICAL_REQUIREMENTS]
+  );
+  await pool.query(
+    `UPDATE pera_min_requirements m
+     SET sort_order = COALESCE(array_position($1::text[], m.requirement) - 1, 100 + m.sort_order)
+     WHERE m.sort_order IS DISTINCT FROM COALESCE(array_position($1::text[], m.requirement) - 1, 100 + m.sort_order)
+       AND (array_position($1::text[], m.requirement) IS NOT NULL OR m.sort_order < 100)`,
+    [MIN_SAFETY_REQUIREMENTS]
+  );
 
   await pool.query(`ALTER TABLE pera_annual_reviews ADD COLUMN IF NOT EXISTS risk_unchanged BOOLEAN;`);
   await pool.query(`ALTER TABLE pera_annual_reviews ADD COLUMN IF NOT EXISTS controls_unchanged BOOLEAN;`);
@@ -1583,4 +1634,4 @@ async function migrate() {
   `);
 }
 
-module.exports = { pool, migrate };
+module.exports = { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS };
