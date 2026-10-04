@@ -80,11 +80,11 @@ module.exports = function registerAdminDashboard(app, deps) {
         ${adminTabs('dashboard')}
 
         ${group('Approvals', [
-          tile({ label: 'PERAs awaiting approval', count: peraPending, href: '/admin/approvals', hint: 'Submitted and waiting for a decision', t: tone(peraPending, 'alert') }),
           tile({ label: 'CARAs awaiting approval', count: caraPending, href: '/admin/approvals#cara', hint: 'Signed by the teacher, waiting for a decision', t: tone(caraPending, 'alert') }),
+          tile({ label: 'CARAs in Draft or sent back', count: caraDraft, href: '/cara', t: 'info' }),
+          tile({ label: 'PERAs awaiting approval', count: peraPending, href: '/admin/approvals#pera', hint: 'Submitted and waiting for a decision', t: tone(peraPending, 'alert') }),
           tile({ label: 'PERAs in Draft', count: peraDraft, href: '/pera', hint: 'To be checked and submitted', t: tone(peraDraft, 'warn') }),
           tile({ label: 'PERAs with changes requested', count: peraChanges, href: '/pera', hint: 'Sent back to the author', t: tone(peraChanges, 'warn') }),
-          tile({ label: 'CARAs in Draft or sent back', count: caraDraft, href: '/cara', t: 'info' }),
         ])}
 
         ${group('Reviews and equipment', [
@@ -106,8 +106,8 @@ module.exports = function registerAdminDashboard(app, deps) {
         <div class="adm-lists">
           <div id="awaiting">
           ${listCard('Awaiting approval', [
-            ...pendingPeras.rows.map((r) => ({ ...r, kind: 'PERA', href: `/pera/${r.id}` })),
             ...pendingCaras.rows.map((r) => ({ ...r, kind: 'CARA', href: `/cara/${r.id}` })),
+            ...pendingPeras.rows.map((r) => ({ ...r, kind: 'PERA', href: `/pera/${r.id}` })),
           ], 'Nothing is waiting for approval.', (r) => `
             <li><a href="${r.href}"><span class="adm-kind">${r.kind}</span> ${escapeHtml(short(r.activity_name))}</a>
               <span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span>

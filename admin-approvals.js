@@ -154,19 +154,19 @@ module.exports = function registerAdminApprovals(app, deps) {
         ${adminHeader('Approvals', 'PERAs and CARAs waiting for a decision')}
         ${me.role === 'admin' ? adminTabs('approvals') : ''}
         <nav class="apv-jump">
-          <a href="#pera">PERAs <span class="apv-count">${perasR.rows.length}</span></a>
           <a href="#cara">CARAs <span class="apv-count">${carasR.rows.length}</span></a>
+          <a href="#pera">PERAs <span class="apv-count">${perasR.rows.length}</span></a>
           <a href="#recent">Recent decisions</a>
         </nav>
-
-        <section id="pera" class="apv-section">
-          <h2 class="apv-h2">PERAs awaiting approval <span class="apv-count">${perasR.rows.length}</span></h2>
-          ${perasR.rows.length ? `<div class="apv-list">${perasR.rows.map(peraCard).join('')}</div>` : '<p class="apv-empty">No PERAs are waiting for approval. Drafts appear here once they are submitted.</p>'}
-        </section>
 
         <section id="cara" class="apv-section">
           <h2 class="apv-h2">CARAs awaiting approval <span class="apv-count">${carasR.rows.length}</span></h2>
           ${carasR.rows.length ? `<div class="apv-list">${carasR.rows.map(caraCard).join('')}</div>` : '<p class="apv-empty">No CARAs are waiting for approval.</p>'}
+        </section>
+
+        <section id="pera" class="apv-section">
+          <h2 class="apv-h2">PERAs awaiting approval <span class="apv-count">${perasR.rows.length}</span></h2>
+          ${perasR.rows.length ? `<div class="apv-list">${perasR.rows.map(peraCard).join('')}</div>` : '<p class="apv-empty">No PERAs are waiting for approval. Drafts appear here once they are submitted.</p>'}
         </section>
 
         <section id="recent" class="apv-section">
