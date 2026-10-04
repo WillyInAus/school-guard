@@ -40,7 +40,7 @@ const CONTROL_TYPES = ['Engineering', 'Administrative', 'PPE', 'Procedural'];
 const APPROVAL_DECISIONS = ['Approved as submitted', 'Approved with conditions', 'Not approved'];
 const APPROVAL_REQUIRED_LEVELS = ['Principal', 'Delegate', 'HOD', 'WHS Officer'];
 const HAZARD_APPLIES_TO = ['Staff', 'Students', 'Both'];
-const MIN_REQUIREMENT_STATUSES = ['Current', 'Required'];
+const MIN_REQUIREMENT_STATUSES = ['Current', 'Required', 'Not applicable'];
 const DOCUMENT_CATEGORIES = ['SOP', 'Manufacturer manual', 'Equipment Maintenance Record', 'Student induction record', 'Staff competency record', 'Previous risk assessment', 'Other'];
 
 // Related documents on a PERA can now be an actual uploaded file (stored
@@ -390,6 +390,7 @@ function minRequirementStatusBadgeClass(status) {
   return {
     'Current': 'badge-approved',
     'Required': 'badge-draft',
+    'Not applicable': 'badge-draft',
     'Due Soon': 'badge-pending',
     'Missing': 'badge-changes',
   }[status] || 'badge-draft';
@@ -1243,7 +1244,7 @@ app.get('/pera/:id', async (req, res, next) => {
       ? `
         <form method="post" action="/pera/${r.id}/requirements" class="min-req-form">
           <div class="min-req-summary">
-            <strong>${reqCounts.Current || 0} of ${requirementsResult.rows.length} current</strong>
+            <strong>${reqCounts.Current || 0} of ${requirementsResult.rows.length - (reqCounts['Not applicable'] || 0)} current</strong>
             ${MIN_REQUIREMENT_STATUSES.filter((st) => st !== 'Current' && reqCounts[st]).map((st) => `<span class="badge ${minRequirementStatusBadgeClass(st)}">${reqCounts[st]} ${escapeHtml(st.toLowerCase())}</span>`).join(' ')}
           </div>
           <div class="min-req-list">

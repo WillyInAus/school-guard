@@ -512,6 +512,20 @@ async function migrate() {
       END IF;
     END $$;
   `);
+  // Allow "Not applicable" (e.g. guards on a chisel). Widens the existing
+  // CHECK once; every existing value stays valid.
+  await pool.query(`
+    DO $$
+    DECLARE def TEXT;
+    BEGIN
+      SELECT pg_get_constraintdef(oid) INTO def FROM pg_constraint WHERE conname = 'pera_min_requirements_status_check';
+      IF def IS NOT NULL AND def NOT LIKE '%Not applicable%' THEN
+        ALTER TABLE pera_min_requirements DROP CONSTRAINT pera_min_requirements_status_check;
+        ALTER TABLE pera_min_requirements ADD CONSTRAINT pera_min_requirements_status_check
+          CHECK (status IN ('Current','Required','Not applicable','Due Soon','Missing'));
+      END IF;
+    END $$;
+  `);
 
   // Which staff/students/both a hazard's control applies to. The very
   // first round of this feature let "applies to" be free text, so before

@@ -1129,3 +1129,6 @@ tr.row-link:hover {
   margin-top: 3px;
   line-height: 1.4;
 }
+.min-req-item.min-req-not-applicable { border-left-color: #E4DFD3; background: #FAF9F6; }
+.min-req-item.min-req-not-applicable .min-req-name { color: #6B6659; }
+.min-req-pill-not-applicable input:checked + span { background: #E9E6DE; color: #4A463D; }
