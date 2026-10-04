@@ -1034,3 +1034,91 @@ tr.row-link:hover {
   .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .summary-strip-item-wide { grid-column: 1 / -1; }
 }
+
+/* ---------- PERA minimum safety requirements checklist ---------- */
+.min-req-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #1A1D1B;
+  margin: 4px 0 12px;
+}
+.min-req-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.min-req-item {
+  background: #FFFFFF;
+  border: 1px solid #E4DFD3;
+  border-left: 4px solid #D9D3C4;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.min-req-item.min-req-current { border-left-color: #2F7D5A; }
+.min-req-item.min-req-due-soon { border-left-color: #B7791F; }
+.min-req-item.min-req-missing { border-left-color: #C0392B; }
+.min-req-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.min-req-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1A1D1B;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.min-req-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  background: #F5F3EE;
+  border-radius: 999px;
+  padding: 3px;
+}
+.min-req-pill { position: relative; cursor: pointer; margin: 0; }
+.min-req-pill input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+.min-req-pill span {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6B6659;
+  padding: 5px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.min-req-pill input:focus-visible + span { outline: 2px solid #1B5E52; outline-offset: 1px; }
+.min-req-pill input:disabled + span { cursor: default; }
+.min-req-pill-current input:checked + span { background: #E4F3EA; color: #2F7D5A; }
+.min-req-pill-required input:checked + span { background: #FFFFFF; color: #1A1D1B; box-shadow: 0 0 0 1px #D9D3C4; }
+.min-req-pill-due-soon input:checked + span { background: #FBEBD0; color: #B7791F; }
+.min-req-pill-missing input:checked + span { background: #FBE0DD; color: #C0392B; }
+.min-req-notes {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid #E4DFD3;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  background: #FAF9F6;
+}
+.min-req-notes:focus { outline: none; border-color: #1B5E52; background: #FFFFFF; }
+.min-req-notes-text { margin-top: 8px; font-size: 13px; color: #6B6659; }
+@media (max-width: 520px) {
+  .min-req-pills { width: 100%; justify-content: space-between; }
+  .min-req-pill span { padding: 5px 8px; }
+}

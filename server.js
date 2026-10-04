@@ -1231,18 +1231,33 @@ app.get('/pera/:id', async (req, res, next) => {
       hazardsSectionHtml = `<div class="empty-state">No hazards recorded yet.</div>`;
     }
 
+    const reqCounts = MIN_REQUIREMENT_STATUSES.reduce((acc, st) => {
+      acc[st] = requirementsResult.rows.filter((item) => item.status === st).length;
+      return acc;
+    }, {});
     const requirementsHtml = requirementsResult.rows.length
       ? `
-        <form method="post" action="/pera/${r.id}/requirements">
+        <form method="post" action="/pera/${r.id}/requirements" class="min-req-form">
+          <div class="min-req-summary">
+            <strong>${reqCounts.Current || 0} of ${requirementsResult.rows.length} current</strong>
+            ${MIN_REQUIREMENT_STATUSES.filter((st) => st !== 'Current' && reqCounts[st]).map((st) => `<span class="badge ${minRequirementStatusBadgeClass(st)}">${reqCounts[st]} ${escapeHtml(st.toLowerCase())}</span>`).join(' ')}
+          </div>
           <div class="min-req-list">
             ${requirementsResult.rows.map((item) => `
-              <div class="min-req-item">
-                <span class="badge ${minRequirementStatusBadgeClass(item.status)}" style="flex:0 0 auto;">${escapeHtml(item.status)}</span>
-                <label for="req_${item.id}" style="flex:1 1 220px;">${escapeHtml(item.requirement)}</label>
-                <select id="req_${item.id}" name="status_${item.id}" ${canEdit ? '' : 'disabled'}>
-                  ${MIN_REQUIREMENT_STATUSES.map((s) => `<option value="${s}" ${item.status === s ? 'selected' : ''}>${s}</option>`).join('')}
-                </select>
-                <input type="text" name="notes_${item.id}" value="${escapeHtml(item.notes || '')}" placeholder="Notes (optional)" ${canEdit ? '' : 'disabled'}>
+              <div class="min-req-item min-req-${escapeHtml(item.status.toLowerCase().replace(/\s+/g, '-'))}">
+                <div class="min-req-main">
+                  <div class="min-req-name">${escapeHtml(item.requirement)}</div>
+                  <div class="min-req-pills" role="radiogroup" aria-label="${escapeHtml(item.requirement)} status">
+                    ${MIN_REQUIREMENT_STATUSES.map((st) => `
+                      <label class="min-req-pill min-req-pill-${escapeHtml(st.toLowerCase().replace(/\s+/g, '-'))}">
+                        <input type="radio" name="status_${item.id}" value="${st}" ${item.status === st ? 'checked' : ''} ${canEdit ? '' : 'disabled'}>
+                        <span>${escapeHtml(st)}</span>
+                      </label>`).join('')}
+                  </div>
+                </div>
+                ${canEdit
+                  ? `<input class="min-req-notes" type="text" name="notes_${item.id}" value="${escapeHtml(item.notes || '')}" placeholder="Add a note (optional)" aria-label="Notes for ${escapeHtml(item.requirement)}">`
+                  : (item.notes ? `<div class="min-req-notes-text">${escapeHtml(item.notes)}</div>` : '')}
               </div>
             `).join('')}
           </div>
