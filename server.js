@@ -4463,13 +4463,13 @@ app.post('/admin/login', async (req, res, next) => {
     const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
 
     if (!normalizedEmail || !password) {
-      return res.status(401).send(renderLanding({ next: target, error: 'Enter your email and password.' }));
+      return res.status(401).send(renderLanding({ next: target, error: 'Enter your email and password.', email: normalizedEmail }));
     }
 
     const { rows } = await pool.query('SELECT * FROM staff_users WHERE lower(email) = $1', [normalizedEmail]);
     const user = rows[0];
     if (!user || user.disabled || !verifyPassword(password, user.password_hash)) {
-      return res.status(401).send(renderLanding({ next: target, error: 'Incorrect email or password.' }));
+      return res.status(401).send(renderLanding({ next: target, error: 'Incorrect email or password.', email: normalizedEmail }));
     }
 
     setSessionCookie(res, user.id);

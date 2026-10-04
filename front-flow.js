@@ -1,12 +1,12 @@
-// Hand-drawn style "safety cycle" flowchart for the front page dashboard.
-// Pure SVG, no client JS. Each step links to the part of the app that handles it.
+// Hand-drawn style "safety cycle" flowchart (used on the public landing page).
+// Pure SVG; steps can optionally link somewhere. A stacked list replaces it on phones.
 
 const { escapeHtml } = require('./views/layout');
 
 const CX = 390;
-const CY = 290;
+const CY = 212;
 const RX = 300;
-const RY = 205;
+const RY = 165;
 
 function pointAt(deg, rx = RX, ry = RY) {
   const r = (deg * Math.PI) / 180;
@@ -28,7 +28,7 @@ function safetyFlowSvg(steps, opts = {}) {
   const arrows = angles
     .map((a, i) => {
       const b = i === n - 1 ? angles[0] + 360 : angles[i + 1];
-      const gap = 17;
+      const gap = 19;
       const s = pointAt(a + gap);
       const e = pointAt(b - gap);
       const mid = pointAt((a + b) / 2, RX + 34, RY + 30);
@@ -62,7 +62,7 @@ function safetyFlowSvg(steps, opts = {}) {
       ${heading ? `<h2 class="sg-flow-heading">${escapeHtml(heading)}</h2>` : ''}
       ${intro ? `<p class="sg-flow-intro">${escapeHtml(intro)}</p>` : ''}
     </div>` : ''}
-    <svg class="sg-flow" viewBox="0 0 780 590" role="img" aria-labelledby="sg-flow-t">
+    <svg class="sg-flow" viewBox="0 0 780 424" role="img" aria-labelledby="sg-flow-t">
       <title id="sg-flow-t">Safety cycle: ${steps.map((s) => escapeHtml(s.title)).join(', then ')}, then back to the start.</title>
       <defs>
         <filter id="sg-flow-rough" x="-5%" y="-5%" width="110%" height="110%">
@@ -75,10 +75,10 @@ function safetyFlowSvg(steps, opts = {}) {
       </defs>
       <g filter="url(#sg-flow-rough)">${arrows}</g>
       <g class="sg-flow-centre">
-        <ellipse class="sg-flow-ring" cx="${CX}" cy="${CY}" rx="112" ry="64" filter="url(#sg-flow-rough)"/>
-        <ellipse class="sg-flow-ring sg-flow-ring2" cx="${CX + 3}" cy="${CY - 2}" rx="118" ry="60" filter="url(#sg-flow-rough)"/>
-        <text class="sg-flow-centre-text" x="${CX}" y="${CY - 6}" text-anchor="middle">SAFE</text>
-        <text class="sg-flow-centre-text" x="${CX}" y="${CY + 28}" text-anchor="middle">WORKSHOP</text>
+        <ellipse class="sg-flow-ring" cx="${CX}" cy="${CY}" rx="104" ry="54" filter="url(#sg-flow-rough)"/>
+        <ellipse class="sg-flow-ring sg-flow-ring2" cx="${CX + 3}" cy="${CY - 2}" rx="110" ry="50" filter="url(#sg-flow-rough)"/>
+        <text class="sg-flow-centre-text" x="${CX}" y="${CY - 4}" text-anchor="middle">SAFE</text>
+        <text class="sg-flow-centre-text" x="${CX}" y="${CY + 26}" text-anchor="middle">WORKSHOP</text>
       </g>
       ${nodes}
     </svg>
