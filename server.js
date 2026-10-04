@@ -5762,10 +5762,32 @@ function inductionNavBody(active, inner) {
   `;
 }
 
-// ---------- Induction: dashboard ----------
+// ---------- Simplified induction (teacher landing, PERA/SOP review,
+// assessor workspace) -- see induction-simple.js. Registered here, before
+// the older induction routes, so /induction/me resolves to the new
+// teacher landing page. ----------
+const simpleInduction = require('./induction-simple')(app, {
+  pool, page, escapeHtml, normalizeText,
+  formatBrisbaneDate, formatBrisbaneDateTime,
+  canActAsAssessor, canAuthoriseSchoolLeader, blockSelfAction,
+  logInductionChange, getCurrentProfileVersion, getActiveLicences,
+});
+
+// Assessor/admin-only screens (the full matrix and school-wide reports
+// moved out of the teacher's view).
+function requireInductionAssessor(req, res, next) {
+  if (!canActAsAssessor(req.staffUser.role)) {
+    return res.status(403).send('This page is for assessors and administrators. <a href="/induction/me">Back to my induction</a>');
+  }
+  next();
+}
+
+// ---------- Induction: dashboard (assessors/admins; teachers go straight
+// to their own landing page) ----------
 
 app.get('/induction', async (req, res, next) => {
   try {
+    if (!canActAsAssessor(req.staffUser.role)) return res.redirect('/induction/me');
     const [trainingRequired, pendingVerification, staffCount, itemCount] = await Promise.all([
       pool.query(`
         SELECT COUNT(*)::int AS count FROM staff_induction_declarations d
@@ -5783,8 +5805,12 @@ app.get('/induction', async (req, res, next) => {
       pool.query(`SELECT COUNT(*)::int AS count FROM induction_equipment_items WHERE available_at_school = true`),
     ]);
 
+    const openAlerts = (await pool.query('SELECT COUNT(*)::int AS count FROM induction_setup_alerts WHERE resolved_at IS NULL')).rows[0].count;
     const cards = [
-      ['/induction/me', 'My Induction', 'Your own equipment proficiency, induction progress, logbook and authorisations.'],
+      ['/induction/me', 'My induction', 'Your own profile, equipment, document review and outstanding actions.'],
+      ['/induction/assessor', 'Assessor review workspace', 'Review staff profiles once, check PERA/SOP acknowledgements and record a decision per item.'],
+      ['/induction/assessor/documents', 'PERA / SOP versions', 'Document versions staff acknowledge, and recording material changes.'],
+      ['/induction/assessor', `School setup required (${openAlerts})`, 'Equipment staff have selected that is missing a PERA or SOP.'],
       ['/induction/matrix', 'Staff / equipment matrix', 'School-wide view of every staff member against every piece of equipment.'],
       ['/induction/training-required', `Training required (${trainingRequired.rows[0].count})`, 'Staff who have declared themselves not yet competent on an item.'],
       ['/induction/pending-verification', `Pending verification (${pendingVerification.rows[0].count})`, 'Self-assessed "competent" declarations an assessor hasn\'t verified yet.'],
@@ -5817,9 +5843,6 @@ app.get('/induction', async (req, res, next) => {
   }
 });
 
-app.get('/induction/me', (req, res) => {
-  res.redirect(`/induction/staff/${req.staffUser.id}`);
-});
 
 // ---------- Induction: staff profile (Section 1 — equipment proficiency register) ----------
 
@@ -5850,6 +5873,8 @@ app.get('/induction/staff/:staffId', async (req, res, next) => {
       authByItem.get(a.induction_item_id)[a.authorisation_type] = a;
     }
     const stepsByItem = new Map(stepsResult.rows.map((s) => [s.induction_item_id, s]));
+    const simpleState = await simpleInduction.buildTeacherState(staffId, { raiseAlerts: false });
+    const entryByItem = new Map(simpleState.entries.map((e) => [e.item.id, e]));
 
     const categoryBlocks = categories.map((cat) => `
       <div class="form-section-title" style="margin-top:24px;">${escapeHtml(cat.name)}</div>
@@ -5858,10 +5883,10 @@ app.get('/induction/staff/:staffId', async (req, res, next) => {
           <tr style="text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;color:#6B6659;border-bottom:1px solid #E4DFD3;">
             <th style="padding:8px 6px;">Equipment / process</th>
             <th style="padding:8px 6px;">Self-assessed</th>
-            <th style="padding:8px 6px;">Induction progress</th>
+            <th style="padding:8px 6px;">Next required action</th>
             <th style="padding:8px 6px;">Verified competency</th>
-            <th style="padding:8px 6px;">Operate</th>
-            <th style="padding:8px 6px;">Supervise students</th>
+            <th style="padding:8px 6px;">Authorised to operate</th>
+            <th style="padding:8px 6px;">Authorised to supervise students</th>
             <th></th>
           </tr>
         </thead>
@@ -5877,10 +5902,15 @@ app.get('/induction/staff/:staffId', async (req, res, next) => {
               <tr style="border-bottom:1px solid #F0EDE5;">
                 <td style="padding:8px 6px;font-size:13px;">${escapeHtml(item.name)}</td>
                 <td style="padding:8px 6px;"><span class="badge ${DECLARATION_BADGE[status]}">${escapeHtml(DECLARATION_LABELS[status])}</span></td>
-                <td style="padding:8px 6px;font-size:12px;color:#6B6659;">${escapeHtml(stepsText)}</td>
+                <td style="padding:8px 6px;font-size:12px;color:#6B6659;">
+                  ${entryByItem.has(item.id)
+                    ? `${simpleInduction.workflowBadge(entryByItem.get(item.id).workflow.key)}<div style="margin-top:3px;">${escapeHtml(entryByItem.get(item.id).workflow.next)}</div>`
+                    : escapeHtml(status === 'NA' ? 'Not used' : 'Not selected')}
+                  <details style="margin-top:3px;"><summary style="cursor:pointer;">View details</summary>Induction steps: ${escapeHtml(stepsText)}</details>
+                </td>
                 <td style="padding:8px 6px;"><span class="badge ${verif && verif.verified ? 'badge-approved' : 'badge-draft'}">${verif && verif.verified ? 'Verified' : 'Not verified'}</span></td>
-                <td style="padding:8px 6px;"><span class="badge ${auth.operate && auth.operate.authorised ? 'badge-approved' : 'badge-draft'}">${auth.operate && auth.operate.authorised ? 'Authorised' : 'Not authorised'}</span></td>
-                <td style="padding:8px 6px;"><span class="badge ${auth.supervise_students && auth.supervise_students.authorised ? 'badge-approved' : 'badge-draft'}">${auth.supervise_students && auth.supervise_students.authorised ? 'Authorised' : 'Not authorised'}</span></td>
+                <td style="padding:8px 6px;"><span class="badge ${auth.operate && auth.operate.authorised ? 'badge-approved' : 'badge-draft'}">${auth.operate && auth.operate.authorised ? 'Yes' : 'No'}</span></td>
+                <td style="padding:8px 6px;"><span class="badge ${auth.supervise_students && auth.supervise_students.authorised ? 'badge-approved' : 'badge-draft'}">${auth.supervise_students && auth.supervise_students.authorised ? 'Yes' : 'No'}</span></td>
                 <td style="padding:8px 6px;text-align:right;"><a href="/induction/staff/${staffId}/item/${item.id}" style="color:#1B5E52;font-weight:600;font-size:13px;">Open →</a></td>
               </tr>`;
           }).join('')}
@@ -5889,10 +5919,10 @@ app.get('/induction/staff/:staffId', async (req, res, next) => {
     `).join('');
 
     const body = `
-      <a class="back-link" href="/induction">← Staff Induction</a>
+      <a class="back-link" href="${isSelf ? '/induction/me' : '/induction'}">← ${isSelf ? 'My induction' : 'Staff Induction'}</a>
       <div class="page-header">
         <div>
-          <h1 class="page-title">${escapeHtml(staff.name)}</h1>
+          <h1 class="page-title">${escapeHtml(staff.name)}${isSelf ? ' — detailed record' : ''}</h1>
           <p class="page-subtitle">${escapeHtml(staff.email)} · Faith Lutheran College${isSelf ? ' · This is your induction profile' : ''}</p>
         </div>
         <div style="display:flex;gap:10px;">
@@ -5996,10 +6026,12 @@ app.get('/induction/staff/:staffId/item/:itemId', async (req, res, next) => {
     const itemProfileApps = profileAppsByItem.get(itemId) || { evidence: [], licences: [] };
     const claimsGroupForItem = equipGroups.some((g) => g.category_id === item.category_id);
 
+    const [itemProfileVersion, itemProfileLicences] = await Promise.all([getCurrentProfileVersion(staffId), getActiveLicences(staffId)]);
     const sourceProfilePanel = `
-      <div class="card" style="padding:22px;margin-bottom:20px;">
-        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Source profile information</div>
-        <div class="form-section-hint" style="margin:0 0 10px;">Pulled from ${escapeHtml(staff.name)}'s <a href="/induction/staff/${staffId}/profile" style="color:#1B5E52;font-weight:600;">competency profile</a> — pre-filled information only. It does not mark this item competent, induction complete, verified or authorised.</div>
+      <details class="card" style="padding:18px 22px;margin-bottom:16px;">
+        <summary class="ind-summary">Supporting information from ${isSelf ? 'your' : `${escapeHtml(staff.name)}'s`} profile</summary>
+        <div style="margin-top:12px;">${simpleInduction.profileSummaryHtml(itemProfileVersion, itemProfileLicences, { compact: true })}</div>
+        <div class="form-section-hint" style="margin:10px 0 10px;">Entered once in the <a href="/induction/staff/${staffId}/profile" style="color:#1B5E52;font-weight:600;">profile</a> and reused here. It does not mark this item competent, verified or authorised.</div>
         ${profileFlags.rows.length ? `
         <div class="note-box" style="border-color:#C96A3A;color:#8A3E1C;">This item's profile information has changed since it was applied — flagged for review: ${profileFlags.rows.map((f) => escapeHtml(f.reason)).join('; ')}</div>
         ` : ''}
@@ -6032,7 +6064,7 @@ app.get('/induction/staff/:staffId/item/:itemId', async (req, res, next) => {
           `).join('')}
         </div>
         ` : ''}
-      </div>
+      </details>
     `;
 
     let criteria = [];
@@ -6337,24 +6369,69 @@ app.get('/induction/staff/:staffId/item/:itemId', async (req, res, next) => {
       </details>
     `;
 
+    // Simplified layout: a short summary first, then every detailed form in
+    // its own expandable section. Training/logbook sections are only shown
+    // to the teacher once training is assigned or requested (or if records
+    // already exist, so nothing previously entered is hidden).
+    const itemState = await simpleInduction.buildTeacherState(staffId, { raiseAlerts: false });
+    const entry = itemState.entries.find((e) => e.item.id === itemId) || null;
+    const trainingActive = Boolean(entry && (entry.workflow.key === 'training' || entry.openRequests.some((r) => r.request_type === 'training')))
+      || steps.rows.length > 0 || logbook.rows.length > 0;
+    const showTraining = !isSelf || trainingActive;
+    const section = (title, inner, open = false) => `
+      <details class="ind-detail-wrap" ${open ? 'open' : ''}>
+        <summary class="ind-detail-summary">${escapeHtml(title)}</summary>
+        ${inner}
+      </details>`;
+    const summaryCard = `
+      <div class="card" style="padding:20px;margin-bottom:16px;">
+        ${entry ? `
+          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;">
+            <div>
+              <div>${simpleInduction.workflowBadge(entry.workflow.key)}</div>
+              <div style="margin-top:6px;font-weight:600;">Next: ${escapeHtml(entry.workflow.next)}</div>
+              <div class="ind-muted" style="margin-top:4px;">Self-assessment: ${escapeHtml(simpleInduction.ANSWER_LABELS[entry.decl.status] || '')}</div>
+            </div>
+            ${simpleInduction.permissionIndicators(entry)}
+          </div>
+          <div style="margin-top:12px;border-top:1px solid #F0EDE5;padding-top:10px;font-size:13px;">
+            <strong>PERA / SOP:</strong> ${simpleInduction.ackStatusText(entry.docState, entry.ack)}
+            ${entry.docState === 'missing' ? `<div class="ind-setup" style="margin-top:6px;">School setup required. ${escapeHtml(entry.docs.missing.map((m) => m.detail).join(' '))}</div>`
+              : `<span class="ind-muted"> · ${escapeHtml(entry.docs.peraVersion.version_label)} · SOP ${escapeHtml(entry.docs.sopVersion.version_label)}</span>
+                 ${isSelf && entry.docState !== 'acknowledged' ? ' · <a class="ind-link" href="/induction/me/documents">Review documents →</a>' : ''}`}
+          </div>
+          ${entry.openRequests.length ? `<div style="margin-top:10px;">${entry.openRequests.map((r) => `<div class="ind-update"><strong>${r.request_type === 'evidence' ? 'Evidence requested' : 'Training assigned'}</strong>${r.details ? `: ${escapeHtml(r.details)}` : ''}</div>`).join('')}</div>` : ''}
+        ` : `
+          <div class="ind-muted">${isSelf ? 'You haven\'t selected this equipment as equipment you use.' : 'Not selected by this staff member.'}${isSelf ? ' <a class="ind-link" href="/induction/me/equipment">Update my equipment →</a>' : ''}</div>
+          <div style="margin-top:8px;font-size:12px;">Authorised to operate: <strong>${authRows.rows.some((a) => a.authorisation_type === 'operate' && a.authorised) ? 'Yes' : 'No'}</strong> · Authorised to supervise students: <strong>${authRows.rows.some((a) => a.authorisation_type === 'supervise_students' && a.authorised) ? 'Yes' : 'No'}</strong></div>
+        `}
+      </div>`;
+
     const body = `
-      <a class="back-link" href="/induction/staff/${staffId}">← ${escapeHtml(staff.name)}'s induction profile</a>
+      <a class="back-link" href="${isSelf ? '/induction/me' : `/induction/assessor/staff/${staffId}`}">← ${isSelf ? 'My induction' : `Review — ${escapeHtml(staff.name)}`}</a>
       <div class="page-header">
         <div>
           <h1 class="page-title">${escapeHtml(item.name)}</h1>
           <p class="page-subtitle">${escapeHtml(item.category_name)}${item.pera_name ? ` · Linked PERA: ${escapeHtml(item.pera_name)}` : ' · No PERA linked yet'} · For ${escapeHtml(staff.name)}</p>
         </div>
       </div>
+      ${summaryCard}
       ${physicalEquipment.length ? `
       <div class="note-box">Physical equipment covered by this PERA: ${physicalEquipment.map((e) => `<a href="/equipment/${e.id}" style="color:#1B5E52;font-weight:600;">${escapeHtml(e.name)}</a> (${escapeHtml(e.status)})`).join(', ')}</div>
       ` : ''}
       ${sourceProfilePanel}
-      ${declarationPanel}
-      ${stepsPanel}
-      ${checklistPanel}
-      ${logbookPanel}
-      ${verificationPanel}
+      ${section('Self-assessment and evidence', declarationPanel)}
+      ${showTraining ? section('Training sessions (induction steps)', stepsPanel, isSelf && trainingActive) : ''}
+      ${showTraining || template.rows.length ? section('Machine competency checklist', checklistPanel) : ''}
+      ${showTraining ? section('Supervised logbook', logbookPanel, isSelf && trainingActive) : ''}
+      ${section('Verification and authorisation', verificationPanel)}
       ${changeLogPanel}
+      ${simpleInduction.clientCss()}
+      <style>
+        .ind-detail-wrap{margin-bottom:12px}
+        .ind-detail-wrap>summary.ind-detail-summary{cursor:pointer;font-weight:700;font-size:14px;padding:14px 18px;background:#fff;border:1px solid #E4DFD3;border-radius:10px;margin-bottom:8px}
+        .ind-detail-wrap[open]>summary.ind-detail-summary{border-bottom-left-radius:0;border-bottom-right-radius:0}
+      </style>
     `;
     res.send(page({ title: `${item.name} — ${staff.name}`, active: 'induction', body }));
   } catch (err) {
@@ -6816,6 +6893,16 @@ app.post('/induction/staff/:staffId/item/:itemId/verify', async (req, res, next)
 
     const verified = req.body.verified === 'on' || req.body.verified === 'true';
     const { basis, notes, review_date } = req.body;
+    if (verified) {
+      const st = await simpleInduction.buildTeacherState(staffId, { raiseAlerts: false });
+      const entry = st && st.entries.find((e) => e.item.id === itemId);
+      if (!entry || entry.docState !== 'acknowledged') {
+        return res.status(400).send('Competency can only be verified once the staff member has selected this equipment and acknowledged its current PERA and SOP. <a href="javascript:history.back()">Back</a>');
+      }
+      if (!normalizeText(basis || '').trim()) {
+        return res.status(400).send('Record the basis for verifying competency. <a href="javascript:history.back()">Back</a>');
+      }
+    }
     const { rows } = await pool.query(
       `INSERT INTO staff_induction_competency_verifications (staff_id, induction_item_id, verified, verified_by_staff_id, verified_at, basis, notes, review_date)
        VALUES ($1,$2,$3,$4,now(),$5,$6,$7)
@@ -6845,6 +6932,10 @@ app.post('/induction/staff/:staffId/item/:itemId/authorise', async (req, res, ne
     const { authorisation_type, permitted_operations, restrictions, review_date } = req.body;
     if (!['operate', 'supervise_students'].includes(authorisation_type)) return res.status(400).send('Invalid authorisation type.');
     const authorised = req.body.authorised === 'on' || req.body.authorised === 'true';
+    if (authorised) {
+      const problems = await simpleInduction.authorisationProblems(staffId, itemId);
+      if (problems.length) return res.status(400).send(`Can't authorise yet: ${escapeHtml(problems.join(' '))} <a href="javascript:history.back()">Back</a>`);
+    }
 
     const { rows } = await pool.query(
       `INSERT INTO staff_induction_authorisations (staff_id, induction_item_id, authorisation_type, authorised, permitted_operations, restrictions, decision_by_staff_id, decision_at, review_date)
@@ -6868,7 +6959,7 @@ app.post('/induction/staff/:staffId/item/:itemId/authorise', async (req, res, ne
 
 // ---------- Induction: reports ----------
 
-app.get('/induction/matrix', async (req, res, next) => {
+app.get('/induction/matrix', requireInductionAssessor, async (req, res, next) => {
   try {
     const [categories, staffList, declResult] = await Promise.all([
       getInductionCategoriesWithItems(),
@@ -6913,7 +7004,7 @@ app.get('/induction/matrix', async (req, res, next) => {
   }
 });
 
-app.get('/induction/training-required', async (req, res, next) => {
+app.get('/induction/training-required', requireInductionAssessor, async (req, res, next) => {
   try {
     const { rows } = await pool.query(`
       SELECT s.id AS staff_id, s.name AS staff_name, i.id AS item_id, i.name AS item_name, c.name AS category_name,
@@ -6951,7 +7042,7 @@ app.get('/induction/training-required', async (req, res, next) => {
   }
 });
 
-app.get('/induction/pending-verification', async (req, res, next) => {
+app.get('/induction/pending-verification', requireInductionAssessor, async (req, res, next) => {
   try {
     const { rows } = await pool.query(`
       SELECT s.id AS staff_id, s.name AS staff_name, i.id AS item_id, i.name AS item_name, c.name AS category_name, d.declared_at
@@ -7335,7 +7426,8 @@ function profileNavLinks(staffId, isSelf) {
   return `
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;">
       <a class="btn btn-secondary" href="/induction/staff/${staffId}/profile">Competency profile</a>
-      <a class="btn btn-secondary" href="/induction/staff/${staffId}/assess">Self-assessment</a>
+      <a class="btn btn-secondary" href="${isSelf ? '/induction/me/equipment' : `/induction/staff/${staffId}/assess`}">Self-assessment</a>
+      ${isSelf ? '<a class="btn btn-secondary" href="/induction/me">My induction</a>' : ''}
     </div>
   `;
 }
@@ -7609,6 +7701,7 @@ app.post('/induction/staff/:staffId/profile/equipment-groups', async (req, res, 
 app.get('/induction/staff/:staffId/assess', async (req, res, next) => {
   try {
     const staffId = Number(req.params.staffId);
+    if (staffId === req.staffUser.id) return res.redirect('/induction/me/equipment');
     if (staffId !== req.staffUser.id && req.staffUser.role !== 'admin') {
       return res.status(403).send('You can only complete your own self-assessment. <a href="/induction">Back</a>');
     }
@@ -7805,6 +7898,7 @@ app.get('/induction/staff/:staffId/review', async (req, res, next) => {
     const staffId = Number(req.params.staffId);
     if (!canActAsAssessor(req.staffUser.role)) return res.status(403).send('You do not have permission to do that.');
     if (blockSelfAction(res, req.staffUser.id, staffId)) return;
+    if (req.query.legacy !== '1') return res.redirect(`/induction/assessor/staff/${staffId}`);
 
     const staffResult = await pool.query('SELECT id, name FROM staff_users WHERE id = $1', [staffId]);
     if (!staffResult.rows.length) return res.status(404).send('Staff member not found.');
@@ -7891,6 +7985,15 @@ app.post('/induction/staff/:staffId/review', async (req, res, next) => {
     if (!Array.isArray(itemIds)) itemIds = [itemIds];
     itemIds = itemIds.map(Number).filter((n) => Number.isInteger(n));
     if (!itemIds.length) return res.status(400).send('Select at least one equipment item. <a href="javascript:history.back()">Back</a>');
+
+    const reviewState = await simpleInduction.buildTeacherState(staffId, { raiseAlerts: false });
+    const notReady = itemIds.filter((id) => {
+      const entry = reviewState && reviewState.entries.find((e) => e.item.id === id);
+      return !entry || entry.docState !== 'acknowledged';
+    });
+    if (notReady.length) {
+      return res.status(400).send('Every selected item must be selected by the staff member and have its current PERA and SOP acknowledged before competency can be verified. Nothing was saved. <a href="javascript:history.back()">Back</a>');
+    }
 
     const profile = await getCurrentProfileVersion(staffId);
     const batchResult = await pool.query(

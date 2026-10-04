@@ -1381,6 +1381,199 @@ async function migrate() {
        ('General Workshop Rules', 'General conduct, PPE and housekeeping rules that apply across the whole workshop, not just one machine.', 1)`
     );
   }
+
+  // ---------------------------------------------------------------
+  // Simplified Staff Induction (teacher landing page, PERA/SOP review,
+  // assessor review workspace). Purely additive: every table above is
+  // left exactly as it was, and nothing here ever converts an existing
+  // self-declaration into a verification or an authorisation.
+
+  // A grouped self-assessment can now contain a mix of answers in one
+  // submission; per-item answers are still recorded individually in
+  // staff_declaration_batch_items. Widen the batch-level CHECK to allow
+  // 'mixed' (existing rows are all still valid under the wider check).
+  await pool.query(`
+    DO $$
+    DECLARE def TEXT;
+    BEGIN
+      SELECT pg_get_constraintdef(oid) INTO def FROM pg_constraint
+      WHERE conname = 'staff_declaration_batches_batch_status_check';
+      IF def IS NOT NULL AND def NOT LIKE '%mixed%' THEN
+        ALTER TABLE staff_declaration_batches DROP CONSTRAINT staff_declaration_batches_batch_status_check;
+        ALTER TABLE staff_declaration_batches ADD CONSTRAINT staff_declaration_batches_batch_status_check
+          CHECK (batch_status IN ('C','NYC','NA','mixed'));
+      END IF;
+    END $$;
+  `);
+  // Marks batches submitted from the simplified teacher screen, where the
+  // teacher ticked an explicit confirmation of their selections.
+  await pool.query(`ALTER TABLE staff_declaration_batches ADD COLUMN IF NOT EXISTS confirmed_selections BOOLEAN NOT NULL DEFAULT false;`);
+  await pool.query(`ALTER TABLE staff_declaration_batches ADD COLUMN IF NOT EXISTS source TEXT;`);
+
+  // Which equipment categories are relevant to a staff member's role. Set
+  // by an admin; if a staff member has no rows here, every category with
+  // equipment available at the school is shown to them.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_induction_scope (
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      category_id INTEGER NOT NULL REFERENCES induction_equipment_categories(id) ON DELETE CASCADE,
+      set_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      set_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (staff_id, category_id)
+    );
+  `);
+
+  // Controlled document versions used for acknowledgement. One row per
+  // acknowledgeable version of a PERA (the structured PERA record) or of
+  // an SOP (a pera_documents row with category 'SOP'). A new PERA version
+  // row is only created when an authorised reviewer records a material
+  // change -- routine PERA edits (which bump pera_records.version) don't
+  // force every teacher to re-acknowledge. A new SOP version row is
+  // created when a different SOP document becomes the current SOP for a
+  // PERA. Rows are never deleted or edited in content; the previous
+  // version is just marked is_current=false so historical
+  // acknowledgements keep pointing at exactly what was read.
+  // pera_id/pera_document_id are SET NULL (not CASCADE) so deleting a
+  // PERA or a document can never take acknowledgement history with it;
+  // title/label are snapshotted for the same reason.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_doc_versions (
+      id SERIAL PRIMARY KEY,
+      doc_type TEXT NOT NULL CHECK (doc_type IN ('PERA','SOP')),
+      pera_id INTEGER REFERENCES pera_records(id) ON DELETE SET NULL,
+      pera_document_id INTEGER REFERENCES pera_documents(id) ON DELETE SET NULL,
+      title_snapshot TEXT NOT NULL,
+      version_label TEXT NOT NULL,
+      pera_record_version INTEGER,
+      reason TEXT NOT NULL,
+      material_change BOOLEAN NOT NULL DEFAULT false,
+      is_current BOOLEAN NOT NULL DEFAULT true,
+      created_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      superseded_at TIMESTAMPTZ,
+      superseded_by_id INTEGER REFERENCES induction_doc_versions(id) ON DELETE SET NULL
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS induction_doc_versions_one_current_pera ON induction_doc_versions (pera_id) WHERE is_current AND doc_type = 'PERA';`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS induction_doc_versions_one_current_sop ON induction_doc_versions (pera_id) WHERE is_current AND doc_type = 'SOP';`);
+
+  // Every time a teacher opens a controlled document from the review
+  // screen. Opening alone is never an acknowledgement -- it's only the
+  // precondition the server checks before accepting one.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_doc_opens (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      doc_version_id INTEGER NOT NULL REFERENCES induction_doc_versions(id),
+      opened_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // The PERA + SOP acknowledgement itself. Keyed to the exact pair of
+  // document versions read, not to an equipment item -- so where several
+  // items use exactly the same PERA version and SOP version, one
+  // acknowledgement covers them all (covered_item_ids snapshots which
+  // items it covered at the time, for the record). Append-only: a later
+  // response is a new row; the latest row for a pair is the current one.
+  // Only the authenticated teacher themselves can create one (server.js).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_doc_acknowledgements (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      pera_version_id INTEGER NOT NULL REFERENCES induction_doc_versions(id),
+      sop_version_id INTEGER NOT NULL REFERENCES induction_doc_versions(id),
+      response TEXT NOT NULL CHECK (response IN ('acknowledged','clarification_requested')),
+      declaration_text TEXT,
+      comment TEXT,
+      covered_item_ids INTEGER[] NOT NULL DEFAULT '{}',
+      pera_record_version INTEGER,
+      sop_document_id INTEGER,
+      recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // "When an authorised reviewer identifies a material PERA or SOP change,
+  // create a new acknowledgement task for affected teachers. Show the
+  // reason." One row per affected teacher per new document version.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_doc_ack_tasks (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      doc_version_id INTEGER NOT NULL REFERENCES induction_doc_versions(id),
+      previous_doc_version_id INTEGER REFERENCES induction_doc_versions(id),
+      reason TEXT NOT NULL,
+      created_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_ack_id INTEGER REFERENCES staff_doc_acknowledgements(id) ON DELETE SET NULL,
+      completed_at TIMESTAMPTZ,
+      UNIQUE (staff_id, doc_version_id)
+    );
+  `);
+
+  // "If a required document is missing, show 'School setup required' and
+  // notify the administrator." Open alerts are listed on the admin /
+  // assessor views; they resolve automatically once the document exists.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_setup_alerts (
+      id SERIAL PRIMARY KEY,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      missing TEXT NOT NULL CHECK (missing IN ('PERA','SOP')),
+      detail TEXT,
+      first_raised_for_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      raised_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved_at TIMESTAMPTZ
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS induction_setup_alerts_one_open ON induction_setup_alerts (induction_item_id, missing) WHERE resolved_at IS NULL;`);
+
+  // Assessor requests to a teacher for one item: further evidence, or
+  // assigned training (which is what makes the training/logbook sections
+  // appear on the teacher's item page).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_assessor_requests (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      request_type TEXT NOT NULL CHECK (request_type IN ('evidence','training')),
+      details TEXT,
+      created_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
+      closed_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      closed_at TIMESTAMPTZ,
+      close_note TEXT
+    );
+  `);
+
+  // The assessor review workspace. A session records that the staff
+  // profile was reviewed once; each item decision is its own row with its
+  // own outcome and evidence basis (never one shared decision for a group).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_review_sessions (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      assessor_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      profile_version_id INTEGER REFERENCES staff_competency_profile_versions(id) ON DELETE SET NULL,
+      profile_reviewed BOOLEAN NOT NULL DEFAULT false,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS induction_item_reviews (
+      id SERIAL PRIMARY KEY,
+      session_id INTEGER NOT NULL REFERENCES induction_review_sessions(id) ON DELETE CASCADE,
+      staff_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+      induction_item_id INTEGER NOT NULL REFERENCES induction_equipment_items(id) ON DELETE CASCADE,
+      outcome TEXT NOT NULL CHECK (outcome IN ('verified_existing','verified_assessed','training_required','evidence_requested')),
+      basis TEXT NOT NULL,
+      licence_ids INTEGER[] NOT NULL DEFAULT '{}',
+      local_checks_confirmed BOOLEAN NOT NULL DEFAULT false,
+      doc_ack_id INTEGER REFERENCES staff_doc_acknowledgements(id) ON DELETE SET NULL,
+      assessor_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
 }
 
 module.exports = { pool, migrate };
