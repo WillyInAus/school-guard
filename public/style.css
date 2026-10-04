@@ -1004,3 +1004,33 @@ tr.row-link:hover {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---------- PERA summary tiles ---------- */
+.summary-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  margin: 16px 0 20px;
+}
+.summary-strip-item {
+  background: #FFFFFF;
+  border: 1px solid #E4DFD3;
+  border-radius: 12px;
+  padding: 14px 16px;
+  min-width: 0;
+}
+.summary-strip-item .detail-label {
+  margin-bottom: 8px;
+}
+.summary-strip-item .detail-value {
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.summary-strip-item-wide {
+  grid-column: span 2;
+}
+@media (max-width: 520px) {
+  .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .summary-strip-item-wide { grid-column: 1 / -1; }
+}

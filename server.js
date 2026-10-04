@@ -1178,7 +1178,7 @@ app.get('/pera/:id', async (req, res, next) => {
 
     const summaryStripHtml = `
       <div class="summary-strip">
-        <div class="summary-strip-item"><div class="detail-label">Plant / equipment</div><div class="detail-value">${escapeHtml(r.activity_name)}</div></div>
+        <div class="summary-strip-item summary-strip-item-wide"><div class="detail-label">Plant / equipment</div><div class="detail-value">${escapeHtml(r.activity_name)}</div></div>
         <div class="summary-strip-item"><div class="detail-label">Risk</div><div class="detail-value"><span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></div></div>
         <div class="summary-strip-item"><div class="detail-label">Status</div><div class="detail-value"><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></div></div>
         <div class="summary-strip-item"><div class="detail-label">Location</div><div class="detail-value">${escapeHtml(r.location || '—')}</div></div>
