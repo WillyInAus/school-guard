@@ -159,8 +159,10 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
           max_tokens: maxTokens,
           system: SYSTEM_PROMPT,
           tools: [tool],
-          tool_choice: { type: 'tool', name: tool.name },
-          messages: [{ role: 'user', content: userText }],
+          // Newer models don't accept a forced tool_choice, so ask for the
+          // tool in the prompt and let the model choose ("auto").
+          tool_choice: { type: 'auto' },
+          messages: [{ role: 'user', content: `${userText}\n\nRespond only by calling the ${tool.name} tool.` }],
         }),
       });
       const data = await resp.json().catch(() => ({}));
@@ -170,13 +172,21 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         // Short code for a friendly message; the full text goes to the server log.
         if (resp.status === 401 || resp.status === 403) err.code = 'auth';
         else if (/credit|billing|balance/i.test(msg)) err.code = 'credit';
-        else if (resp.status === 404 || /model/i.test(msg)) err.code = 'model';
+        else if (resp.status === 404 || /model.*(not found|not available|does not exist|not have access)/i.test(msg)) err.code = 'model';
         else if (resp.status === 429) err.code = 'busy';
         throw err;
       }
-      const block = (data.content || []).find((b) => b.type === 'tool_use');
-      if (!block) throw new Error('AI service returned no result.');
-      return { result: block.input || {}, usage: data.usage || {}, model: data.model || MODEL };
+      const block = (data.content || []).find((b) => b.type === 'tool_use' && b.name === tool.name);
+      if (block) return { result: block.input || {}, usage: data.usage || {}, model: data.model || MODEL };
+      // Fallback: the model answered in text; accept it if it is a JSON object.
+      const text = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+      const m = text.match(/\{[\s\S]*\}/);
+      if (m) {
+        try {
+          return { result: JSON.parse(m[0]), usage: data.usage || {}, model: data.model || MODEL };
+        } catch (e) { /* fall through */ }
+      }
+      throw new Error('AI service returned no result.');
     } finally {
       clearTimeout(timer);
     }
