@@ -43,6 +43,19 @@ Rules:
 - Be practical and specific to the activity; avoid generic filler.
 - Student-specific notes are withheld for privacy; do not ask for them.`;
 
+const ERROR_TEXT = {
+  auth: 'The AI key was rejected. Check ANTHROPIC_API_KEY in the server .env file (it should start with sk-ant-api).',
+  credit: 'The Anthropic account has no credit left. Add credit at console.anthropic.com.',
+  model: 'The AI model setting is not available on this Anthropic account.',
+  busy: 'The AI service is busy. Try again in a minute.',
+  timeout: 'The AI took too long to respond. Try again.',
+  error: 'The AI assistant could not respond just now. Try again in a minute.',
+};
+function errorCode(err) {
+  if (err && err.name === 'AbortError') return 'timeout';
+  return (err && err.code && ERROR_TEXT[err.code]) ? err.code : 'error';
+}
+
 function apiEnabled() {
   return Boolean(process.env.ANTHROPIC_API_KEY);
 }
@@ -153,7 +166,13 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         const msg = (data && data.error && data.error.message) || `HTTP ${resp.status}`;
-        throw new Error(`AI service error: ${msg}`);
+        const err = new Error(`AI service error (${resp.status}): ${msg}`);
+        // Short code for a friendly message; the full text goes to the server log.
+        if (resp.status === 401 || resp.status === 403) err.code = 'auth';
+        else if (/credit|billing|balance/i.test(msg)) err.code = 'credit';
+        else if (resp.status === 404 || /model/i.test(msg)) err.code = 'model';
+        else if (resp.status === 429) err.code = 'busy';
+        throw err;
       }
       const block = (data.content || []).find((b) => b.type === 'tool_use');
       if (!block) throw new Error('AI service returned no result.');
@@ -228,7 +247,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
 
   app.post('/cara/ai/draft', async (req, res) => {
     try {
-      if (!apiEnabled()) return res.status(503).json({ ok: false, error: 'The AI assistant is not set up on this server yet.' });
+      if (!apiEnabled()) return res.json({ ok: false, error: 'The AI assistant is not set up on this server yet.' });
       if (overLimit(req.staffUser.id)) return res.status(429).json({ ok: false, error: 'Too many AI requests in the last hour. Try again later.' });
       const b = req.body || {};
       const c = { activity_name: b.activity_name, class_unit: b.class_unit, risk_level: b.risk_level, consent_required: b.consent_required === 'true' };
@@ -253,7 +272,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       });
     } catch (err) {
       console.error('CARA AI draft failed:', err.message);
-      res.status(502).json({ ok: false, error: err.name === 'AbortError' ? 'The AI took too long to respond. Try again.' : 'The AI assistant could not respond just now. Try again in a minute.' });
+      res.json({ ok: false, error: ERROR_TEXT[errorCode(err)] });
     }
   });
 
@@ -317,7 +336,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         await logUsage({ caraId: id, kind: 'check', staffId: req.staffUser.id, model: out.model, usage: out.usage, result });
       } catch (e) {
         console.error('CARA AI check failed:', e.message);
-        return res.redirect(`/cara/${id}?ai=error#ai-check`);
+        return res.redirect(`/cara/${id}?ai=${errorCode(e)}#ai-check`);
       }
       res.redirect(`/cara/${id}#ai-check`);
     } catch (err) {
@@ -346,9 +365,9 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
     const canRun = editable && apiEnabled() && user && (['admin', 'approver'].includes(user.role) || canManageOwnRecord(user, cara));
     const stale = latest && new Date(cara.updated_at) > new Date(latest.created_at);
     const notice = {
+      ...ERROR_TEXT,
       off: 'The AI check is not set up on this server yet.',
       limit: 'Too many AI requests in the last hour. Try again later.',
-      error: 'The AI check could not run just now. Try again in a minute.',
     }[query.ai];
 
     let aiHtml = '';
