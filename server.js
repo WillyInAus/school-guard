@@ -1920,6 +1920,8 @@ app.get('/cara', async (req, res, next) => {
   }
 });
 
+const caraAi = require('./cara-ai')({ app, pool, escapeHtml, canManageOwnRecord });
+
 // Linked PERAs that aren't approved (or are archived). A CARA can list these
 // while it's being drafted, but can't be submitted or approved until they are.
 async function unapprovedCaraPeras(caraId) {
@@ -2016,6 +2018,7 @@ app.get('/cara/new', async (req, res, next) => {
             ${toolListHtml}
           </div>
         </div>
+        ${caraAi.draftPanelHtml()}
 
         <div class="form-section-title">Students</div>
         <p class="form-section-hint">Age/maturity/skill considerations, individual student needs, health plans, sun safety.</p>
@@ -2285,6 +2288,7 @@ app.get('/cara/:id/edit', async (req, res, next) => {
             ${toolListHtml}
           </div>
         </div>
+        ${caraAi.draftPanelHtml()}
 
         <div class="form-section-title">Students</div>
         <div class="form-row">
@@ -2602,6 +2606,7 @@ app.get('/cara/:id', async (req, res, next) => {
         `).join('')}</div>`
       : `<div class="detail-value">No PERA linked.</div>`;
 
+    const checkPanel = r.archived ? '' : await caraAi.checkPanelHtml(r, req.staffUser, req.query);
     const unapprovedPeras = toolsResult.rows.filter((t) => t.archived || t.status !== 'Approved');
     const unapprovedNotice = unapprovedPeras.length
       ? `<div class="alert alert-warning cara-unapproved">
@@ -2612,9 +2617,10 @@ app.get('/cara/:id', async (req, res, next) => {
 
     let actionsHtml = '';
     if (r.status === 'Draft' && unapprovedPeras.length) {
-      actionsHtml = unapprovedNotice;
+      actionsHtml = unapprovedNotice + checkPanel;
     } else if (r.status === 'Draft') {
       actionsHtml = `
+        ${checkPanel}
         <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Teacher signature</div>
         <p class="form-section-hint">Sign below to confirm this CARA is accurate before submitting for approval.</p>
         <div class="signature-pad-wrap">
@@ -2694,6 +2700,7 @@ app.get('/cara/:id', async (req, res, next) => {
     } else if (r.status === 'Pending approval' || r.status === 'Changes requested') {
       actionsHtml = `
         ${unapprovedNotice.replace("Can't submit yet.", "Can't approve yet.")}
+        ${checkPanel}
         <form method="post" action="/cara/${r.id}/approve" style="margin-bottom:10px;">
           <div class="form-row">
             <label for="approver">Approved by</label>

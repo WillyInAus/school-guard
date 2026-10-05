@@ -24,6 +24,9 @@ services:
       DATABASE_URL: postgres://schoolguard:${POSTGRES_PASSWORD}@db:5432/schoolguard
       DATABASE_SSL: "false"
       SESSION_SECRET: ${SESSION_SECRET}
+      # Optional: CARA AI assistant. Leave unset to keep it switched off.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
       PORT: 3000
     ports:
       - "3000:3000"

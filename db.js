@@ -1646,6 +1646,24 @@ async function migrate() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+
+  // CARA AI assistant: one row per AI call (draft suggestions or
+  // pre-submission check) so usage/cost can be tracked and the latest check
+  // shown on the CARA. Draft rows keep no content (result is NULL).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cara_ai_reviews (
+      id SERIAL PRIMARY KEY,
+      cara_id INTEGER REFERENCES cara_records(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('draft','check')),
+      staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      model TEXT,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      result JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS cara_ai_reviews_cara_idx ON cara_ai_reviews (cara_id, created_at DESC);`);
 }
 
 module.exports = { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS };
