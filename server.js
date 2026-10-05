@@ -1920,15 +1920,30 @@ app.get('/cara', async (req, res, next) => {
   }
 });
 
+// Linked PERAs that aren't approved (or are archived). A CARA can list these
+// while it's being drafted, but can't be submitted or approved until they are.
+async function unapprovedCaraPeras(caraId) {
+  const { rows } = await pool.query(
+    `SELECT p.id, p.activity_name, p.status, p.archived
+     FROM cara_tool_links l JOIN pera_records p ON p.id = l.pera_id
+     WHERE l.cara_id = $1 AND (p.status <> 'Approved' OR p.archived = true)
+     ORDER BY p.activity_name`,
+    [caraId]
+  );
+  return rows;
+}
+
+function peraPickerFlag(t) {
+  if (t.archived) return '<span class="badge badge-draft tool-picker-flag">Archived</span>';
+  if (t.status !== 'Approved') return '<span class="badge badge-pending tool-picker-flag">Not yet approved</span>';
+  return '';
+}
+
 app.get('/cara/new', async (req, res, next) => {
   try {
     const toolsResult = await pool.query(
-      `SELECT id, activity_name, class_unit, risk_level FROM pera_records
-       WHERE status = 'Approved' AND archived = false
-         AND EXISTS (
-           SELECT 1 FROM equipment_items
-           WHERE equipment_items.pera_id = pera_records.id AND equipment_items.status = 'Operational'
-         )
+      `SELECT id, activity_name, class_unit, risk_level, status, archived FROM pera_records
+       WHERE archived = false
        ORDER BY class_unit NULLS LAST, activity_name`
     );
 
@@ -1949,6 +1964,7 @@ app.get('/cara/new', async (req, res, next) => {
               <div class="tool-picker-item" data-search="${escapeHtml(t.activity_name.toLowerCase())}">
                 <input type="checkbox" id="tool_${t.id}" name="tool_ids" value="${t.id}">
                 <label for="tool_${t.id}">${escapeHtml(t.activity_name)}</label>
+                ${peraPickerFlag(t)}
                 <span class="badge ${riskBadgeClass(t.risk_level)}">${escapeHtml(t.risk_level)}</span>
               </div>
             `).join('')}
@@ -1957,7 +1973,7 @@ app.get('/cara/new', async (req, res, next) => {
       `;
     }
     if (!toolsResult.rows.length) {
-      toolListHtml = '<div class="tool-picker-item">No approved PERA records yet.</div>';
+      toolListHtml = '<div class="tool-picker-item">No PERA records yet.</div>';
     }
 
     const riskOptions = RISK_LEVELS.map((l) => `<option value="${l}">${l}</option>`).join('');
@@ -1991,7 +2007,7 @@ app.get('/cara/new', async (req, res, next) => {
         </div>
 
         <div class="form-section-title">PERA used</div>
-        <p class="form-section-hint">Select any equipment already covered by an approved PERA (Plant &amp; Equipment Risk Assessment). If something you need isn't listed, ask your WHS Coordinator to add it first.</p>
+        <p class="form-section-hint">Search or open a group to select the equipment this activity uses. PERAs marked <strong>Not yet approved</strong> can be added now, but the CARA can't be submitted for approval until they're approved. If something isn't listed, ask your WHS Coordinator to add a PERA for it.</p>
         <div class="tool-picker">
           <div class="tool-picker-search">
             <input type="text" id="tool_search" placeholder="Search tools..." oninput="filterTools(this.value)">
@@ -2189,14 +2205,9 @@ app.get('/cara/:id/edit', async (req, res, next) => {
     const linkedIds = new Set(linkedResult.rows.map((row) => String(row.pera_id)));
 
     const toolsResult = await pool.query(
-      `SELECT DISTINCT pr.id, pr.activity_name, pr.class_unit, pr.risk_level FROM pera_records pr
-       WHERE (
-         pr.status = 'Approved' AND pr.archived = false
-         AND EXISTS (
-           SELECT 1 FROM equipment_items ei
-           WHERE ei.pera_id = pr.id AND ei.status = 'Operational'
-         )
-       ) OR pr.id IN (SELECT pera_id FROM cara_tool_links WHERE cara_id = $1)
+      `SELECT DISTINCT pr.id, pr.activity_name, pr.class_unit, pr.risk_level, pr.status, pr.archived FROM pera_records pr
+       WHERE pr.archived = false
+          OR pr.id IN (SELECT pera_id FROM cara_tool_links WHERE cara_id = $1)
        ORDER BY pr.class_unit NULLS LAST, pr.activity_name`,
       [req.params.id]
     );
@@ -2219,6 +2230,7 @@ app.get('/cara/:id/edit', async (req, res, next) => {
               <div class="tool-picker-item" data-search="${escapeHtml(t.activity_name.toLowerCase())}">
                 <input type="checkbox" id="tool_${t.id}" name="tool_ids" value="${t.id}" ${linkedIds.has(String(t.id)) ? 'checked' : ''}>
                 <label for="tool_${t.id}">${escapeHtml(t.activity_name)}</label>
+                ${peraPickerFlag(t)}
                 <span class="badge ${riskBadgeClass(t.risk_level)}">${escapeHtml(t.risk_level)}</span>
               </div>
             `).join('')}
@@ -2227,7 +2239,7 @@ app.get('/cara/:id/edit', async (req, res, next) => {
       `;
     }
     if (!toolsResult.rows.length) {
-      toolListHtml = '<div class="tool-picker-item">No approved PERA records yet.</div>';
+      toolListHtml = '<div class="tool-picker-item">No PERA records yet.</div>';
     }
 
     const riskOptions = RISK_LEVELS.map((l) => `<option value="${l}" ${l === r.risk_level ? 'selected' : ''}>${l}</option>`).join('');
@@ -2264,7 +2276,7 @@ app.get('/cara/:id/edit', async (req, res, next) => {
         </div>
 
         <div class="form-section-title">PERA used</div>
-        <p class="form-section-hint">Select any equipment already covered by an approved PERA (Plant &amp; Equipment Risk Assessment). If something you need isn't listed, ask your WHS Coordinator to add it first.</p>
+        <p class="form-section-hint">Search or open a group to select the equipment this activity uses. PERAs marked <strong>Not yet approved</strong> can be added now, but the CARA can't be submitted for approval until they're approved. If something isn't listed, ask your WHS Coordinator to add a PERA for it.</p>
         <div class="tool-picker">
           <div class="tool-picker-search">
             <input type="text" id="tool_search" placeholder="Search tools..." oninput="filterTools(this.value)">
@@ -2552,7 +2564,7 @@ app.get('/cara/:id', async (req, res, next) => {
     const r = result.rows[0];
 
     const toolsResult = await pool.query(
-      `SELECT ra.id, ra.activity_name, ra.risk_level
+      `SELECT ra.id, ra.activity_name, ra.risk_level, ra.status, ra.archived
        FROM cara_tool_links l
        JOIN pera_records ra ON ra.id = l.pera_id
        WHERE l.cara_id = $1
@@ -2585,12 +2597,23 @@ app.get('/cara/:id', async (req, res, next) => {
           <a class="tool-chip" href="/pera/${t.id}">
             <span class="badge ${riskBadgeClass(t.risk_level)}">${escapeHtml(t.risk_level)}</span>
             ${escapeHtml(t.activity_name)}
+            ${peraPickerFlag(t)}
           </a>
         `).join('')}</div>`
       : `<div class="detail-value">No PERA linked.</div>`;
 
+    const unapprovedPeras = toolsResult.rows.filter((t) => t.archived || t.status !== 'Approved');
+    const unapprovedNotice = unapprovedPeras.length
+      ? `<div class="alert alert-warning cara-unapproved">
+          <strong>Can't submit yet.</strong> ${unapprovedPeras.length === 1 ? 'This PERA needs' : 'These PERAs need'} to be approved first:
+          <ul>${unapprovedPeras.map((t) => `<li><a href="/pera/${t.id}">${escapeHtml(t.activity_name)}</a> (${escapeHtml(t.archived ? 'Archived' : t.status)})</li>`).join('')}</ul>
+        </div>`
+      : '';
+
     let actionsHtml = '';
-    if (r.status === 'Draft') {
+    if (r.status === 'Draft' && unapprovedPeras.length) {
+      actionsHtml = unapprovedNotice;
+    } else if (r.status === 'Draft') {
       actionsHtml = `
         <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Teacher signature</div>
         <p class="form-section-hint">Sign below to confirm this CARA is accurate before submitting for approval.</p>
@@ -2670,6 +2693,7 @@ app.get('/cara/:id', async (req, res, next) => {
       `;
     } else if (r.status === 'Pending approval' || r.status === 'Changes requested') {
       actionsHtml = `
+        ${unapprovedNotice.replace("Can't submit yet.", "Can't approve yet.")}
         <form method="post" action="/cara/${r.id}/approve" style="margin-bottom:10px;">
           <div class="form-row">
             <label for="approver">Approved by</label>
@@ -3079,6 +3103,11 @@ app.post('/cara/:id/submit', async (req, res, next) => {
       return res.status(400).send('A teacher signature is required before this CARA can be submitted for approval. Please go back and sign.');
     }
 
+    const notApproved = await unapprovedCaraPeras(req.params.id);
+    if (notApproved.length) {
+      return res.status(400).send(`This CARA can't be submitted until these PERAs are approved: ${notApproved.map((p) => escapeHtml(p.activity_name)).join(', ')}. <a href="/cara/${Number(req.params.id)}">Back</a>`);
+    }
+
     await pool.query(
       `UPDATE cara_records
        SET status = 'Pending approval', teacher_signature = $1, signed_at = now(), updated_at = now()
@@ -3097,6 +3126,10 @@ app.post('/cara/:id/approve', requireRole('admin', 'approver'), async (req, res,
     if (!existing) return res.status(404).send('CARA record not found.');
     if (existing.archived || !['Pending approval', 'Changes requested'].includes(existing.status)) {
       return res.status(400).send(`This CARA is "${escapeHtml(existing.status)}" and isn't waiting for a decision. <a href="/cara/${existing.id}">Back</a>`);
+    }
+    const notApproved = await unapprovedCaraPeras(existing.id);
+    if (notApproved.length) {
+      return res.status(400).send(`This CARA can't be approved until these PERAs are approved: ${notApproved.map((p) => escapeHtml(p.activity_name)).join(', ')}. <a href="/cara/${existing.id}">Back</a>`);
     }
     const approverName = normalizeText(req.body.approver) || req.staffUser.name;
     await pool.query(

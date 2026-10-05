@@ -1305,3 +1305,11 @@ tr.row-link:hover {
 
 .lp-product { display: block; font-size: 30px; font-weight: 700; letter-spacing: 0.5px; color: #9FD3C7; margin-bottom: 8px; }
 @media (max-width: 640px) { .lp-product { font-size: 24px; } }
+
+/* CARA: PERAs not yet approved */
+.tool-picker-flag { margin-left: auto; white-space: nowrap; }
+.tool-picker-flag + .badge { margin-left: 6px; }
+.tool-chip .tool-picker-flag { margin-left: 6px; }
+.cara-unapproved { background: #FFF4E5; border: 1px solid #F3D19E; color: #6B4500; border-radius: 10px; padding: 12px 14px; font-size: 14px; margin-bottom: 12px; }
+.cara-unapproved ul { margin: 6px 0 0; padding-left: 18px; }
+.cara-unapproved a { color: #6B4500; font-weight: 600; }
