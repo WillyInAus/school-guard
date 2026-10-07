@@ -1321,8 +1321,30 @@ app.get('/pera/:id', async (req, res, next) => {
               </div>
             `).join('')}
           </div>
-          ${canEdit ? `<div class="form-actions"><button type="submit" class="btn btn-primary">Save checklist</button>${r.status !== 'Draft' ? `<span class="min-req-hint" style="margin-left:12px;">Changing the checklist returns this PERA to Draft for re-approval.</span>` : ''}</div>` : ''}
+          ${canEdit ? `<div class="form-actions min-req-actions"><button type="submit" class="btn btn-primary">Save checklist</button><span class="min-req-unsaved" hidden>Unsaved changes — click Save checklist</span>${r.status !== 'Draft' ? `<span class="min-req-hint" style="margin-left:12px;">Changing the checklist returns this PERA to Draft for re-approval.</span>` : ''}</div>` : ''}
         </form>
+        ${canEdit ? `<script>
+          (function () {
+            var form = document.querySelector('.min-req-form');
+            if (!form) return;
+            var snap = function () { return new URLSearchParams(new FormData(form)).toString(); };
+            var start = snap();
+            var saving = false;
+            var flag = form.querySelector('.min-req-unsaved');
+            var actions = form.querySelector('.min-req-actions');
+            var update = function () {
+              var dirty = snap() !== start;
+              flag.hidden = !dirty;
+              actions.classList.toggle('is-dirty', dirty);
+            };
+            form.addEventListener('change', update);
+            form.addEventListener('input', update);
+            form.addEventListener('submit', function () { saving = true; });
+            window.addEventListener('beforeunload', function (e) {
+              if (!saving && snap() !== start) { e.preventDefault(); e.returnValue = ''; }
+            });
+          })();
+        </script>` : ''}
       `
       : `<div class="empty-state">No checklist on this record.</div>`;
 
