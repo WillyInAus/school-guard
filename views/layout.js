@@ -57,7 +57,7 @@ const ICONS = {
   induction: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5.5l7-3 7 3-7 3-7-3Z"/><path d="M6 8v4.2c0 .8 1.8 2.3 4 2.3s4-1.5 4-2.3V8"/><path d="M17 5.5V11"/></svg>',
 };
 
-const ROLE_LABELS = { admin: 'Administrator', approver: 'Approver', submitter: 'Staff' };
+const ROLE_LABELS = { system_admin: 'System Administrator', admin: 'Administrator', approver: 'Approver', submitter: 'Staff' };
 
 function initials(user) {
   if (!user || !user.name) return '';
@@ -118,7 +118,7 @@ function page({ title, active, body }) {
     </a>
     <div class="sidebar-user">
       <div class="sidebar-footer-label">Signed in as</div>
-      <div class="sidebar-footer-name">${user ? `${escapeHtml(user.name)} · ${escapeHtml(ROLE_LABELS[user.role] || user.role)}` : 'Not signed in'}</div>
+      <div class="sidebar-footer-name">${user ? `${escapeHtml(user.name)} · ${escapeHtml(ROLE_LABELS[user.dbRole || user.role] || user.role)}` : 'Not signed in'}</div>
     </div>
     <nav class="sidebar-nav">
       ${navLink('/', 'Dashboard', ICONS.dashboard, active === 'dashboard')}

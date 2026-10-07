@@ -32,7 +32,7 @@ app.use(express.static('public'));
 
 const RISK_LEVELS = ['Low', 'Medium', 'High', 'Extreme'];
 const STATUSES = ['Draft', 'Pending approval', 'Approved', 'Changes requested'];
-const STAFF_ROLES = ['admin', 'approver', 'submitter'];
+const STAFF_ROLES = ['system_admin', 'admin', 'approver', 'submitter'];
 
 // ---------- Structured PERA ----------
 
@@ -245,6 +245,11 @@ async function loadStaffUser(req, res, next) {
       );
       if (rows.length && !rows[0].disabled) {
         req.staffUser = rows[0];
+        // A System Administrator has every Admin permission, so the rest of the
+        // app sees them as 'admin'; dbRole/isSystemAdmin carry the extra powers.
+        req.staffUser.dbRole = rows[0].role;
+        req.staffUser.isSystemAdmin = rows[0].role === 'system_admin';
+        if (req.staffUser.isSystemAdmin) req.staffUser.role = 'admin';
       }
     } catch (e) {
       // DB hiccup: fall through as logged-out rather than failing the request.
@@ -1825,6 +1830,7 @@ app.get('/cara', async (req, res, next) => {
   try {
     const { risk, q } = req.query;
     const showArchived = req.query.archived === '1';
+    const canDelete = Boolean(req.staffUser && req.staffUser.isSystemAdmin);
     const conditions = [];
     const params = [];
 
@@ -1871,6 +1877,12 @@ app.get('/cara', async (req, res, next) => {
           <td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td>
           <td>${escapeHtml(r.submitted_by || '—')}</td>
           <td>${formatDate(r.next_review_date)}</td>
+          ${canDelete ? `<td class="row-action" onclick="event.stopPropagation()">
+            <form method="post" action="/cara/${r.id}/delete" onsubmit="return confirm(${escapeHtml(JSON.stringify(`Permanently delete the CARA "${r.activity_name}"?\n\nThis removes the record, its PERA links, signature and change history. It cannot be undone.`))});">
+              ${showArchived ? '<input type="hidden" name="return" value="archived">' : ''}
+              <button type="submit" class="btn-delete" aria-label="Delete ${escapeHtml(r.activity_name)}">Delete</button>
+            </form>
+          </td>` : ''}
         </tr>
       `).join('');
       rowsHtml = `
@@ -1883,6 +1895,7 @@ app.get('/cara', async (req, res, next) => {
               <th>Status</th>
               <th>Teacher</th>
               <th>Next review</th>
+              ${canDelete ? '<th><span class="visually-hidden">Delete</span></th>' : ''}
             </tr>
           </thead>
           <tbody>${rows}</tbody>
@@ -3258,6 +3271,37 @@ app.post('/cara/:id/duplicate', async (req, res, next) => {
 // Archiving hides a CARA from the main /cara list (e.g. once it's stale or
 // superseded by a duplicate) without deleting it. It stays fully viewable via
 // the "Archived" view and can be unarchived at any time.
+
+// Permanent delete (System Administrator only). A copy of the record is kept in
+// record_deletions, since its own change history is removed with it.
+app.post('/cara/:id/delete', requireSystemAdmin, async (req, res, next) => {
+  const id = Number(req.params.id);
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query('SELECT * FROM cara_records WHERE id = $1', [id]);
+    if (!rows.length) {
+      client.release();
+      return res.status(404).send('CARA record not found. <a href="/cara">Back</a>');
+    }
+    const cara = rows[0];
+    const links = (await client.query('SELECT pera_id FROM cara_tool_links WHERE cara_id = $1', [id])).rows.map((r) => r.pera_id);
+    const snapshot = { ...cara, teacher_signature: cara.teacher_signature ? '(signature image removed)' : null, pera_ids: links };
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO record_deletions (entity, entity_id, title, snapshot, deleted_by_staff_id, deleted_by_name)
+       VALUES ('cara', $1, $2, $3, $4, $5)`,
+      [id, cara.activity_name, JSON.stringify(snapshot), req.staffUser.id, req.staffUser.name]
+    );
+    await client.query('DELETE FROM cara_records WHERE id = $1', [id]);
+    await client.query('COMMIT');
+    client.release();
+    res.redirect(req.body.return === 'archived' ? '/cara?archived=1' : '/cara');
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
+    client.release();
+    next(err);
+  }
+});
 
 app.post('/cara/:id/archive', async (req, res, next) => {
   try {
@@ -4856,14 +4900,31 @@ app.get('/admin/equipment', requireRole('admin'), async (req, res, next) => {
 // ---------- Admin: staff accounts ----------
 
 function roleLabel(role) {
-  return { admin: 'Admin', approver: 'Approver', submitter: 'Submitter' }[role] || role;
+  return { system_admin: 'System Administrator', admin: 'Admin', approver: 'Approver', submitter: 'Submitter' }[role] || role;
+}
+
+const ADMIN_ROLES = ['system_admin', 'admin'];
+
+function requireSystemAdmin(req, res, next) {
+  if (!req.staffUser) return res.redirect(`/admin/login?next=${encodeURIComponent(req.originalUrl)}`);
+  if (!req.staffUser.isSystemAdmin) return res.status(403).send('Only a System Administrator can do that. <a href="/">Back to dashboard</a>');
+  next();
+}
+
+// Who may give someone the System Administrator role, or change/disable/delete
+// a System Administrator: another System Administrator — or, only while no
+// System Administrator exists yet, an Admin (so the first one can be set up).
+async function canManageSystemAdmins(user) {
+  if (user.isSystemAdmin) return true;
+  const { rows } = await pool.query(`SELECT COUNT(*)::int AS n FROM staff_users WHERE role = 'system_admin'`);
+  return rows[0].n === 0;
 }
 
 // Safety net so an admin can't lock everyone out by disabling/deleting the
 // last remaining enabled admin account (themselves or someone else).
 async function isLastEnabledAdmin(staffId) {
   const { rows } = await pool.query(
-    `SELECT COUNT(*)::int AS count FROM staff_users WHERE role = 'admin' AND disabled = false AND id != $1`,
+    `SELECT COUNT(*)::int AS count FROM staff_users WHERE role IN ('admin','system_admin') AND disabled = false AND id != $1`,
     [staffId]
   );
   return rows[0].count === 0;
@@ -5002,6 +5063,7 @@ app.post('/admin/rooms/:id/restore', requireRole('admin'), async (req, res, next
 app.get('/admin/staff', requireRole('admin'), async (req, res, next) => {
   try {
     const { rows } = await pool.query('SELECT * FROM staff_users ORDER BY name ASC');
+    const canGrantSys = await canManageSystemAdmins(req.staffUser);
 
     const staffRows = rows.map((s) => `
       <tr class="row-link" onclick="window.location='/admin/staff/${s.id}/edit'">
@@ -5045,6 +5107,7 @@ app.get('/admin/staff', requireRole('admin'), async (req, res, next) => {
             <option value="submitter">Submitter — create and edit their own records</option>
             <option value="approver">Approver — also approves/rejects PERA and CARA</option>
             <option value="admin">Admin — full access, including managing staff</option>
+            ${canGrantSys ? '<option value="system_admin">System Administrator — Admin, plus permanently deleting records</option>' : ''}
           </select>
         </div>
         <div class="form-row">
@@ -5076,6 +5139,9 @@ app.post('/admin/staff', requireRole('admin'), async (req, res, next) => {
     if (!password || password.length < 8) {
       return res.status(400).send('Password must be at least 8 characters. <a href="/admin/staff">Back</a>');
     }
+    if (role === 'system_admin' && !(await canManageSystemAdmins(req.staffUser))) {
+      return res.status(403).send('Only a System Administrator can create another System Administrator. <a href="/admin/staff">Back</a>');
+    }
 
     await pool.query(
       `INSERT INTO staff_users (name, email, password_hash, role) VALUES ($1, $2, $3, $4)`,
@@ -5099,7 +5165,11 @@ app.get('/admin/staff/:id/edit', requireRole('admin'), async (req, res, next) =>
     }
     const s = rows[0];
 
-    const roleOptions = STAFF_ROLES.map((r) =>
+    const canGrantSys = await canManageSystemAdmins(req.staffUser);
+    if (s.role === 'system_admin' && !canGrantSys) {
+      return res.status(403).send('Only a System Administrator can change a System Administrator account. <a href="/admin/staff">Back</a>');
+    }
+    const roleOptions = STAFF_ROLES.filter((r) => r !== 'system_admin' || canGrantSys).map((r) =>
       `<option value="${r}"${s.role === r ? ' selected' : ''}>${roleLabel(r)}</option>`
     ).join('');
 
@@ -5164,7 +5234,13 @@ app.post('/admin/staff/:id/edit', requireRole('admin'), async (req, res, next) =
     if (!normalizedName || !normalizedEmail || !STAFF_ROLES.includes(role)) {
       return res.status(400).send('Name, email and a valid role are required. <a href="/admin/staff/' + existing.id + '/edit">Back</a>');
     }
-    if (existing.role === 'admin' && role !== 'admin' && await isLastEnabledAdmin(existing.id)) {
+    if ((role === 'system_admin' || existing.role === 'system_admin') && role !== existing.role && !(await canManageSystemAdmins(req.staffUser))) {
+      return res.status(403).send('Only a System Administrator can give or remove the System Administrator role. <a href="/admin/staff/' + existing.id + '/edit">Back</a>');
+    }
+    if (existing.role === 'system_admin' && !(await canManageSystemAdmins(req.staffUser))) {
+      return res.status(403).send('Only a System Administrator can change a System Administrator account. <a href="/admin/staff">Back</a>');
+    }
+    if (ADMIN_ROLES.includes(existing.role) && !ADMIN_ROLES.includes(role) && await isLastEnabledAdmin(existing.id)) {
       return res.status(400).send('Cannot change the last remaining admin to another role — promote someone else to Admin first. <a href="/admin/staff/' + existing.id + '/edit">Back</a>');
     }
     if (new_password && new_password.length < 8) {
@@ -5198,7 +5274,10 @@ app.post('/admin/staff/:id/disable', requireRole('admin'), async (req, res, next
     if (rows.length === 0) {
       return res.status(404).send('Staff account not found.');
     }
-    if (rows[0].role === 'admin' && await isLastEnabledAdmin(rows[0].id)) {
+    if (rows[0].role === 'system_admin' && !(await canManageSystemAdmins(req.staffUser))) {
+      return res.status(403).send('Only a System Administrator can disable a System Administrator account. <a href="/admin/staff">Back</a>');
+    }
+    if (ADMIN_ROLES.includes(rows[0].role) && await isLastEnabledAdmin(rows[0].id)) {
       return res.status(400).send('Cannot disable the last remaining admin account. <a href="/admin/staff">Back</a>');
     }
     await pool.query('UPDATE staff_users SET disabled = true, updated_at = now() WHERE id = $1', [req.params.id]);
@@ -5226,7 +5305,10 @@ app.post('/admin/staff/:id/delete', requireRole('admin'), async (req, res, next)
     if (rows.length === 0) {
       return res.status(404).send('Staff account not found.');
     }
-    if (rows[0].role === 'admin' && await isLastEnabledAdmin(rows[0].id)) {
+    if (rows[0].role === 'system_admin' && !(await canManageSystemAdmins(req.staffUser))) {
+      return res.status(403).send('Only a System Administrator can delete a System Administrator account. <a href="/admin/staff">Back</a>');
+    }
+    if (ADMIN_ROLES.includes(rows[0].role) && await isLastEnabledAdmin(rows[0].id)) {
       return res.status(400).send('Cannot delete the last remaining admin account. <a href="/admin/staff">Back</a>');
     }
     await pool.query('DELETE FROM staff_users WHERE id = $1', [req.params.id]);

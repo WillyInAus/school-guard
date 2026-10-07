@@ -1664,6 +1664,39 @@ async function migrate() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS cara_ai_reviews_cara_idx ON cara_ai_reviews (cara_id, created_at DESC);`);
+
+  // System Administrator role: everything an Admin can do, plus permanent
+  // deletion of records. Widen the role CHECK (named or auto-named).
+  await pool.query(`
+    DO $$
+    DECLARE c record;
+    BEGIN
+      FOR c IN SELECT conname FROM pg_constraint
+               WHERE conrelid = 'staff_users'::regclass AND contype = 'c'
+                 AND pg_get_constraintdef(oid) ILIKE '%role%' AND pg_get_constraintdef(oid) NOT ILIKE '%system_admin%'
+      LOOP
+        EXECUTE format('ALTER TABLE staff_users DROP CONSTRAINT %I', c.conname);
+      END LOOP;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'staff_users'::regclass AND conname = 'staff_users_role_check2') THEN
+        ALTER TABLE staff_users ADD CONSTRAINT staff_users_role_check2 CHECK (role IN ('system_admin','admin','approver','submitter'));
+      END IF;
+    END $$;
+  `);
+
+  // Permanent deletions are logged here (with a copy of the record) because
+  // the record's own change history is deleted with it.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS record_deletions (
+      id SERIAL PRIMARY KEY,
+      entity TEXT NOT NULL,
+      entity_id INTEGER NOT NULL,
+      title TEXT,
+      snapshot JSONB,
+      deleted_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      deleted_by_name TEXT,
+      deleted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
 }
 
 module.exports = { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS };
