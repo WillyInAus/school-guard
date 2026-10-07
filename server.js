@@ -981,6 +981,25 @@ app.get('/pera/:id/edit', async (req, res, next) => {
   }
 });
 
+// Any change to an approved (or submitted) PERA sends it back to Draft so it
+// has to be submitted and approved again. Returns true if approval was cleared.
+async function clearPeraApproval(peraId, changedBy, what) {
+  const { rows } = await pool.query('SELECT status, version FROM pera_records WHERE id = $1', [peraId]);
+  if (!rows.length || rows[0].status === 'Draft') return false;
+  const previous = rows[0].status;
+  await pool.query(
+    `UPDATE pera_records SET status = 'Draft', approval_decision = NULL, approval_conditions = NULL, approval_required_level = NULL,
+       approver = NULL, approver_role = NULL, approved_at = NULL, next_review_date = NULL, review_notes = NULL, updated_at = now()
+     WHERE id = $1`,
+    [peraId]
+  );
+  await pool.query(
+    'INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1, $2, $3, $4, $5, $6)',
+    [peraId, changedBy, 'Approval cleared', rows[0].version, `${what}. Status changed from ${previous} to Draft — the PERA needs to be submitted and approved again.`, 'Returned to Draft — needs re-approval']
+  );
+  return true;
+}
+
 app.post('/pera/:id/edit', async (req, res, next) => {
   try {
     let {
@@ -1085,10 +1104,38 @@ app.post('/pera/:id/edit', async (req, res, next) => {
     const mandatoryFlags = [].concat(req.body.hazard_mandatory || []);
     const appliesTos = [].concat(req.body.hazard_applies_to || []);
 
-    const existingHazardsResult = await pool.query('SELECT description FROM pera_hazards WHERE pera_id = $1 ORDER BY sort_order, id', [req.params.id]);
-    const afterHazardDescriptions = descriptions.map((d) => normalizeText(d || '').trim()).filter(Boolean);
-    if (JSON.stringify(existingHazardsResult.rows.map((h) => h.description)) !== JSON.stringify(afterHazardDescriptions)) {
-      changeLines.push(`Hazards: ${existingHazardsResult.rows.length} row(s) → ${afterHazardDescriptions.length} row(s)`);
+    // Compare every hazard column (not just the description) so a change to a
+    // control measure, risk level, control type etc. is saved and recorded.
+    const existingHazardsResult = await pool.query(
+      'SELECT category, description, risk_level, control_measure, control_type, mandatory, applies_to FROM pera_hazards WHERE pera_id = $1 ORDER BY sort_order, id',
+      [req.params.id]
+    );
+    const hazardKey = (h) => JSON.stringify([
+      h.category || null, String(h.description || '').trim(), h.risk_level || null,
+      (h.control_measure || '').trim() || null, h.control_type || null, Boolean(h.mandatory), (h.applies_to || '').trim() || null,
+    ]);
+    const afterHazards = [];
+    for (let i = 0; i < descriptions.length; i++) {
+      const description = normalizeText(descriptions[i] || '').trim();
+      if (!description) continue;
+      afterHazards.push({
+        category: categories[i] || null, description, risk_level: hazardRiskLevels[i] || null,
+        control_measure: normalizeText(hazardControlMeasures[i]) || null, control_type: controlTypes[i] || null,
+        mandatory: mandatoryFlags[i] === 'Yes', applies_to: normalizeText(appliesTos[i]) || null,
+      });
+    }
+    const beforeKeys = existingHazardsResult.rows.map(hazardKey);
+    const afterKeys = afterHazards.map(hazardKey);
+    if (JSON.stringify(beforeKeys) !== JSON.stringify(afterKeys)) {
+      const beforeSet = new Set(beforeKeys);
+      const afterSet = new Set(afterKeys);
+      const added = afterHazards.filter((h, i) => !beforeSet.has(afterKeys[i]));
+      const removed = existingHazardsResult.rows.filter((h, i) => !afterSet.has(beforeKeys[i]));
+      const parts = [];
+      if (removed.length) parts.push(`changed/removed: ${removed.map((h) => h.description).join('; ')}`);
+      if (added.length) parts.push(`changed/added: ${added.map((h) => `${h.description}${h.control_measure ? ` → ${h.control_measure}` : ''}`).join('; ')}`);
+      if (!parts.length) parts.push('order changed');
+      changeLines.push(`Hazards (${existingHazardsResult.rows.length} → ${afterHazards.length} row(s)) — ${parts.join(' | ')}`);
       changedLabels.push('Hazards');
     }
 
@@ -1144,7 +1191,7 @@ app.post('/pera/:id/edit', async (req, res, next) => {
       [req.params.id, edited_by.trim(), 'Edited', newVersion, changeLines.join('\n'), briefSummary]
     );
 
-    res.redirect(`/pera/${req.params.id}`);
+    res.redirect(`/pera/${req.params.id}${resetApproval ? '?reapproval=1' : ''}`);
   } catch (err) {
     next(err);
   }
@@ -1274,7 +1321,7 @@ app.get('/pera/:id', async (req, res, next) => {
               </div>
             `).join('')}
           </div>
-          ${canEdit ? `<div class="form-actions"><button type="submit" class="btn btn-primary">Save checklist</button></div>` : ''}
+          ${canEdit ? `<div class="form-actions"><button type="submit" class="btn btn-primary">Save checklist</button>${r.status !== 'Draft' ? `<span class="min-req-hint" style="margin-left:12px;">Changing the checklist returns this PERA to Draft for re-approval.</span>` : ''}</div>` : ''}
         </form>
       `
       : `<div class="empty-state">No checklist on this record.</div>`;
@@ -1439,6 +1486,7 @@ app.get('/pera/:id', async (req, res, next) => {
 
     const body = `
       <a class="back-link" href="/pera">← Back to PERA Records</a>
+      ${req.query.reapproval === '1' && r.status === 'Draft' ? `<div class="note-box reapproval-note" role="status"><strong>Saved — this PERA is back to Draft.</strong> Because it was changed, its approval was cleared. Submit it for approval again when you're ready.</div>` : ''}
       <div class="page-header">
         <div>
           <span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)} risk</span>
@@ -1657,16 +1705,29 @@ app.post('/pera/:id/requirements', async (req, res, next) => {
     if (!canManageOwnRecord(req.staffUser, recordResult.rows[0])) {
       return res.status(403).send('You can only update the checklist on PERA records you created yourself. <a href="/pera/' + req.params.id + '">Back</a>');
     }
-    const itemsResult = await pool.query('SELECT id FROM pera_min_requirements WHERE pera_id = $1', [req.params.id]);
+    const itemsResult = await pool.query('SELECT id, requirement, status, notes FROM pera_min_requirements WHERE pera_id = $1', [req.params.id]);
+    const changes = [];
     for (const item of itemsResult.rows) {
       const rawStatus = req.body[`status_${item.id}`];
       const status = MIN_REQUIREMENT_STATUSES.includes(rawStatus) ? rawStatus : 'Required';
+      const notes = normalizeText(req.body[`notes_${item.id}`]) || null;
+      if (status === item.status && (notes || '') === (item.notes || '')) continue;
+      changes.push(`${item.requirement}: ${item.status}${item.status !== status ? ` → ${status}` : ''}${(notes || '') !== (item.notes || '') ? ' (notes changed)' : ''}`);
       await pool.query(
         'UPDATE pera_min_requirements SET status = $1, met = $2, notes = $3 WHERE id = $4',
-        [status, status === 'Current', normalizeText(req.body[`notes_${item.id}`]) || null, item.id]
+        [status, status === 'Current', notes, item.id]
       );
     }
-    res.redirect(`/pera/${req.params.id}`);
+    let cleared = false;
+    if (changes.length) {
+      const record = recordResult.rows[0];
+      await pool.query(
+        'INSERT INTO pera_change_log (pera_id, changed_by, action, version, summary, brief) VALUES ($1, $2, $3, $4, $5, $6)',
+        [req.params.id, req.staffUser.name, 'Edited', record.version, `Minimum safety requirements:\n${changes.join('\n')}`, 'Minimum safety requirements updated']
+      );
+      cleared = await clearPeraApproval(req.params.id, req.staffUser.name, 'Minimum safety requirements were changed');
+    }
+    res.redirect(`/pera/${req.params.id}${cleared ? '?reapproval=1' : ''}`);
   } catch (err) {
     next(err);
   }
@@ -1715,7 +1776,11 @@ app.post('/pera/:id/documents', (req, res, next) => {
         thumbnailData,
       ]
     );
-    res.redirect(`/pera/${req.params.id}`);
+    // A new SOP changes what staff are inducted on, so it needs re-approval.
+    const cleared = category === 'SOP'
+      ? await clearPeraApproval(req.params.id, req.staffUser.name, `SOP "${normalizedTitle}" was added`)
+      : false;
+    res.redirect(`/pera/${req.params.id}${cleared ? '?reapproval=1' : ''}`);
   } catch (err) {
     next(err);
   }
@@ -1765,8 +1830,13 @@ app.post('/pera/:id/documents/:docId/delete', async (req, res, next) => {
     if (!canManageOwnRecord(req.staffUser, recordResult.rows[0])) {
       return res.status(403).send('You can only remove documents from PERA records you created yourself. <a href="/pera/' + req.params.id + '">Back</a>');
     }
+    const doc = (await pool.query('SELECT title, category FROM pera_documents WHERE id = $1 AND pera_id = $2', [req.params.docId, req.params.id])).rows[0];
     await pool.query('DELETE FROM pera_documents WHERE id = $1 AND pera_id = $2', [req.params.docId, req.params.id]);
-    res.redirect(`/pera/${req.params.id}`);
+    // Removing the SOP changes what staff are inducted on, so it needs re-approval.
+    const cleared = doc && doc.category === 'SOP'
+      ? await clearPeraApproval(req.params.id, req.staffUser.name, `SOP "${doc.title}" was removed`)
+      : false;
+    res.redirect(`/pera/${req.params.id}${cleared ? '?reapproval=1' : ''}`);
   } catch (err) {
     next(err);
   }
@@ -5401,6 +5471,18 @@ app.post('/admin/pera/:id', requireRole('admin'), async (req, res, next) => {
 
     if (!activity_name || !RISK_LEVELS.includes(risk_level) || !STATUSES.includes(status)) {
       return res.status(400).send('Activity name, a valid risk level and a valid status are required.');
+    }
+
+    // Content changes on an approved/submitted PERA send it back to Draft here
+    // too, so this older admin screen can't keep an approval on edited content.
+    const before = (await pool.query('SELECT * FROM pera_records WHERE id = $1', [req.params.id])).rows[0];
+    if (!before) return res.status(404).send('PERA record not found.');
+    const same = (x, y) => String(x == null ? '' : x).trim() === String(y == null ? '' : y).trim();
+    const contentChanged = !same(before.activity_name, normalizeText(activity_name)) || !same(before.class_unit, normalizeText(class_unit))
+      || before.risk_level !== risk_level || !same(before.hazards, normalizeText(hazards)) || !same(before.control_measures, normalizeText(control_measures))
+      || !same(before.required_supervision, normalizeText(required_supervision)) || Boolean(before.consent_required) !== (consent_required === 'true');
+    if (contentChanged && before.status !== 'Draft' && status !== 'Draft') {
+      return res.status(400).send('This PERA is ' + escapeHtml(before.status) + '. Changing its content returns it to Draft so it can be re-approved — set Status to Draft to save these changes, or use the normal Edit page. <a href="/admin/pera/' + before.id + '/edit">Back</a>');
     }
 
     await pool.query(
