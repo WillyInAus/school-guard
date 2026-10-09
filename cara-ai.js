@@ -28,6 +28,23 @@ const DRAFT_FIELDS = {
   student_controls: 'Student controls',
   emergency_first_aid: 'Emergency and first aid',
 };
+// What belongs in each field, so the AI doesn't repeat the same content in
+// two boxes (e.g. Supervision vs Supervisor qualification).
+const FIELD_GUIDE = {
+  activity_scope: 'What students will do: the tasks, processes, equipment and materials. No hazards, controls or supervision here.',
+  induction_instruction: 'How students are prepared before and during the activity: workshop and machine inductions, demonstrations, SOPs/SWMS, competency sign-off. Not supervision levels or staff qualifications.',
+  supervision_notes: 'HOW the activity is supervised: level of supervision (direct vs general) per process or machine, staff-to-student ratios, maximum students on machines, teacher positioning, what happens if the teacher leaves, rules on access outside class. Do NOT state staff qualifications, licences or training here; they belong in Supervisor qualification.',
+  supervisor_qualification: 'WHO may supervise and what they must hold: required qualifications, trade background, licences/tickets, current first aid, workshop/machine induction or competency for staff, requirements for relief staff. Do NOT describe supervision levels, ratios or positioning here; they belong in Supervision.',
+  facilities_equipment: 'The room and fixed safety provisions: workshop layout, extraction/ventilation, welding screens/bays, spray booth, emergency stops, eyewash, fire equipment, PPE available. Not hazards or controls.',
+  environmental_hazards: 'Hazards from the work environment (fumes, UV, noise, heat, dust, sparks, lighting, housekeeping, slips/trips).',
+  environmental_controls: 'Controls for the environmental hazards listed, in the same order.',
+  facilities_hazards: 'Hazards from machines, tools, electrical supply, gas cylinders and other plant.',
+  facilities_controls: 'Controls for the facilities and equipment hazards listed, in the same order.',
+  student_hazards: 'Hazards arising from the students themselves: inexperience, behaviour, fatigue, clothing/hair/jewellery, PPE non-use, medical needs (generic only).',
+  student_controls: 'Controls for the student hazards listed, in the same order.',
+  emergency_first_aid: 'Emergency and first aid arrangements: first aid kit/burns kit, how to get help, emergency stops and isolation, fire response, incident reporting. Use [placeholders] for locations and names.',
+};
+
 const HAZARD_PAIRS = [
   ['environmental_hazards', 'environmental_controls', 'Environmental'],
   ['facilities_hazards', 'facilities_controls', 'Facilities'],
@@ -41,6 +58,8 @@ Rules:
 - Do not invent school-specific facts (names, room numbers, staff, qualifications held, first aid locations). Where something school-specific is needed, write a short placeholder in square brackets, e.g. [name of supervising teacher].
 - Use Australian English, plain language a teacher can paste straight in, and short "- " bullet lines where a list helps.
 - Be practical and specific to the activity; avoid generic filler.
+- Each field has its own job (see the field descriptions). Never repeat the same point in two fields; put it only in the field it belongs to.
+- Supervision = how closely and at what ratio students are supervised. Supervisor qualification = who may supervise and what they must hold. Keep them separate.
 - Student-specific notes are withheld for privacy; do not ask for them.`;
 
 const ERROR_TEXT = {
@@ -244,7 +263,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
     input_schema: {
       type: 'object',
       properties: {
-        ...Object.fromEntries(Object.entries(DRAFT_FIELDS).map(([k, label]) => [k, { type: 'string', description: `Suggested text for "${label}". Omit or leave empty if the existing text is already good.` }])),
+        ...Object.fromEntries(Object.entries(DRAFT_FIELDS).map(([k, label]) => [k, { type: 'string', description: `Suggested text for "${label}". ${FIELD_GUIDE[k] || ''} Omit or leave empty if the existing text is already good.` }])),
         suggested_risk_level: { type: 'string', enum: RISK_LEVELS },
         risk_reason: { type: 'string', description: 'One sentence explaining the suggested risk level.' },
         consent_recommended: { type: 'boolean' },
