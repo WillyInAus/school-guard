@@ -140,7 +140,10 @@ function richText(value, { columnsOver = 0 } = {}) {
     } else {
       flushList();
       if (!para) para = [];
-      para.push(escapeHtml(raw.trim()));
+      // A short line ending in ":" (e.g. "Induction must cover:") is a
+      // sub-heading for the list or text that follows, so show it in bold.
+      const line = raw.trim();
+      para.push(/:$/.test(line) && line.length <= 150 ? `<strong class="subhead">${escapeHtml(line)}</strong>` : escapeHtml(line));
     }
   }
   flushList();
@@ -176,6 +179,7 @@ ul { margin: 2px 0 4px; padding-left: 16px; } ul:last-child { margin-bottom: 0; 
 li { margin: 0 0 2px; break-inside: avoid; }
 ul.cols { columns: 2; column-gap: 24px; }
 .empty { color: #9a9488; }
+.subhead { color: #1B5E52; }
 
 .header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 6px; border-bottom: 2px solid #1B5E52; }
 .header img { height: 20mm; width: auto; }
