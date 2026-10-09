@@ -149,6 +149,7 @@ function page({ title, active, body }) {
     ${user && (user.role === 'admin' || user.role === 'approver') ? bottomNavLink(user.role === 'admin' ? '/admin' : '/admin/approvals', 'Admin', ICONS.admin, active === 'admin') : ''}
   </nav>
 </div>
+<script src="/pretty-text.js" defer></script>
 </body>
 </html>`;
 }

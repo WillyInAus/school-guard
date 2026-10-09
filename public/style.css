@@ -1359,3 +1359,26 @@ tr.row-link:hover {
 .min-req-actions.is-dirty { position: sticky; bottom: 0; z-index: 5; background: #FFFFFF; border: 1px solid #E4DFD3; border-radius: 12px; padding: 12px 14px; box-shadow: 0 -6px 18px rgba(0,0,0,0.08); margin-top: 12px; }
 .min-req-unsaved { margin-left: 12px; font-size: 13.5px; font-weight: 600; color: #8A5300; }
 @media (max-width: 640px) { .min-req-actions.is-dirty { bottom: 64px; } }
+
+/* Formatted view of multi-line text (see public/pretty-text.js) */
+.pretty-view {
+  width: 100%;
+  min-height: 90px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #E4DFD3;
+  background: #FFFFFF;
+  font-size: 14px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  line-height: 1.5;
+  cursor: text;
+  box-sizing: border-box;
+}
+.pretty-view:hover { border-color: #C9C1AE; }
+.pretty-view:focus { outline: 2px solid #1B5E52; outline-offset: 1px; }
+.pretty-view p, .pretty-done p { margin: 0 0 4px; }
+.pretty-view ul, .pretty-done ul { margin: 2px 0 6px; padding-left: 20px; }
+.pretty-view li, .pretty-done li { margin: 0 0 2px; }
+.pretty-view > :last-child, .pretty-done > :last-child { margin-bottom: 0; }
+.pt-subhead { color: #1B5E52; }
+.pretty-done { white-space: normal !important; }

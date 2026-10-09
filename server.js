@@ -2090,7 +2090,7 @@ app.get('/cara/new', async (req, res, next) => {
       <a class="back-link" href="/cara">← Back to CARA Records</a>
       <h1 class="page-title">New CARA</h1>
       <p class="page-subtitle" style="margin-bottom:24px;">Curriculum Activity Risk Assessment for a class or activity. Saved as a Draft until submitted for approval.</p>
-      <form class="form-card" method="post" action="/cara" style="max-width:760px;">
+      <form class="form-card" method="post" action="/cara" style="max-width:760px;" data-pretty>
 
         <div class="form-section-title">Activity scope</div>
         <p class="form-section-hint">Describe the activity as it applies to your unit/lesson planning.</p>
@@ -2362,7 +2362,7 @@ app.get('/cara/:id/edit', async (req, res, next) => {
       <h1 class="page-title">Edit CARA</h1>
       <p class="page-subtitle" style="margin-bottom:24px;">Changes are recorded in the change history at the bottom of this CARA.</p>
       ${resetWarning}
-      <form class="form-card" method="post" action="/cara/${r.id}/edit" style="max-width:760px;">
+      <form class="form-card" method="post" action="/cara/${r.id}/edit" style="max-width:760px;" data-pretty>
 
         <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Activity scope</div>
         <div class="form-row">
@@ -2881,7 +2881,7 @@ app.get('/cara/:id', async (req, res, next) => {
         <div>
           <div class="detail-section">
             <div class="detail-label">Activity scope</div>
-            <div class="detail-value">${escapeHtml(r.activity_scope || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.activity_scope || '—')}</div>
           </div>
           <div class="detail-section">
             <div class="detail-label">PERA used</div>
@@ -2895,15 +2895,15 @@ app.get('/cara/:id', async (req, res, next) => {
           </div>
           <div class="detail-section">
             <div class="detail-label">Students</div>
-            <div class="detail-value">${escapeHtml(r.students_notes || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.students_notes || '—')}</div>
           </div>
           <div class="detail-section">
             <div class="detail-label">Emergency and first aid</div>
-            <div class="detail-value">${escapeHtml(r.emergency_first_aid || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.emergency_first_aid || '—')}</div>
           </div>
           <div class="detail-section">
             <div class="detail-label">Induction and instruction</div>
-            <div class="detail-value">${escapeHtml(r.induction_instruction || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.induction_instruction || '—')}</div>
           </div>
           <div class="detail-section">
             <div class="detail-label">Parent consent required</div>
@@ -2911,39 +2911,39 @@ app.get('/cara/:id', async (req, res, next) => {
           </div>
           <div class="detail-section">
             <div class="detail-label">Supervision</div>
-            <div class="detail-value">${escapeHtml(r.supervision_notes || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.supervision_notes || '—')}</div>
           </div>
           <div class="detail-section">
             <div class="detail-label">Supervisor qualification</div>
-            <div class="detail-value">${escapeHtml(r.supervisor_qualification || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.supervisor_qualification || '—')}</div>
           </div>
           <div class="detail-section">
             <div class="detail-label">Facilities and equipment</div>
-            <div class="detail-value">${escapeHtml(r.facilities_equipment || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.facilities_equipment || '—')}</div>
           </div>
           <div class="detail-section">
             <div class="detail-label">Environmental hazards</div>
-            <div class="detail-value">${escapeHtml(r.environmental_hazards || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.environmental_hazards || '—')}</div>
           </div>
           <div class="detail-section">
             <div class="detail-label">Environmental control measures</div>
-            <div class="detail-value">${escapeHtml(r.environmental_controls || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.environmental_controls || '—')}</div>
           </div>
           <div class="detail-section">
             <div class="detail-label">Facilities and equipment hazards</div>
-            <div class="detail-value">${escapeHtml(r.facilities_hazards || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.facilities_hazards || '—')}</div>
           </div>
           <div class="detail-section">
             <div class="detail-label">Facilities and equipment control measures</div>
-            <div class="detail-value">${escapeHtml(r.facilities_controls || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.facilities_controls || '—')}</div>
           </div>
           <div class="detail-section">
             <div class="detail-label">Student hazards</div>
-            <div class="detail-value">${escapeHtml(r.student_hazards || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.student_hazards || '—')}</div>
           </div>
           <div class="detail-section">
             <div class="detail-label">Student control measures</div>
-            <div class="detail-value">${escapeHtml(r.student_controls || '—')}</div>
+            <div class="detail-value pretty-text">${escapeHtml(r.student_controls || '—')}</div>
           </div>
           ${r.review_notes ? `
           <div class="detail-section">
@@ -5571,7 +5571,7 @@ app.get('/admin/cara/:id/edit', requireRole('admin'), async (req, res, next) => 
     const body = `
       <a class="back-link" href="/admin/cara">← Back to CARA</a>
       <h1 class="page-title" style="margin-bottom:24px;">Edit CARA: ${escapeHtml(r.activity_name)}</h1>
-      <form class="form-card" method="post" action="/admin/cara/${r.id}" style="max-width:760px;">
+      <form class="form-card" method="post" action="/admin/cara/${r.id}" style="max-width:760px;" data-pretty>
         <div class="form-row">
           <label for="activity_name">Activity name</label>
           <input type="text" id="activity_name" name="activity_name" value="${escapeHtml(r.activity_name)}" required>
