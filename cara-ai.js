@@ -289,7 +289,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       const peras = await loadPeras(b.tool_ids);
       const wantStudents = b.students_notes_empty === '1';
       const tool = wantStudents
-        ? { ...DRAFT_TOOL, input_schema: { ...DRAFT_TOOL.input_schema, properties: { ...DRAFT_TOOL.input_schema.properties, students_notes: { type: 'string', description: `Suggested template for "Students". ${STUDENTS_GUIDE}` } } } }
+        ? { ...DRAFT_TOOL, input_schema: { ...DRAFT_TOOL.input_schema, required: [...DRAFT_TOOL.input_schema.required, 'students_notes'], properties: { ...DRAFT_TOOL.input_schema.properties, students_notes: { type: 'string', description: `Suggested template for "Students". ${STUDENTS_GUIDE}` } } } }
         : DRAFT_TOOL;
       const userText = `${wantStudents ? 'The Students box is empty: include a students_notes template.\n\n' : ''}Draft suggested content for this CARA. Where a field already has good text, leave it out of your answer; where it has some text, suggest an improved full version that keeps the teacher's points.\n\n=== CARA so far ===\n${caraContext(c)}\n\n=== PERAs selected ===\n${peraContext(peras)}`;
       // 12 long fields for a many-machine activity can exceed 4000 tokens, which
