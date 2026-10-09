@@ -1703,6 +1703,80 @@ async function migrate() {
       deleted_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+
+  // ---------- CARA projects (see cara-projects.js, project-rules.js) ----------
+  // Project-level safety documents linked to a parent CARA. Classification
+  // (activity class / document purpose / workflow status) is kept in separate
+  // columns; possible legal SWMS triggers are flagged by project-rules.js and
+  // confirmed by a reviewer in trigger_reviews (never decided automatically).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cara_projects (
+      id SERIAL PRIMARY KEY,
+      cara_id INTEGER NOT NULL REFERENCES cara_records(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      project_type TEXT,
+      description TEXT,
+      practice_type TEXT NOT NULL DEFAULT 'Unsure',
+      room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
+      location_detail TEXT,
+      materials TEXT,
+      sds_refs TEXT,
+      conditions TEXT,
+      in_cara_scope TEXT NOT NULL DEFAULT 'Unsure',
+      answers JSONB NOT NULL DEFAULT '{}'::jsonb,
+      rules_version TEXT,
+      activity_class TEXT NOT NULL DEFAULT 'Needs review',
+      doc_purpose TEXT NOT NULL DEFAULT 'Not yet decided',
+      trigger_reviews JSONB NOT NULL DEFAULT '{}'::jsonb,
+      scope_exclusions TEXT,
+      work_steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ppe TEXT,
+      induction_supervision TEXT,
+      first_aid_kit_location TEXT,
+      first_aid_person TEXT,
+      emergency_notes TEXT,
+      emergency_confirmed BOOLEAN NOT NULL DEFAULT false,
+      emergency_confirmed_by TEXT,
+      emergency_confirmed_at TIMESTAMPTZ,
+      open_questions TEXT,
+      cara_change_proposal TEXT,
+      cara_review_cleared JSONB,
+      status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft','Awaiting review','Approved','Archived')),
+      version INTEGER NOT NULL DEFAULT 1,
+      review_notes TEXT,
+      submitted_by TEXT,
+      submitted_at TIMESTAMPTZ,
+      approver TEXT,
+      approver_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      approved_at TIMESTAMPTZ,
+      created_by_staff_id INTEGER REFERENCES staff_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS cara_projects_cara_idx ON cara_projects(cara_id);
+    CREATE TABLE IF NOT EXISTS cara_project_peras (
+      project_id INTEGER NOT NULL REFERENCES cara_projects(id) ON DELETE CASCADE,
+      pera_id INTEGER NOT NULL REFERENCES pera_records(id) ON DELETE CASCADE,
+      PRIMARY KEY (project_id, pera_id)
+    );
+    CREATE TABLE IF NOT EXISTS cara_project_versions (
+      id SERIAL PRIMARY KEY,
+      project_id INTEGER NOT NULL REFERENCES cara_projects(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      snapshot JSONB NOT NULL,
+      approved_by TEXT,
+      approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      superseded_at TIMESTAMPTZ
+    );
+    CREATE TABLE IF NOT EXISTS cara_project_log (
+      id SERIAL PRIMARY KEY,
+      project_id INTEGER NOT NULL REFERENCES cara_projects(id) ON DELETE CASCADE,
+      changed_by TEXT,
+      action TEXT NOT NULL,
+      summary TEXT,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
 }
 
 module.exports = { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS };

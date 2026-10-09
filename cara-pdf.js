@@ -318,6 +318,14 @@ function renderCaraHtml(r, peraRows, { brand = 'PracReady', generatedAt = new Da
     </div>`;
 
   let n = 5;
+  let projects = '';
+  if (r.projects && r.projects.length) {
+    projects = `
+      <div class="section keep">
+        <h2>${n++}. Linked projects</h2>
+        <table class="kv">${kvRows(r.projects.map((p) => [`${p.ref} ${p.name}`, `${escapeHtml(p.status)} v${p.version} · ${escapeHtml(p.activity_class)} · ${escapeHtml(p.doc_purpose)}`]))}</table>
+      </div>`;
+  }
   let review = '';
   if (r.reviewed_at || r.review_notes) {
     const rows = [];
@@ -367,6 +375,7 @@ ${scope}
 ${pera}
 ${people}
 ${hazards}
+${projects}
 ${review}
 ${signoff}
 </body></html>`;
@@ -379,4 +388,4 @@ async function renderCaraPdf(r, peraRows, opts = {}) {
   return htmlToPdf(html, { footerLeft });
 }
 
-module.exports = { renderCaraHtml, renderCaraPdf, findChromium };
+module.exports = { renderCaraHtml, renderCaraPdf, findChromium, htmlToPdf, richText, escapeHtml, formatDate, CSS, LETTERHEAD_DATA_URI, SCHOOL_NAME, riskPill, toolName };

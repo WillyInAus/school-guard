@@ -1386,3 +1386,54 @@ tr.row-link:hover {
 /* CARA class group: year level / class size / age range side by side */
 .cohort-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 12px; }
 @media (max-width: 600px) { .cohort-grid { grid-template-columns: 1fr; } }
+
+/* CARA projects (cara-projects.js) */
+.prj-panel { border: 1px solid #E4DFD3; border-radius: 12px; padding: 14px 16px; background: #FFFFFF; margin-bottom: 18px; }
+.prj-panel-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.prj-table-wrap { overflow-x: auto; }
+.prj-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.prj-table th, .prj-table td { border-bottom: 1px solid #ECE7DC; padding: 7px 8px; text-align: left; vertical-align: top; }
+.prj-table th { color: #1B5E52; font-size: 12px; text-transform: uppercase; letter-spacing: .3px; background: #F7F5F1; }
+.prj-sub { color: #6B6659; font-size: 12px; }
+.prj-flag-item { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #F3D19E; }
+.prj-flag-item form { margin-top: 6px; }
+.prj-class-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 12px 0 4px; }
+.prj-class-strip > div { background: #F7F5F1; border: 1px solid #E4DFD3; border-radius: 10px; padding: 8px 10px; }
+.prj-class-strip span { display: block; font-size: 11.5px; color: #6B6659; text-transform: uppercase; letter-spacing: .3px; }
+.prj-class-strip strong { color: #1B5E52; }
+@media (max-width: 700px) { .prj-class-strip { grid-template-columns: 1fr 1fr; } }
+.prj-flags { display: grid; gap: 6px; margin: 10px 0 14px; }
+.prj-flags > div { padding: 8px 12px; border-radius: 8px; font-size: 14px; }
+.prj-flag-stop { background: #FBE0DD; color: #8f1111; font-weight: 600; }
+.prj-flag-bad { background: #FFF0EC; color: #9a3b00; }
+.prj-flag-mid { background: #FFF6E0; color: #6b4a00; }
+.prj-trigger { border: 1px solid #E4DFD3; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.prj-trigger-head { margin-bottom: 4px; }
+.prj-confirm { margin-top: 6px; font-size: 13.5px; }
+.prj-confirm-missing { color: #9a3b00; font-weight: 600; }
+.prj-inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.prj-inline-form input[type=text], .prj-inline-form select { padding: 6px 8px; border: 1px solid #E4DFD3; border-radius: 8px; font: inherit; font-size: 13.5px; }
+.prj-inline-form label { font-size: 13px; color: #6B6659; display: flex; flex-direction: column; gap: 2px; }
+.prj-review { border: 1px solid #1B5E52; border-radius: 12px; padding: 12px 14px; background: #F2F8F6; }
+.prj-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.prj-row-missing td { background: #FFF0EC; }
+.prj-row-unsure td { background: #FFF6E0; }
+.prj-versions { margin: 6px 0 0; padding-left: 18px; font-size: 13.5px; }
+.prj-cara-ref { margin-bottom: 14px; background: #F7F5F1; border-radius: 10px; padding: 8px 12px; }
+.prj-cara-ref summary { cursor: pointer; font-weight: 600; color: #1B5E52; }
+.prj-qgroup { border: 1px solid #E4DFD3; border-radius: 10px; padding: 8px 12px 4px; margin: 0 0 12px; }
+.prj-qgroup legend { font-weight: 600; color: #1B5E52; padding: 0 6px; }
+.prj-q { padding: 8px 0; border-bottom: 1px solid #F0EDE5; }
+.prj-q:last-child { border-bottom: none; }
+.prj-q-text { font-size: 14px; margin-bottom: 4px; }
+.prj-q-opts { display: flex; gap: 16px; font-size: 14px; }
+.prj-q-note { font-size: 12.5px; color: #6B6659; margin-top: 4px; }
+.prj-q-focus .prj-q-text::before { content: "Likely relevant · "; color: #1B5E52; font-size: 12px; font-weight: 600; }
+.prj-q-missing { background: #FFF6E0; margin: 0 -12px; padding: 8px 12px; }
+.prj-crit { color: #C0392B; font-weight: 700; }
+.prj-steps { display: grid; gap: 10px; margin-bottom: 8px; }
+.prj-step { display: grid; grid-template-columns: 28px 1fr 1fr 1fr auto; gap: 8px; align-items: start; border: 1px solid #E4DFD3; border-radius: 10px; padding: 8px; }
+.prj-step label { display: flex; flex-direction: column; font-size: 12px; color: #6B6659; gap: 2px; }
+.prj-step textarea { width: 100%; padding: 6px 8px; border: 1px solid #E4DFD3; border-radius: 8px; font: inherit; font-size: 13.5px; box-sizing: border-box; }
+.prj-step-num { font-weight: 700; color: #1B5E52; padding-top: 18px; }
+@media (max-width: 700px) { .prj-step { grid-template-columns: 1fr; } .prj-step-num { padding-top: 0; } }
