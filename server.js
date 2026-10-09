@@ -11,6 +11,7 @@ const sharp = require('sharp');
 const { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS } = require('./db');
 const { page, escapeHtml, requestContext, BRAND } = require('./views/layout');
 const { renderLanding } = require('./landing');
+const { renderCaraHtml, renderCaraPdf } = require('./cara-pdf');
 
 // Faith Lutheran College — Plainland letterhead, shown at the top of CARA PDF
 // exports (see GET /cara/:id/pdf below). Read once at startup; if the file
@@ -2997,6 +2998,24 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     );
 
     const safeName = (r.activity_name || 'CARA').replace(/[^a-z0-9 \-_.]/gi, '').trim() || 'CARA';
+
+    // ?preview=html shows the print layout in the browser (handy for tweaking
+    // the design in cara-pdf.js without downloading a PDF each time).
+    if (req.query.preview === 'html') {
+      return res.send(renderCaraHtml(r, toolsResult.rows, { brand: BRAND }));
+    }
+
+    // Preferred: HTML layout rendered by headless Chromium. If Chromium isn't
+    // available, fall through to the older PDFKit export below.
+    try {
+      const pdf = await renderCaraPdf(r, toolsResult.rows, { brand: BRAND });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="CARA - ${safeName}.pdf"`);
+      return res.end(pdf);
+    } catch (e) {
+      console.warn('CARA HTML->PDF render failed, using PDFKit fallback:', e.message);
+    }
+
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="CARA - ${safeName}.pdf"`);
 
