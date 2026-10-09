@@ -144,7 +144,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
 
   async function callClaude({ userText, tool, maxTokens }) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 90000);
+    const timer = setTimeout(() => controller.abort(), 95000);
     try {
       const resp = await fetch(API_URL, {
         method: 'POST',
@@ -177,7 +177,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         throw err;
       }
       const block = (data.content || []).find((b) => b.type === 'tool_use' && b.name === tool.name);
-      if (block) return { result: block.input || {}, usage: data.usage || {}, model: data.model || MODEL };
+      if (block) return { result: block.input || {}, usage: data.usage || {}, model: data.model || MODEL, truncated: data.stop_reason === 'max_tokens' };
       // Fallback: the model answered in text; accept it if it is a JSON object.
       const text = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
       const m = text.match(/\{[\s\S]*\}/);
@@ -265,7 +265,9 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       if (!String(c.activity_name || '').trim()) return res.status(400).json({ ok: false, error: 'Enter the activity name first.' });
       const peras = await loadPeras(b.tool_ids);
       const userText = `Draft suggested content for this CARA. Where a field already has good text, leave it out of your answer; where it has some text, suggest an improved full version that keeps the teacher's points.\n\n=== CARA so far ===\n${caraContext(c)}\n\n=== PERAs selected ===\n${peraContext(peras)}`;
-      const { result, usage, model } = await callClaude({ userText, tool: DRAFT_TOOL, maxTokens: 4000 });
+      // 12 long fields for a many-machine activity can exceed 4000 tokens, which
+      // silently cut off the last fields (e.g. Student controls). Allow more.
+      const { result, usage, model, truncated } = await callClaude({ userText, tool: DRAFT_TOOL, maxTokens: 8000 });
       await logUsage({ kind: 'draft', staffId: req.staffUser.id, model, usage, result: null });
       const suggestions = {};
       for (const k of Object.keys(DRAFT_FIELDS)) {
@@ -277,7 +279,10 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         suggestions,
         risk: RISK_LEVELS.includes(result.suggested_risk_level) ? { level: result.suggested_risk_level, reason: clip(result.risk_reason, 300) } : null,
         consent: typeof result.consent_recommended === 'boolean' ? { recommended: result.consent_recommended, reason: clip(result.consent_reason, 300) } : null,
-        notes: Array.isArray(result.notes) ? result.notes.slice(0, 3).map((n) => clip(n, 300)) : [],
+        notes: [
+          ...(truncated ? ['The AI ran out of space before finishing, so some fields may have no suggestion. Check every section, or run Draft again.'] : []),
+          ...(Array.isArray(result.notes) ? result.notes.slice(0, 3).map((n) => clip(n, 300)) : []),
+        ],
         rules: ruleChecks(c, peras),
       });
     } catch (err) {
