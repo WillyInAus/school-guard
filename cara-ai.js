@@ -13,7 +13,7 @@ const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
 const RISK_ORDER = { Low: 1, Medium: 2, High: 3, Extreme: 4 };
 const RISK_LEVELS = ['Low', 'Medium', 'High', 'Extreme'];
 
-// Fields the assistant may draft (never students_notes or submitted_by).
+// Fields the assistant may draft (students_notes only as an empty-box template, see STUDENTS_GUIDE; never submitted_by).
 const DRAFT_FIELDS = {
   activity_scope: 'Activity scope',
   induction_instruction: 'Induction and instruction',
@@ -45,6 +45,10 @@ const FIELD_GUIDE = {
   emergency_first_aid: 'Emergency and first aid arrangements: first aid kit/burns kit, how to get help, emergency stops and isolation, fire response, incident reporting. Use [placeholders] for locations and names.',
 };
 
+// Students is only drafted when the teacher's box is empty, and its contents
+// are never sent to the AI (privacy) - only a template is suggested.
+const STUDENTS_GUIDE = 'A general description of the class group as a template with [placeholders]: year level and course, age range, class size, prior workshop experience relevant to this activity, and how students with additional needs are identified and managed (e.g. teacher checks medical/learning support info in [school system] before the first practical; individual plans agreed with Learning Support). Use "- " bullets and short sub-headings ending in ":" such as "Prior experience:" and "Students with additional needs:". No names, no specific conditions about real students.';
+
 const HAZARD_PAIRS = [
   ['environmental_hazards', 'environmental_controls', 'Environmental'],
   ['facilities_hazards', 'facilities_controls', 'Facilities'],
@@ -60,7 +64,7 @@ Rules:
 - Be practical and specific to the activity; avoid generic filler.
 - Each field has its own job (see the field descriptions). Never repeat the same point in two fields; put it only in the field it belongs to.
 - Supervision = how closely and at what ratio students are supervised. Supervisor qualification = who may supervise and what they must hold. Keep them separate.
-- Student-specific notes are withheld for privacy; do not ask for them.`;
+- You never see real student information. If asked to draft the Students field, write a general cohort template using [placeholders] (year level, course, class size, school system name). Never invent student names, medical conditions or numbers.`;
 
 const ERROR_TEXT = {
   auth: 'The AI key was rejected. Check ANTHROPIC_API_KEY in the server .env file (it should start with sk-ant-api).',
@@ -283,16 +287,21 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       for (const k of Object.keys(DRAFT_FIELDS)) c[k] = b[k];
       if (!String(c.activity_name || '').trim()) return res.status(400).json({ ok: false, error: 'Enter the activity name first.' });
       const peras = await loadPeras(b.tool_ids);
-      const userText = `Draft suggested content for this CARA. Where a field already has good text, leave it out of your answer; where it has some text, suggest an improved full version that keeps the teacher's points.\n\n=== CARA so far ===\n${caraContext(c)}\n\n=== PERAs selected ===\n${peraContext(peras)}`;
+      const wantStudents = b.students_notes_empty === '1';
+      const tool = wantStudents
+        ? { ...DRAFT_TOOL, input_schema: { ...DRAFT_TOOL.input_schema, properties: { ...DRAFT_TOOL.input_schema.properties, students_notes: { type: 'string', description: `Suggested template for "Students". ${STUDENTS_GUIDE}` } } } }
+        : DRAFT_TOOL;
+      const userText = `${wantStudents ? 'The Students box is empty: include a students_notes template.\n\n' : ''}Draft suggested content for this CARA. Where a field already has good text, leave it out of your answer; where it has some text, suggest an improved full version that keeps the teacher's points.\n\n=== CARA so far ===\n${caraContext(c)}\n\n=== PERAs selected ===\n${peraContext(peras)}`;
       // 12 long fields for a many-machine activity can exceed 4000 tokens, which
       // silently cut off the last fields (e.g. Student controls). Allow more.
-      const { result, usage, model, truncated } = await callClaude({ userText, tool: DRAFT_TOOL, maxTokens: 8000 });
+      const { result, usage, model, truncated } = await callClaude({ userText, tool, maxTokens: 8000 });
       await logUsage({ kind: 'draft', staffId: req.staffUser.id, model, usage, result: null });
       const suggestions = {};
       for (const k of Object.keys(DRAFT_FIELDS)) {
         const v = String(result[k] || '').trim();
         if (v && v !== String(c[k] || '').trim()) suggestions[k] = v.slice(0, 4000);
       }
+      if (wantStudents && String(result.students_notes || '').trim()) suggestions.students_notes = String(result.students_notes).trim().slice(0, 4000);
       res.json({
         ok: true,
         suggestions,
@@ -465,7 +474,10 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         }
         btn.addEventListener('click', function () {
           var fd = new FormData(form);
+          // Never send what's typed in Students; only whether it's empty.
+          var studentsEmpty = !String(fd.get('students_notes') || '').trim();
           fd.delete('students_notes'); fd.delete('submitted_by');
+          fd.append('students_notes_empty', studentsEmpty ? '1' : '0');
           var params = new URLSearchParams();
           fd.forEach(function (v, k) { if (typeof v === 'string') params.append(k, v); });
           if (!(fd.get('activity_name') || '').trim()) { statusEl.textContent = 'Enter the activity name first.'; return; }
