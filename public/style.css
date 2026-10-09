@@ -572,6 +572,7 @@ tr.row-link:hover {
 }
 
 .form-row input[type="text"],
+.form-row input[type="number"],
 .form-row select,
 .form-row textarea {
   width: 100%;
