@@ -134,16 +134,16 @@ function richText(value, { columnsOver = 0 } = {}) {
     if (BULLET_RE.test(raw)) {
       flushPara();
       if (!list) list = [];
-      list.push(escapeHtml(raw.replace(BULLET_RE, '').trim()));
+      list.push(inlineMd(escapeHtml(raw.replace(BULLET_RE, '').trim())));
     } else if (list && /^\s{2,}/.test(raw)) {
-      list[list.length - 1] += ' ' + escapeHtml(raw.trim());
+      list[list.length - 1] += ' ' + inlineMd(escapeHtml(raw.trim()));
     } else {
       flushList();
       if (!para) para = [];
       // A short line ending in ":" (e.g. "Induction must cover:") is a
       // sub-heading for the list or text that follows, so show it in bold.
       const line = raw.trim();
-      para.push(/:$/.test(line) && line.length <= 150 ? `<strong class="subhead">${escapeHtml(line)}</strong>` : escapeHtml(line));
+      para.push(/:$/.test(line) && line.length <= 150 ? `<strong class="subhead">${escapeHtml(line)}</strong>` : inlineMd(escapeHtml(line)));
     }
   }
   flushList();
@@ -155,6 +155,11 @@ function richText(value, { columnsOver = 0 } = {}) {
 // Assessment"; the section heading already says that, so show just the tool.
 function toolName(name) {
   return String(name || '').replace(/\s*[—–-]\s*(?:Plant\s*&\s*Equipment|Safe Operating)\s+Risk Assessment\s*$/i, '').trim() || String(name || '');
+}
+
+// Text saved before the AI was told "no markdown" may contain **bold**.
+function inlineMd(escaped) {
+  return escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 }
 
 function riskPill(level) {

@@ -49,6 +49,19 @@ const FIELD_GUIDE = {
 // are never sent to the AI (privacy) - only a template is suggested.
 const STUDENTS_GUIDE = 'A general description of the class group as a template with [placeholders]: year level and course, age range, class size, prior workshop experience relevant to this activity, and how students with additional needs are identified and managed (e.g. teacher checks medical/learning support info in [school system] before the first practical; individual plans agreed with Learning Support). Use "- " bullets and short sub-headings ending in ":" such as "Prior experience:" and "Students with additional needs:". No names, no specific conditions about real students.';
 
+// Belt and braces: strip any markdown the model still uses, since the form
+// boxes are plain text ("**Label:**" would show as literal asterisks).
+function plainText(v) {
+  return String(v || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*[*•]\s+/gm, '- ')
+    .trim();
+}
+
 const HAZARD_PAIRS = [
   ['environmental_hazards', 'environmental_controls', 'Environmental'],
   ['facilities_hazards', 'facilities_controls', 'Facilities'],
@@ -61,6 +74,7 @@ Rules:
 - Base everything on the PERA details provided. Do not contradict a PERA, and never relax a PERA control or supervision requirement.
 - Do not invent school-specific facts (names, room numbers, staff, qualifications held, first aid locations). Where something school-specific is needed, write a short placeholder in square brackets, e.g. [name of supervising teacher].
 - Use Australian English, plain language a teacher can paste straight in, and short "- " bullet lines where a list helps.
+- Plain text only: NO markdown. Never use **, __, # headings or backticks. To group bullets, put a short sub-heading on its own line ending in ":" (e.g. "Prior experience:"), then its "- " bullets underneath. Keep each bullet to one or two short lines.
 - Be practical and specific to the activity; avoid generic filler.
 - Each field has its own job (see the field descriptions). Never repeat the same point in two fields; put it only in the field it belongs to.
 - Supervision = how closely and at what ratio students are supervised. Supervisor qualification = who may supervise and what they must hold. Keep them separate.
@@ -298,10 +312,10 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       await logUsage({ kind: 'draft', staffId: req.staffUser.id, model, usage, result: null });
       const suggestions = {};
       for (const k of Object.keys(DRAFT_FIELDS)) {
-        const v = String(result[k] || '').trim();
+        const v = plainText(result[k]);
         if (v && v !== String(c[k] || '').trim()) suggestions[k] = v.slice(0, 4000);
       }
-      if (wantStudents && String(result.students_notes || '').trim()) suggestions.students_notes = String(result.students_notes).trim().slice(0, 4000);
+      if (wantStudents && String(result.students_notes || '').trim()) suggestions.students_notes = plainText(result.students_notes).slice(0, 4000);
       res.json({
         ok: true,
         suggestions,
