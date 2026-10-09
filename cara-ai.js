@@ -47,7 +47,7 @@ const FIELD_GUIDE = {
 
 // Students is only drafted when the teacher's box is empty, and its contents
 // are never sent to the AI (privacy) - only a template is suggested.
-const STUDENTS_GUIDE = 'A general description of the class group as a template with [placeholders]: year level and course, age range, class size, prior workshop experience relevant to this activity, and how students with additional needs are identified and managed (e.g. teacher checks medical/learning support info in [school system] before the first practical; individual plans agreed with Learning Support). Use "- " bullets and short sub-headings ending in ":" such as "Prior experience:" and "Students with additional needs:". No names, no specific conditions about real students.';
+const STUDENTS_GUIDE = 'A general description of the class group. Use the Year level, Course, Class size, Age range and Prior experience given in the CARA details; only use a [placeholder] for one that is blank. Cover: year level and course, age range, class size, prior workshop experience relevant to this activity, and how students with additional needs are identified and managed (e.g. teacher checks medical/learning support info in [school system] before the first practical; individual plans agreed with Learning Support). Use "- " bullets and short sub-headings ending in ":" such as "Prior experience:" and "Students with additional needs:". No names, no specific conditions about real students.';
 
 // Belt and braces: strip any markdown the model still uses, since the form
 // boxes are plain text ("**Label:**" would show as literal asterisks).
@@ -78,7 +78,7 @@ Rules:
 - Be practical and specific to the activity; avoid generic filler.
 - Each field has its own job (see the field descriptions). Never repeat the same point in two fields; put it only in the field it belongs to.
 - Supervision = how closely and at what ratio students are supervised. Supervisor qualification = who may supervise and what they must hold. Keep them separate.
-- You never see real student information. If asked to draft the Students field, write a general cohort template using [placeholders] (year level, course, class size, school system name). Never invent student names, medical conditions or numbers.`;
+- You never see real student information. If asked to draft the Students field, describe the class group using the Class group details provided (year level, course, class size, age range, prior experience), with [placeholders] only for details that are blank (and for the school's system name). Never invent student names, medical conditions or numbers.`;
 
 const ERROR_TEXT = {
   auth: 'The AI key was rejected. Check ANTHROPIC_API_KEY in the server .env file (it should start with sk-ant-api).',
@@ -119,6 +119,8 @@ function overLimit(userId, perHour = 30) {
   recentCalls.set(userId, list);
   return false;
 }
+
+const { cohortContextLines, COHORT_FIELDS } = require('./cara-cohort');
 
 module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRecord }) {
   async function loadPeras(ids) {
@@ -171,6 +173,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       `Class/unit: ${clip(c.class_unit, 200) || '(blank)'}`,
       `Risk level chosen: ${c.risk_level || '(blank)'}`,
       `Parent consent required ticked: ${c.consent_required ? 'Yes' : 'No'}`,
+      ...cohortContextLines(c),
     ];
     for (const [key, label] of Object.entries(DRAFT_FIELDS)) {
       lines.push(`${label}: ${clip(c[key], 1500) || '(blank)'}`);
@@ -299,6 +302,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       const b = req.body || {};
       const c = { activity_name: b.activity_name, class_unit: b.class_unit, risk_level: b.risk_level, consent_required: b.consent_required === 'true' };
       for (const k of Object.keys(DRAFT_FIELDS)) c[k] = b[k];
+      for (const [k] of COHORT_FIELDS) c[k] = b[k];
       if (!String(c.activity_name || '').trim()) return res.status(400).json({ ok: false, error: 'Enter the activity name first.' });
       const peras = await loadPeras(b.tool_ids);
       const wantStudents = b.students_notes_empty === '1';

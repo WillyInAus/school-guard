@@ -1382,3 +1382,7 @@ tr.row-link:hover {
 .pretty-view > :last-child, .pretty-done > :last-child { margin-bottom: 0; }
 .pt-subhead { color: #1B5E52; }
 .pretty-done { white-space: normal !important; }
+
+/* CARA class group: year level / class size / age range side by side */
+.cohort-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 12px; }
+@media (max-width: 600px) { .cohort-grid { grid-template-columns: 1fr; } }

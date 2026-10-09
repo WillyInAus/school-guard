@@ -7,6 +7,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const { cohortSummary } = require('./cara-cohort');
+
 const SCHOOL_NAME = 'Faith Lutheran College — Plainland';
 
 // Letterhead embedded as a data URI so the page never needs network access.
@@ -291,6 +293,8 @@ function renderCaraHtml(r, peraRows, { brand = 'PracReady', generatedAt = new Da
     <div class="section">
       <h2>3. Students, supervision &amp; preparation</h2>
       <table class="kv">${kvRows([
+        ...(cohortSummary(r) ? [['Class group', escapeHtml(cohortSummary(r))]] : []),
+        ...(r.prior_experience ? [['Prior experience', richText(r.prior_experience)]] : []),
         ['Students', richText(r.students_notes)],
         ['Supervision', richText(r.supervision_notes)],
         ['Supervisor qualification', richText(r.supervisor_qualification)],

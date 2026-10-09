@@ -140,6 +140,12 @@ async function migrate() {
   `);
 
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS teacher_signature TEXT;`);
+  // Class group details (see cara-cohort.js)
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS year_level TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS course TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS class_size INTEGER;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS age_range TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS prior_experience TEXT;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS signed_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT false;`);
 

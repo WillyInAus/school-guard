@@ -12,6 +12,7 @@ const { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS } = requ
 const { page, escapeHtml, requestContext, BRAND } = require('./views/layout');
 const { renderLanding } = require('./landing');
 const { renderCaraHtml, renderCaraPdf } = require('./cara-pdf');
+const { cohortFromBody, saveCohort, cohortSummary, cohortFormHtml, COHORT_FIELDS } = require('./cara-cohort');
 
 // Faith Lutheran College — Plainland letterhead, shown at the top of CARA PDF
 // exports (see GET /cara/:id/pdf below). Read once at startup; if the file
@@ -2106,6 +2107,7 @@ app.get('/cara/new', async (req, res, next) => {
           <label for="activity_scope">Activity scope</label>
           <textarea id="activity_scope" name="activity_scope" placeholder="What will students be doing, over what period, and where does it sit in the unit plan?"></textarea>
         </div>
+${cohortFormHtml(null, escapeHtml)}
 
         <div class="form-section-title">Inherent risk level</div>
         <p class="form-section-hint">Based on the highest-risk hazard or tool involved. Low = document only. Medium = CARA recommended. High = CARA + principal/DP approval, consent recommended. Extreme = CARA + principal approval, consent required.</p>
@@ -2271,6 +2273,7 @@ app.post('/cara', async (req, res, next) => {
     );
 
     const caraId = result.rows[0].id;
+    await saveCohort(pool, caraId, cohortFromBody(req.body));
 
     const toolIds = [].concat(req.body.tool_ids || []).filter(Boolean);
     if (toolIds.length) {
@@ -2377,6 +2380,7 @@ app.get('/cara/:id/edit', async (req, res, next) => {
           <label for="activity_scope">Activity scope</label>
           <textarea id="activity_scope" name="activity_scope">${escapeHtml(r.activity_scope || '')}</textarea>
         </div>
+${cohortFormHtml(r, escapeHtml)}
 
         <div class="form-section-title">Inherent risk level</div>
         <div class="form-row">
@@ -2557,10 +2561,12 @@ app.post('/cara/:id/edit', async (req, res, next) => {
     const afterToolIds = [].concat(req.body.tool_ids || []).filter(Boolean).map(String);
 
     const newConsentRequired = consent_required === 'true';
+    const cohort = cohortFromBody(req.body);
 
     const fields = [
       ['activity_name', 'Activity name', activity_name],
       ['class_unit', 'Class / unit', class_unit || null],
+      ...COHORT_FIELDS.map(([k, label]) => [k, label, cohort[k]]),
       ['activity_scope', 'Activity scope', activity_scope || null],
       ['risk_level', 'Risk level', risk_level],
       ['students_notes', 'Students', students_notes || null],
@@ -2642,6 +2648,7 @@ app.post('/cara/:id/edit', async (req, res, next) => {
         req.params.id,
       ]
     );
+    await saveCohort(pool, req.params.id, cohort);
 
     await pool.query('DELETE FROM cara_tool_links WHERE cara_id = $1', [req.params.id]);
     if (afterToolIds.length) {
@@ -2893,6 +2900,11 @@ app.get('/cara/:id', async (req, res, next) => {
               ? `<img src="${r.teacher_signature}" alt="Teacher signature" class="signature-image">${r.signed_at ? `<div class="detail-value" style="margin-top:4px;font-size:12px;color:#6B6659;">Signed ${formatDate(r.signed_at)}</div>` : ''}`
               : `<div class="detail-value">—</div>`}
           </div>
+          ${cohortSummary(r) || r.prior_experience ? `<div class="detail-section">
+            <div class="detail-label">Class group</div>
+            <div class="detail-value">${escapeHtml(cohortSummary(r) || '—')}</div>
+            ${r.prior_experience ? `<div class="detail-value pretty-text" style="margin-top:6px;">${escapeHtml(r.prior_experience)}</div>` : ''}
+          </div>` : ''}
           <div class="detail-section">
             <div class="detail-label">Students</div>
             <div class="detail-value pretty-text">${escapeHtml(r.students_notes || '—')}</div>
@@ -3357,6 +3369,7 @@ app.post('/cara/:id/duplicate', async (req, res, next) => {
       ]
     );
     const newId = insertResult.rows[0].id;
+    await saveCohort(pool, newId, r);
 
     const toolLinks = await pool.query('SELECT pera_id FROM cara_tool_links WHERE cara_id = $1', [req.params.id]);
     if (toolLinks.rows.length) {
@@ -5592,6 +5605,7 @@ app.get('/admin/cara/:id/edit', requireRole('admin'), async (req, res, next) => 
           <label for="status">Status</label>
           <select id="status" name="status" required>${statusOptions}</select>
         </div>
+${cohortFormHtml(r, escapeHtml)}
         <div class="form-row">
           <label for="students_notes">Students</label>
           <textarea id="students_notes" name="students_notes">${escapeHtml(r.students_notes || '')}</textarea>
@@ -5705,6 +5719,7 @@ app.post('/admin/cara/:id', requireRole('admin'), async (req, res, next) => {
         req.params.id,
       ]
     );
+    await saveCohort(pool, req.params.id, cohortFromBody(req.body));
 
     res.redirect(`/admin/cara/${req.params.id}/edit`);
   } catch (err) {
