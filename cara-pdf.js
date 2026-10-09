@@ -148,6 +148,12 @@ function richText(value, { columnsOver = 0 } = {}) {
   return out.join('');
 }
 
+// PERA names are stored as e.g. "Metal lathe — Plant & Equipment Risk
+// Assessment"; the section heading already says that, so show just the tool.
+function toolName(name) {
+  return String(name || '').replace(/\s*[—–-]\s*(?:Plant\s*&\s*Equipment|Safe Operating)\s+Risk Assessment\s*$/i, '').trim() || String(name || '');
+}
+
 function riskPill(level) {
   const cls = { Low: 'low', Medium: 'med', High: 'high', Extreme: 'ext' }[level] || 'med';
   return `<span class="pill risk-${cls}">${escapeHtml(level || '—')}</span>`;
@@ -268,7 +274,7 @@ function renderCaraHtml(r, peraRows, { brand = 'PracReady', generatedAt = new Da
     <div class="section keep">
       <h2>2. Plant &amp; equipment risk assessments (PERA) used</h2>
       <div class="box">${peraRows.length
-        ? `<ul class="pera">${peraRows.map((t) => `<li>${riskPill(t.risk_level)} ${escapeHtml(t.activity_name)}</li>`).join('')}</ul>`
+        ? `<ul class="pera">${peraRows.map((t) => `<li>${riskPill(t.risk_level)} ${escapeHtml(toolName(t.activity_name))}</li>`).join('')}</ul>`
         : '<span class="empty">No PERAs linked.</span>'}</div>
     </div>`;
 
