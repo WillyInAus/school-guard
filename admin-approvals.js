@@ -150,12 +150,32 @@ module.exports = function registerAdminApprovals(app, deps) {
         ...recentCaraR.rows.map((r) => ({ ...r, kind: 'CARA', href: `/cara/${r.id}`, ok: r.summary.startsWith('Approved') })),
       ].sort((a, b) => new Date(b.changed_at) - new Date(a.changed_at)).slice(0, 15);
 
+      // Project safety documents awaiting review (decided on the project page,
+      // where the trigger confirmations and classification are recorded).
+      const projR = await pool.query(`
+        SELECT p.id, p.name, p.version, p.activity_class, p.doc_purpose, p.submitted_by, p.submitted_at, c.id AS cara_id, c.activity_name AS cara_name
+        FROM cara_projects p JOIN cara_records c ON c.id = p.cara_id
+        WHERE p.status = 'Awaiting review' ORDER BY p.submitted_at`);
+      const projSection = `
+        <section id="projects" class="apv-section">
+          <h2 class="apv-h2">Projects awaiting review <span class="apv-count">${projR.rows.length}</span></h2>
+          ${projR.rows.length ? `<div class="apv-list">${projR.rows.map((p) => `
+            <article class="apv-card">
+              <header class="apv-head"><div>
+                <a class="apv-title" href="/projects/${p.id}">${escapeHtml(p.name)}</a>
+                <div class="apv-meta">Project v${p.version} · under <a href="/cara/${p.cara_id}">${escapeHtml(p.cara_name)}</a> · submitted${p.submitted_by ? ` by ${escapeHtml(p.submitted_by)}` : ''} · ${formatBrisbaneDate(p.submitted_at)}</div>
+              </div></header>
+              <div class="apv-req">${escapeHtml(p.activity_class)} · ${escapeHtml(p.doc_purpose)} — open the project to confirm triggers, classify and approve.</div>
+            </article>`).join('')}</div>` : '<p class="apv-empty">No projects are waiting for review.</p>'}
+        </section>`;
+
       const body = `
         ${adminHeader('Approvals', 'PERAs and CARAs waiting for a decision')}
         ${me.role === 'admin' ? adminTabs('approvals') : ''}
         <nav class="apv-jump">
           <a href="#cara">CARAs <span class="apv-count">${carasR.rows.length}</span></a>
           <a href="#pera">PERAs <span class="apv-count">${perasR.rows.length}</span></a>
+          <a href="#projects">Projects <span class="apv-count">${projR.rows.length}</span></a>
           <a href="#recent">Recent decisions</a>
         </nav>
 
@@ -168,6 +188,8 @@ module.exports = function registerAdminApprovals(app, deps) {
           <h2 class="apv-h2">PERAs awaiting approval <span class="apv-count">${perasR.rows.length}</span></h2>
           ${perasR.rows.length ? `<div class="apv-list">${perasR.rows.map(peraCard).join('')}</div>` : '<p class="apv-empty">No PERAs are waiting for approval. Drafts appear here once they are submitted.</p>'}
         </section>
+
+        ${projSection}
 
         <section id="recent" class="apv-section">
           <h2 class="apv-h2">Recent decisions <span class="apv-sub">last 30 days</span></h2>

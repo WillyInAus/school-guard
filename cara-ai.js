@@ -182,7 +182,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
     return lines.join('\n');
   }
 
-  async function callClaude({ userText, tool, maxTokens }) {
+  async function callClaude({ userText, tool, maxTokens, system }) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 95000);
     try {
@@ -197,7 +197,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         body: JSON.stringify({
           model: MODEL,
           max_tokens: maxTokens,
-          system: SYSTEM_PROMPT,
+          system: system || SYSTEM_PROMPT,
           tools: [tool],
           // Newer models don't accept a forced tool_choice, so ask for the
           // tool in the prompt and let the model choose ("auto").
@@ -529,5 +529,11 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       </script>`;
   }
 
-  return { ruleChecks, checkPanelHtml, draftPanelHtml, apiEnabled };
+  // Shared with cara-projects.js so project drafting uses the same PERA
+  // context, API call, rate limit and usage logging.
+  return {
+    ruleChecks, checkPanelHtml, draftPanelHtml, apiEnabled,
+    loadPeras, peraContext, callClaude, overLimit, logUsage, plainText, clip,
+    errorMessage: (err) => ERROR_TEXT[errorCode(err)],
+  };
 };

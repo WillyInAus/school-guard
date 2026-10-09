@@ -2028,6 +2028,9 @@ app.get('/cara', async (req, res, next) => {
 });
 
 const caraAi = require('./cara-ai')({ app, pool, escapeHtml, canManageOwnRecord });
+const caraProjects = require('./cara-projects')(app, {
+  pool, page, escapeHtml, requireRole, canManageOwnRecord, formatDate, formatDateTime, riskBadgeClass, caraAi, BRAND,
+});
 
 // Linked PERAs that aren't approved (or are archived). A CARA can list these
 // while it's being drafted, but can't be submitted or approved until they are.
@@ -2137,7 +2140,9 @@ ${cohortFormHtml(null, escapeHtml)}
         <div class="form-section-title">Emergency and first aid</div>
         <p class="form-section-hint">Pre-filled with standard procedure — edit if this activity needs anything extra (e.g. off-site, remote location, higher-risk equipment).</p>
         <div class="form-row">
-          <textarea id="emergency_first_aid" name="emergency_first_aid">If an injury occurs, assess severity and apply first aid. If the injury is reportable, the school's sick bay/nurse station is to be notified immediately. First aid kit is located in the workshop. Supervising teacher holds current first aid/CPR.</textarea>
+          <textarea id="emergency_first_aid" name="emergency_first_aid">If an injury occurs, assess severity and apply first aid. If the injury is reportable, the school's sick bay/nurse station is to be notified immediately.
+First aid kit location: [confirm for this activity's location]
+Person with current first aid/CPR: [confirm name]</textarea>
         </div>
 
         <div class="form-section-title">Induction and instruction</div>
@@ -2720,6 +2725,7 @@ app.get('/cara/:id', async (req, res, next) => {
       : `<div class="detail-value">No PERA linked.</div>`;
 
     const checkPanel = r.archived ? '' : await caraAi.checkPanelHtml(r, req.staffUser, req.query);
+    const projectsPanel = await caraProjects.caraPanelHtml(r, req.staffUser);
     const unapprovedPeras = toolsResult.rows.filter((t) => t.archived || t.status !== 'Approved');
     const unapprovedNotice = unapprovedPeras.length
       ? `<div class="alert alert-warning cara-unapproved">
@@ -2884,6 +2890,7 @@ app.get('/cara/:id', async (req, res, next) => {
         <span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
         ${r.archived ? `<span class="badge" style="background:#F0EDE5;color:#6B6659;margin-left:6px;">Archived</span>` : ''}
       </div>
+      ${projectsPanel}
       <div class="detail-grid">
         <div>
           <div class="detail-section">
@@ -3014,11 +3021,13 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     // ?preview=html shows the print layout in the browser (handy for tweaking
     // the design in cara-pdf.js without downloading a PDF each time).
     if (req.query.preview === 'html') {
+      r.projects = await caraProjects.projectsForCaraPdf(r.id);
       return res.send(renderCaraHtml(r, toolsResult.rows, { brand: BRAND }));
     }
 
     // Preferred: HTML layout rendered by headless Chromium. If Chromium isn't
     // available, fall through to the older PDFKit export below.
+    r.projects = await caraProjects.projectsForCaraPdf(r.id);
     try {
       const pdf = await renderCaraPdf(r, toolsResult.rows, { brand: BRAND });
       res.setHeader('Content-Type', 'application/pdf');
