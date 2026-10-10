@@ -399,7 +399,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       res.json({
         ok: true,
         suggestions,
-        risk: RISK_LEVELS.includes(result.suggested_risk_level) ? { level: result.suggested_risk_level, reason: clip(result.risk_reason, 300) } : null,
+        risk: RISK_LEVELS.includes(result.suggested_risk_level) ? { level: result.suggested_risk_level, reason: clip(result.risk_reason, 900) } : null,
         consent: typeof result.consent_recommended === 'boolean' ? { recommended: result.consent_recommended, reason: clip(result.consent_reason, 300) } : null,
         notes: [
           ...safety,
@@ -523,6 +523,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         </div>`;
     }
 
+    if (!canRun && !aiHtml && !notice) return '';
     return `
       <div class="ai-check-panel" id="ai-check">
         <div class="ai-check-head">

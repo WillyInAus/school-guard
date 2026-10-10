@@ -1645,3 +1645,18 @@ html { scroll-padding-bottom: calc(var(--stage-bar-h) + 24px); scroll-padding-to
 textarea.ph-flash { animation: phflash 1.6s ease-out; }
 @keyframes phflash { 0% { box-shadow: 0 0 0 4px #F3C16B; } 100% { box-shadow: 0 0 0 0 transparent; } }
 .ph-mark { background: #FBE3B8; color: #7A4A00; border-radius: 4px; padding: 0 3px; font-weight: 600; }
+/* Reviewer decision: approve or send back, side by side */
+.review-decision { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 12px 0 16px; }
+.review-col { border: 1px solid #E4DFD3; border-radius: 12px; padding: 14px 16px; background: #fff; display: flex; flex-direction: column; }
+.review-col h3 { margin: 0 0 8px; font-size: 15px; color: #1A1D1B; }
+.review-col .form-row { margin-bottom: 12px; flex: 1; }
+.review-col input[type="text"] { max-width: 360px; }
+.review-col .btn { align-self: flex-start; width: auto; min-width: 140px; }
+.review-approve { border-color: #BFDCCD; background: #F6FBF8; }
+.review-return { border-color: #F0C98A; background: #FFFBF4; }
+.btn-return { background: #fff; color: #8A4B0F; border: 1px solid #D9962E; }
+.btn-return:hover { background: #FBE3B8; }
+.review-sentback { background: #FFF4E5; border: 1px solid #F0C98A; border-radius: 10px; padding: 10px 14px; margin: 10px 0; font-size: 14px; }
+@media (max-width: 760px) { .review-decision { grid-template-columns: 1fr; } }
+.review-blocked { font-size: 13.5px; color: #8A4B0F; margin: 0 0 10px; } .review-blocked a { color: #1B5E52; font-weight: 600; }
+.review-col .btn { justify-content: center; text-align: center; }

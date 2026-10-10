@@ -375,7 +375,7 @@ function renderCaraHtml(r, peraRows, { brand = 'PracReady', generatedAt = new Da
       <table class="sign">
         <thead><tr><th>Role</th><th>Name</th><th>Signature</th><th>Date</th></tr></thead>
         <tbody>
-          <tr><td class="role">Prepared by (teacher)</td><td>${escapeHtml(r.submitted_by || '—')}</td><td>${sigImg}</td><td>${escapeHtml(r.signed_at ? formatDate(r.signed_at) : '—')}</td></tr>
+          <tr><td class="role">Prepared by (teacher/trainer)</td><td>${escapeHtml(r.submitted_by || '—')}</td><td>${sigImg}</td><td>${escapeHtml(r.signed_at ? formatDate(r.signed_at) : '—')}</td></tr>
           <tr><td class="role">Approved by</td><td>${approved ? escapeHtml(r.approver || '—') : '<span class="line">Pending approval</span>'}</td>
               <td>${approved ? 'Approved electronically in ' + escapeHtml(brand) : ''}</td>
               <td>${approved ? escapeHtml(formatDate(r.approved_at)) : ''}</td></tr>
