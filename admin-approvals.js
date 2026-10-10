@@ -1,3 +1,4 @@
+const features = require('./features');
 // Approvals queue (/admin/approvals): every PERA and CARA waiting for a
 // decision on one page, with the key facts needed to decide (risk and who
 // must approve, minimum-safety checklist progress, SOP attached, student use)
@@ -155,7 +156,7 @@ module.exports = function registerAdminApprovals(app, deps) {
 
       // Project safety documents awaiting review (decided on the project page,
       // where the trigger confirmations and classification are recorded).
-      const projR = await pool.query(`
+      const projR = !features.projects ? { rows: [] } : await pool.query(`
         SELECT p.id, p.name, p.version, p.activity_class, p.doc_purpose, p.submitted_by, p.submitted_at, c.id AS cara_id, c.activity_name AS cara_name
         FROM cara_projects p JOIN cara_records c ON c.id = p.cara_id
         WHERE p.status = 'Awaiting review' ORDER BY p.submitted_at`);
@@ -178,7 +179,7 @@ module.exports = function registerAdminApprovals(app, deps) {
         <nav class="apv-jump">
           <a href="#cara">CARAs <span class="apv-count">${carasR.rows.length}</span></a>
           <a href="#pera">PERAs <span class="apv-count">${perasR.rows.length}</span></a>
-          <a href="#projects">Projects <span class="apv-count">${projR.rows.length}</span></a>
+          ${features.projects ? `<a href="#projects">Projects <span class="apv-count">${projR.rows.length}</span></a>` : ''}
           <a href="#recent">Recent decisions</a>
           <a href="/admin/content-review">Content review</a>
         </nav>
@@ -193,7 +194,7 @@ module.exports = function registerAdminApprovals(app, deps) {
           ${perasR.rows.length ? `<div class="apv-list">${perasR.rows.map(peraCard).join('')}</div>` : '<p class="apv-empty">No PERAs are waiting for approval. Drafts appear here once they are submitted.</p>'}
         </section>
 
-        ${projSection}
+        ${features.projects ? projSection : ''}
 
         <section id="recent" class="apv-section">
           <h2 class="apv-h2">Recent decisions <span class="apv-sub">last 30 days</span></h2>

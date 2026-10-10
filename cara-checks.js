@@ -149,7 +149,7 @@ function caraIssues(r, ctx = {}) {
   if (r.risk_level && r.residual_risk && RISK_ORDER[r.residual_risk] > RISK_ORDER[r.risk_level]) add('risk:residual-above', 'block', `The risk with controls (${r.residual_risk}) is higher than the inherent risk (${r.risk_level}). Check both ratings (step 4).`, 'residual_risk');
   // Hazard screening for the activity itself (same rules as projects).
   {
-    const ev = rules.evaluate({ answers: r.screening || {}, project_type: null, description: `${r.activity_brief || ''} ${r.activity_scope || ''}`, materials: r.materials, peras });
+    const ev = rules.evaluate({ answers: require('./features').projects ? (r.screening || {}) : { ...(r.screening || {}), construction_work: 'No' }, project_type: null, description: `${r.activity_brief || ''} ${r.activity_scope || ''}`, materials: r.materials, peras });
     if (ev.unanswered.length) {
       const gate = ev.unanswered.some((q) => q.key === 'construction_work');
       add('screening:unanswered', 'block', gate

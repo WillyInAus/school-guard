@@ -48,6 +48,14 @@ module.exports = function registerCaraProjects(app, deps) {
     pool, page, escapeHtml, requireRole, canManageOwnRecord, formatDate, formatDateTime, riskBadgeClass, caraAi, BRAND,
   } = deps;
 
+  // Linked projects are switched off unless PROJECTS_ENABLED=1 (features.js).
+  // Records stay in the database; the pages just aren't reachable.
+  const features = require('./features');
+  app.use(['/projects', '/cara/:caraId/projects'], (req, res, next) => {
+    if (features.projects) return next();
+    res.status(404).send(page({ title: 'Projects switched off', active: 'cara', body: '<h1 class="page-title">Projects are switched off</h1><p class="page-subtitle">Linked projects are not in use at the moment. <a href="/cara">Back to CARA records</a></p>' }));
+  });
+
   const isReviewer = (u) => u && ['admin', 'approver', 'system_admin'].includes(u.role);
   const clean = (v) => {
     if (v === null || v === undefined) return null;

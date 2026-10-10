@@ -11,6 +11,7 @@
 //   version, keeping the approved one) so it must be re-approved.
 
 const firstAid = require('./first-aid');
+const features = require('./features');
 const checks = require('./cara-checks');
 
 const CARA_FIELDS = checks.CARA_TEXT_FIELDS;
@@ -93,7 +94,7 @@ module.exports = function registerContentReview(app, deps) {
 
   app.get('/admin/content-review', requireRole('admin', 'approver', 'system_admin'), async (req, res, next) => {
     try {
-      const results = await scan(pool);
+      const results = (await scan(pool)).filter((r) => features.projects || r.type === 'CARA');
       const isAdmin = ['admin', 'system_admin'].includes(req.staffUser.role);
       const unsafeCount = results.reduce((n, r) => n + r.findings.filter((f) => f.kind === 'unsafe').length, 0);
       const body = `
