@@ -73,7 +73,7 @@ function cohortFormHtml(r, escapeHtml) {
           </div>
         </div>
         <div class="form-row">
-          <label for="course">Course / subject</label>
+          <label for="course" data-label-general="Course / subject" data-label-vet="Qualification (code and title)">Course / subject</label>
           <input type="text" id="course" name="course" value="${v('course')}" placeholder="e.g. MEM20422 Certificate II in Engineering Pathways">
         </div>
         <div class="form-row">

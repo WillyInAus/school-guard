@@ -153,6 +153,7 @@ async function migrate() {
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS emergency_confirmed_by TEXT;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS emergency_confirmed_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS issue_resolutions JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS signed_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT false;`);
 
@@ -1804,6 +1805,29 @@ async function migrate() {
   await pool.query(`ALTER TABLE cara_projects ADD COLUMN IF NOT EXISTS class_basis TEXT;`);
   await pool.query(`ALTER TABLE cara_projects ADD COLUMN IF NOT EXISTS class_reviewed_by TEXT;`);
   await pool.query(`ALTER TABLE cara_projects ADD COLUMN IF NOT EXISTS class_reviewed_at TIMESTAMPTZ;`);
+  // CARA type (general curriculum / VET), location and VET details (cara-type.js).
+  // cara_type stays NULL on existing records until someone confirms it.
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS cara_type TEXT CHECK (cara_type IN ('general','vet'));`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS location_detail TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS vet_units TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS delivery_context TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS trainer_competencies TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS vet_safety_requirements TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS vet_codes_checked BOOLEAN NOT NULL DEFAULT false;`);
+  // Approved CARA versions are kept when a CARA is changed and re-approved.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cara_versions (
+      id SERIAL PRIMARY KEY,
+      cara_id INTEGER NOT NULL REFERENCES cara_records(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      snapshot JSONB NOT NULL,
+      approved_by TEXT,
+      approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      superseded_at TIMESTAMPTZ
+    );
+  `);
+
 }
 
 module.exports = { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS };

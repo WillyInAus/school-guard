@@ -73,6 +73,8 @@ A CARA covers one class activity. It draws on Plant & Equipment Risk Assessments
 Rules:
 - Base everything on the PERA details provided. Do not contradict a PERA, and never relax a PERA control or supervision requirement. If PERAs give different supervision levels, state each equipment item's level; never write a blanket rule that a later line contradicts.
 - Never write first aid treatment instructions (e.g. how to treat burns, eye injuries, bleeding, shock). The school inserts reviewed first aid wording separately.
+- For VET activities use only the qualification and unit codes the teacher entered. Never invent or guess codes, unit titles, assessment requirements, completed inductions, trainer or student competency, consent or first aid arrangements. If something is missing, write [confirm: ...].
+- The CARA type (general curriculum or VET) does not by itself change the risk level or require a SWMS.
 - Do not invent school-specific facts (names, room numbers, staff, qualifications held, first aid locations). Where something school-specific is needed, write a short placeholder in square brackets, e.g. [name of supervising teacher].
 - Use Australian English, plain language a teacher can paste straight in, and short "- " bullet lines where a list helps.
 - Plain text only: NO markdown. Never use **, __, # headings or backticks. To group bullets, put a short sub-heading on its own line ending in ":" (e.g. "Prior experience:"), then its "- " bullets underneath. Keep each bullet to one or two short lines.
@@ -191,6 +193,13 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       `Risk level chosen: ${c.risk_level || '(blank)'}`,
       `Parent consent required ticked: ${c.consent_required ? 'Yes' : 'No'}`,
       ...cohortContextLines(c),
+      `CARA type: ${c.cara_type === 'vet' ? 'VET course or activity' : c.cara_type === 'general' ? 'General curriculum activity' : '(not chosen)'}`,
+      `Location: ${clip(c.location_detail, 200) || '(not given)'}`,
+      ...(c.cara_type === 'vet' ? [
+        `VET units (entered by the teacher): ${clip(c.vet_units, 800) || '(none entered)'}`,
+        `VET delivery context: ${c.delivery_context || '(not chosen)'}`,
+        `VET training and assessment safety requirements (entered by the teacher): ${clip(c.vet_safety_requirements, 1000) || '(none entered)'}`,
+      ] : []),
     ];
     for (const [key, label] of Object.entries(DRAFT_FIELDS)) {
       if (!aiPrivacy.CARA_AI_ALLOWLIST.includes(key)) continue;
@@ -320,6 +329,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       const c = { activity_name: b.activity_name, class_unit: b.class_unit, risk_level: b.risk_level, consent_required: b.consent_required === 'true' };
       for (const k of Object.keys(DRAFT_FIELDS)) c[k] = b[k];
       for (const [k] of COHORT_FIELDS) c[k] = b[k];
+      for (const k of ['cara_type', 'location_detail', 'vet_units', 'delivery_context', 'vet_safety_requirements']) c[k] = b[k];
       if (!String(c.activity_name || '').trim()) return res.status(400).json({ ok: false, error: 'Enter the activity name first.' });
       const peras = await loadPeras(b.tool_ids);
       const wantStudents = b.students_notes_empty === '1';

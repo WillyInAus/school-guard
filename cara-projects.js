@@ -64,7 +64,8 @@ module.exports = function registerCaraProjects(app, deps) {
       `SELECT id, activity_name, class_unit, activity_scope, risk_level, status, archived, created_by_staff_id,
               supervision_notes, supervisor_qualification, induction_instruction, facilities_equipment, emergency_first_aid,
               environmental_hazards, environmental_controls, facilities_hazards, facilities_controls,
-              student_hazards, student_controls, year_level, course, class_size, age_range, prior_experience
+              student_hazards, student_controls, year_level, course, class_size, age_range, prior_experience,
+              cara_type, location_detail, vet_units, delivery_context, vet_safety_requirements
        FROM cara_records WHERE id = $1`, [id]);
     return rows[0] || null;
   }
@@ -112,7 +113,7 @@ module.exports = function registerCaraProjects(app, deps) {
   // Basis for a trigger confirmation: if the supporting answers change, the
   // reviewer's confirmation no longer counts.
   function triggerBasis(p, key) {
-    return rules.visibleQuestions(p.answers).filter((q) => q.trigger === key).map((q) => `${q.key}=${(p.answers || {})[q.key] || ''}`).join(';');
+    return rules.visibleQuestions(p.answers, p).filter((q) => q.trigger === key).map((q) => `${q.key}=${(p.answers || {})[q.key] || ''}`).join(';');
   }
   function withValidConfirmations(p) {
     const tr = {};
@@ -196,12 +197,14 @@ module.exports = function registerCaraProjects(app, deps) {
       </div>` : '';
 
     return `
-      <div class="detail-section prj-panel" id="projects">
+      <div class="detail-section prj-panel${cara.cara_type === 'vet' ? ' prj-panel-vet' : ''}" id="projects">
         <div class="prj-panel-head">
           <div class="detail-label">Projects under this CARA</div>
           ${canAdd ? `<a class="btn btn-primary btn-sm" href="/cara/${cara.id}/projects/new">Add project</a>` : ''}
         </div>
-        <p class="form-section-hint">Each project has its own safety document. Linking a project does not mean this CARA already covers its risks.</p>
+        <p class="form-section-hint">${cara.cara_type === 'vet'
+          ? '<strong>VET courses usually involve several projects.</strong> Each project needs its own scope, hazards and controls, and may mean this CARA has to be updated. Linking a project does not mean this CARA already covers its risks.'
+          : 'Optional: add projects if this activity includes distinct projects (e.g. separate builds). Each project has its own safety document; linking one does not mean this CARA already covers its risks.'}</p>
         ${flagHtml}
         ${list}
       </div>`;
@@ -251,13 +254,14 @@ module.exports = function registerCaraProjects(app, deps) {
       ` + groups.map((g, gi) => `
       <fieldset class="prj-qgroup" id="prj_g${gi}"><legend>${escapeHtml(g)}</legend>
         ${rules.QUESTIONS.filter((q) => q.group === g).map((q) => `
-          <div class="prj-q${q.critical ? ' prj-q-critical' : ''}" data-q="${q.key}" data-home="prj_g${gi}"${q.showIf ? ` data-show-if="${q.showIf}"` : ''}>
-            <div class="prj-q-text">${escapeHtml(q.text)}${q.critical ? ' <span class="prj-crit" title="Critical question">*</span>' : ''}</div>
+          <div class="prj-q" data-q="${q.key}" data-home="prj_g${gi}" data-critical="${q.critical === true ? 'yes' : (q.critical || 'no')}"${q.showIf ? ` data-show-if="${q.showIf}"` : ''}${q.hideIfNo ? ` data-hide-if-no="${q.hideIfNo}"` : ''}${q.onlyWhenRelevant ? ' data-only-relevant="1"' : ''}>
+            <div class="prj-q-text">${escapeHtml(q.text)} <span class="prj-crit" title="Must be answered">*</span></div>
             <div class="prj-q-opts">${['Yes', 'No', 'Unsure'].map((v) => `
               <label><input type="radio" name="q_${q.key}" value="${v}"${a[q.key] === v ? ' checked' : ''}> ${v}</label>`).join('')}</div>
             ${q.note ? `<div class="prj-q-note">${escapeHtml(q.note)}</div>` : ''}
           </div>`).join('')}
-      </fieldset>`).join('');
+      </fieldset>`).join('') + `
+      <details class="prj-qgroup prj-more" id="prj_more"><summary>More hazard questions (not matched to this project — open if any apply)</summary></details>`;
 
     const suggested = rules.suggestedGroups(`${cara.course || ''} ${cara.class_unit || ''} ${cara.activity_name || ''} ${cara.activity_scope || ''}`);
     const order = [...suggested, ...rules.TEMPLATE_GROUPS.filter((g) => !suggested.includes(g))];
@@ -340,7 +344,7 @@ module.exports = function registerCaraProjects(app, deps) {
         <div class="ai-draft-panel" id="prj_ai_panel">
           <div class="ai-draft-text"><strong>AI assistant</strong>
             <span>Fill in the project, equipment and questions above, then generate suggested wording for the sections below. Nothing is filled in until you choose <em>Use this</em>.</span>
-            <span class="ai-privacy-note">Sent to the AI: this project's details and answers, the selected PERAs, and the parent CARA's activity, hazard, supervision and emergency text with its class-level details (year level, course, class size, age range, prior experience). Not sent: the CARA's Students box, names or signatures. Lines that look like individual student or medical details are removed first.</span></div>
+            <span class="ai-privacy-note">Sent to the AI: this project's details and answers, the selected PERAs, and the parent CARA's activity, hazard, supervision and emergency text, its type and VET details, and class-level details (year level, course, class size, age range, prior experience). Not sent: the CARA's Students box, trainer/assessor details, names or signatures. Lines that look like individual student or medical details are removed first.</span></div>
           <button type="button" class="btn btn-secondary" id="prj_ai_btn">Generate project draft</button>
           <div class="ai-draft-status" id="prj_ai_status" role="status" aria-live="polite"></div>
         </div>` : ''}
@@ -402,12 +406,8 @@ module.exports = function registerCaraProjects(app, deps) {
           if (q) document.querySelectorAll('#prj_pera_list details').forEach(function (d) { d.open = true; });
         };
         // Conditional questions
+        function ans(k) { var c = form.querySelector('input[name="q_' + k + '"]:checked'); return c ? c.value : ''; }
         function refreshQuestions() {
-          document.querySelectorAll('.prj-q[data-show-if]').forEach(function (el) {
-            var parent = form.querySelector('input[name="q_' + el.dataset.showIf + '"]:checked');
-            var show = parent && (parent.value === 'Yes' || parent.value === 'Unsure');
-            el.style.display = show ? '' : 'none';
-          });
           var tpl = TEMPLATES[document.getElementById('project_type').value] || { focus: [] };
           // Relevant questions: template focus + words in description, materials, conditions and ticked equipment.
           var words = ['description', 'materials', 'conditions'].map(function (id) { return (document.getElementById(id) || {}).value || ''; }).join(' ');
@@ -415,20 +415,27 @@ module.exports = function registerCaraProjects(app, deps) {
           words = words.toLowerCase();
           var rel = {}; tpl.focus.forEach(function (k) { rel[k] = 1; });
           RELEVANCE.forEach(function (r) { if (new RegExp(r[0]).test(words)) r[1].forEach(function (k) { rel[k] = 1; }); });
-          var box = document.getElementById('prj_relevant');
+          var construction = ans('construction_work') !== 'No'; // unanswered never means No
+          var box = document.getElementById('prj_relevant'), more = document.getElementById('prj_more');
           document.querySelectorAll('.prj-q').forEach(function (el) {
             var key = el.dataset.q, parentKey = el.dataset.showIf;
             var isRel = rel[key] || (parentKey && rel[parentKey]);
-            var target = isRel ? box : document.getElementById(el.dataset.home);
+            var shown = true;
+            if (parentKey) { var pv = ans(parentKey); shown = pv === 'Yes' || pv === 'Unsure'; }
+            if (el.dataset.hideIfNo && ans(el.dataset.hideIfNo) === 'No') shown = false;
+            el.style.display = shown ? '' : 'none';
+            var target = isRel ? box : (el.dataset.onlyRelevant && !ans(key) ? more : document.getElementById(el.dataset.home));
             if (el.parentNode !== target) target.appendChild(el);
+            var crit = el.dataset.critical === 'yes' || (el.dataset.critical === 'construction' && construction) || (el.dataset.critical === 'relevant' && isRel);
+            el.classList.toggle('prj-q-critical', crit);
+            el.classList.toggle('prj-q-missing', crit && shown && !ans(key));
           });
           box.querySelector('.prj-relevant-empty').style.display = box.querySelector('.prj-q') ? 'none' : '';
-          document.querySelectorAll('.prj-qgroup[id^="prj_g"]').forEach(function (g) { g.style.display = g.querySelector('.prj-q') ? '' : 'none'; });
-          document.querySelectorAll('.prj-q').forEach(function (el) {
-            el.classList.toggle('prj-q-focus', false);
-            var answered = form.querySelector('input[name="q_' + el.dataset.q + '"]:checked');
-            el.classList.toggle('prj-q-missing', el.classList.contains('prj-q-critical') && !answered && el.style.display !== 'none');
+          document.querySelectorAll('.prj-qgroup[id^="prj_g"]').forEach(function (g) {
+            var any = Array.prototype.some.call(g.querySelectorAll('.prj-q'), function (q) { return q.style.display !== 'none'; });
+            g.style.display = any ? '' : 'none';
           });
+          more.style.display = more.querySelector('.prj-q') ? '' : 'none';
         }
         form.addEventListener('change', function (e) { if (e.target.name && (e.target.name.indexOf('q_') === 0 || e.target.id === 'project_type' || e.target.name === 'pera_ids')) refreshQuestions(); });
         ['description', 'materials', 'conditions'].forEach(function (id) { var t = document.getElementById(id); if (t) t.addEventListener('blur', refreshQuestions); });
@@ -940,6 +947,7 @@ module.exports = function registerCaraProjects(app, deps) {
 Rules:
 - Base hazards and controls on the PERA controls provided. Never relax a PERA control or the CARA's supervision requirements, and never choose a lower supervision level than a PERA requires.
 - Never write first aid treatment instructions (how to treat burns, eye injuries, bleeding, electric shock etc.). The school inserts reviewed first aid wording separately.
+- For VET use only the qualification and unit codes given; never invent codes, unit titles or assessment requirements.
 - Never invent or confirm: staff qualifications, parent consent, student competency, first aid arrangements or who holds first aid, first aid kit locations, equipment availability, or site conditions. Where these matter, write a short [confirm: ...] placeholder or list them as missing information.
 - Mark anything you assume with "ASSUMPTION:" at the start of the line.
 - Do not decide whether the work is legally "high risk construction work" or whether a SWMS is legally required. You may point out answers that a reviewer should check.
@@ -989,12 +997,18 @@ Rules:
       const ca = aiPrivacy.caraForAi(cara);
       removedLines += ca.removed;
       const cs = ca.cara;
-      const answerLines = rules.visibleQuestions(f.answers).map((q) => `- ${q.text} → ${f.answers[q.key] || 'Not answered'}`).join('\n');
+      const answerLines = rules.visibleQuestions(f.answers, { ...f, peras }).map((q) => `- ${q.text} → ${f.answers[q.key] || 'Not answered'}`).join('\n');
       // Parent CARA context: explicit allowlist. The Students notes are never
       // loaded (see loadCara) and never sent.
       const caraText = [
         `CARA: ${clip(cs.activity_name, 200)} (activity risk ${cs.risk_level}, status ${cara.status})`,
+        `CARA type: ${cs.cara_type === 'vet' ? 'VET course or activity' : cs.cara_type === 'general' ? 'General curriculum activity' : '(not chosen)'}`,
         `Class group: ${clip(cohortSummary(cs), 200) || '(not set)'}`,
+        ...(cs.cara_type === 'vet' ? [
+          `VET units (entered by the teacher): ${clip(cs.vet_units, 800) || '(none entered)'}`,
+          `VET delivery context: ${cs.delivery_context || '(not chosen)'}`,
+          `VET training and assessment safety requirements: ${clip(cs.vet_safety_requirements, 1000) || '(none entered)'}`,
+        ] : []),
         `Prior experience: ${clip(cs.prior_experience, 600) || '(blank)'}`,
         `Activity scope: ${clip(cs.activity_scope, 2000) || '(blank)'}`,
         `Supervision: ${clip(cs.supervision_notes, 1200) || '(blank)'}`,

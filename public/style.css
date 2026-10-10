@@ -1465,3 +1465,19 @@ tr.row-link:hover {
 .cr-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
 @media (max-width: 700px) { .cr-cols { grid-template-columns: 1fr; } }
 .cr-pre { white-space: pre-wrap; font-family: inherit; font-size: 13px; background: #fff; border: 1px solid #E4DFD3; border-radius: 8px; padding: 8px; margin: 4px 0; }
+
+/* CARA type (cara-type.js) */
+.type-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+@media (max-width: 700px) { .type-choice { grid-template-columns: 1fr; } }
+.type-card { display: block; border: 1px solid #E4DFD3; border-radius: 14px; background: #fff; padding: 18px; text-decoration: none; color: #1A1D1B; }
+.type-card:hover { border-color: #1B5E52; box-shadow: 0 2px 10px rgba(27,94,82,.12); }
+.type-card strong { display: block; font-size: 17px; color: #1B5E52; margin-bottom: 6px; }
+.type-card span { font-size: 14px; color: #3f3b33; line-height: 1.45; }
+.type-bar { background: #F2F8F6; border: 1px solid #CFE3DC; border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; }
+.type-bar label { font-weight: 600; display: block; margin-bottom: 4px; }
+.type-bar select { padding: 8px 10px; border: 1px solid #CFE3DC; border-radius: 8px; font: inherit; }
+.vet-section { border-left: 3px solid #1B5E52; padding-left: 12px; }
+.prj-panel-vet { border-color: #1B5E52; border-width: 2px; }
+.prj-q .prj-crit { display: none; }
+.prj-q.prj-q-critical .prj-crit { display: inline; }
+.prj-more summary { cursor: pointer; color: #1B5E52; font-weight: 600; padding: 6px 0; }
