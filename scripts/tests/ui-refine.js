@@ -70,6 +70,11 @@ const ok = (c, m, x) => { if (c) { pass++; console.log('PASS', m); } else { fail
   await click('#no_equipment');
   await click('.stage-btn[data-go="3"]');
   ok(!(await page.$eval('#ai_draft_btn', (b) => b.disabled)), 'ticking "No tools or equipment" with a description enables Generate draft');
+  await click('#ai_draft_btn');
+  await page.waitForSelector('.ai-suggest-wide', { timeout: 15000 }).catch(() => null);
+  const wide = await page.evaluate(() => { const b = document.querySelector('.ai-suggest-wide'), g = b && b.closest('.hz-grid'); return b && g ? { b: Math.round(b.getBoundingClientRect().width), g: Math.round(g.getBoundingClientRect().width), t: b.querySelector('.ai-suggest-title').textContent } : null; });
+  ok(wide && Math.abs(wide.b - wide.g) <= 2 && /Environment controls/.test(wide.t), 'an AI suggestion in the hazards grid spans the full width and names its box', wide);
+  await page.$$eval('.ai-suggest button', (bs) => bs.filter((b) => b.textContent === 'Dismiss').forEach((b) => b.click()));
 
   // Stage 4: Save draft and run checks
   await click('.stage-btn[data-go="4"]');

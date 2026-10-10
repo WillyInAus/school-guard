@@ -21,6 +21,7 @@ http.createServer((req, res) => {
       suggested_risk_level: 'High', risk_reason: 'x',
       emergency_first_aid: '- Raise the alarm and call 000.\n- For severe burns, apply cool water or ice.',
       supervision_notes: 'All equipment other than low-risk hand tools requires direct supervision.\nStudents may use power drills under same-room supervision.',
+      environmental_controls: 'Hearing protection when the guillotine and grinder are running.',
     };
     else input = { overall: 'Minor improvements suggested', summary: 'Mock review.', issues: [] };
     res.setHeader('content-type', 'application/json');

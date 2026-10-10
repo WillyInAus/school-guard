@@ -323,7 +323,7 @@ async function caraFormHtml(o) {
     ${canSubmit ? submitFormTag('cara_submit_form', r.id) : ''}
     <form class="form-card cara-stages" method="post" action="${action}" id="cara_form" data-pretty novalidate data-checked="${checked ? '1' : ''}" data-can-submit="${canSubmit ? '1' : ''}">
       <nav class="stage-nav" aria-label="CARA steps"><ol>
-        ${STAGES.map((st, i) => `<li><button type="button" class="stage-btn" data-go="${i + 1}" aria-controls="stage${i + 1}_h"><span class="stage-num">${i + 1}</span> ${st}<span class="stage-todo" data-todo="${i + 1}" data-server="${checked ? serverTodo[i + 1] : ''}"></span></button></li>`).join('')}
+        ${STAGES.map((st, i) => `<li><button type="button" class="stage-btn" data-go="${i + 1}" aria-controls="stage${i + 1}_h"><span class="stage-num">${i + 1}</span><span class="stage-lbl">${st}</span><span class="stage-todo" data-todo="${i + 1}" data-server="${checked ? serverTodo[i + 1] : ''}"></span></button></li>`).join('')}
       </ol></nav>
       ${!isNew && r.status && !editable ? '<div class="note-box">Saving changes returns this CARA to <strong>Draft</strong>. The approved version is kept and it will need re-approval.</div>' : ''}
       ${o.saved && !checked ? '<div class="saved-msg" role="status">Draft saved. It has not been submitted.</div>' : ''}
@@ -437,6 +437,8 @@ async function caraFormHtml(o) {
       function changed(e) { if (e && e.target && e.target.closest && e.target.closest('.sig-block')) return; if (!dirty) { dirty = true; primary(); var cn = document.getElementById('checks_note'); if (cn) cn.textContent = 'You have changed something since these checks ran. Save and run the checks again to update them.'; } todo(); }
       form.addEventListener('input', changed); form.addEventListener('change', function (e) { if (e.target.name === 'cara_type') applyType(); changed(e); });
       form.addEventListener('screening-updated', todo);
+      // Keep the field being edited clear of the sticky action bar.
+      form.addEventListener('focusin', function (e) { var bar = form.querySelector('.stage-bar'); if (!bar || e.target.closest('.stage-bar')) return; var r = e.target.getBoundingClientRect(), b = bar.getBoundingClientRect(); if (r.bottom > b.top - 8 && r.top < b.bottom) window.scrollBy(0, r.bottom - b.top + 16); });
       // Location: "Other location" asks for the detail.
       function loc() {
         var other = form.elements.room_id.value === 'other';
