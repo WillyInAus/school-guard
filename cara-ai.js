@@ -333,14 +333,35 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       if (!String(c.activity_name || '').trim()) return res.status(400).json({ ok: false, error: 'Enter the activity name first.' });
       const peras = await loadPeras(b.tool_ids);
       const wantStudents = b.students_notes_empty === '1';
-      const tool = wantStudents
-        ? { ...DRAFT_TOOL, input_schema: { ...DRAFT_TOOL.input_schema, required: [...DRAFT_TOOL.input_schema.required, 'students_notes'], properties: { ...DRAFT_TOOL.input_schema.properties, students_notes: { type: 'string', description: `Suggested template for "Students". ${STUDENTS_GUIDE}` } } } }
-        : DRAFT_TOOL;
-      const userText = `${wantStudents ? 'The Students box is empty: include a students_notes template.\n\n' : ''}Draft suggested content for this CARA. Where a field already has good text, leave it out of your answer; where it has some text, suggest an improved full version that keeps the teacher's points.\n\n=== CARA so far ===\n${caraContext(c)}\n\n=== PERAs selected ===\n${peraContext(peras)}`;
+      // Every EMPTY box must get a suggestion (the model used to skip some,
+      // e.g. Supervision). Boxes with text are optional improvements.
+      const emptyFields = Object.keys(DRAFT_FIELDS).filter((k) => !String(c[k] || '').trim());
+      const buildTool = (fields, students) => {
+        const props = { ...DRAFT_TOOL.input_schema.properties };
+        if (students) props.students_notes = { type: 'string', description: `Suggested template for "Students". ${STUDENTS_GUIDE}` };
+        return { ...DRAFT_TOOL, input_schema: { ...DRAFT_TOOL.input_schema, properties: props, required: [...DRAFT_TOOL.input_schema.required, ...fields, ...(students ? ['students_notes'] : [])] } };
+      };
+      const tool = buildTool(emptyFields, wantStudents);
+      const emptyNote = emptyFields.length ? `These boxes are empty and MUST each get a suggestion: ${emptyFields.map((k) => DRAFT_FIELDS[k]).join(', ')}.\n\n` : '';
+      const userText = `${emptyNote}${wantStudents ? 'The Students box is empty: include a students_notes template.\n\n' : ''}Draft suggested content for this CARA. Where a field already has good text, leave it out of your answer; where it has some text, suggest an improved full version that keeps the teacher's points.\n\n=== CARA so far ===\n${caraContext(c)}\n\n=== PERAs selected ===\n${peraContext(peras)}`;
       // 12 long fields for a many-machine activity can exceed 4000 tokens, which
       // silently cut off the last fields (e.g. Student controls). Allow more.
-      const { result, usage, model, truncated } = await callClaude({ userText, tool, maxTokens: 8000 });
+      let { result, usage, model, truncated } = await callClaude({ userText, tool, maxTokens: 8000 });
       await logUsage({ kind: 'draft', staffId: req.staffUser.id, model, usage, result: null });
+      // Second, smaller request for any empty box the first answer missed
+      // (skipped or cut off), so teachers aren't left with gaps.
+      const missed = emptyFields.filter((k) => !plainText(result[k]));
+      if (missed.length) {
+        try {
+          const retryText = `${userText}\n\nOnly these boxes are needed now, and each MUST be filled: ${missed.map((k) => DRAFT_FIELDS[k]).join(', ')}.`;
+          const second = await callClaude({ userText: retryText, tool: buildTool(missed, false), maxTokens: 6000 });
+          await logUsage({ kind: 'draft', staffId: req.staffUser.id, model: second.model, usage: second.usage, result: null });
+          for (const k of missed) if (plainText(second.result[k])) result = { ...result, [k]: second.result[k] };
+          truncated = second.truncated;
+        } catch (e) {
+          console.error('CARA AI draft retry failed:', e.message);
+        }
+      }
       const removedLines = caraContext.lastRemoved || 0;
       const safety = [];
       const suggestions = {};
@@ -360,6 +381,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         consent: typeof result.consent_recommended === 'boolean' ? { recommended: result.consent_recommended, reason: clip(result.consent_reason, 300) } : null,
         notes: [
           ...safety,
+          ...(() => { const still = emptyFields.filter((k) => !suggestions[k]); return still.length ? [`No suggestion came back for: ${still.map((k) => DRAFT_FIELDS[k]).join(', ')}. Click Suggest content again, or fill ${still.length === 1 ? 'it' : 'them'} in yourself.`] : []; })(),
           ...(removedLines ? [aiPrivacy.redactedNote(removedLines)] : []),
           ...(truncated ? ['The AI ran out of space before finishing, so some fields may have no suggestion. Check every section, or run Draft again.'] : []),
           ...(Array.isArray(result.notes) ? result.notes.slice(0, 3).map((n) => clip(n, 300)) : []),
