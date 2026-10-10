@@ -194,6 +194,10 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       `Parent consent required ticked: ${c.consent_required ? 'Yes' : 'No'}`,
       ...cohortContextLines(c),
       `CARA type: ${c.cara_type === 'vet' ? 'VET course or activity' : c.cara_type === 'general' ? 'General curriculum activity' : '(not chosen)'}`,
+      `What students will do (teacher's brief): ${clip(c.activity_brief, 1500) || '(blank)'}`,
+      `Materials: ${clip(c.materials, 800) || '(blank)'}`,
+      `SDS references: ${clip(c.sds_refs, 400) || '(blank)'}`,
+      ...(c.screening_text ? [`Hazard screening answers:\n${c.screening_text}`] : []),
       `Location: ${clip(c.location_detail, 200) || '(not given)'}`,
       ...(c.cara_type === 'vet' ? [
         `VET units (entered by the teacher): ${clip(c.vet_units, 800) || '(none entered)'}`,
@@ -239,7 +243,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         if (resp.status === 401 || resp.status === 403) err.code = 'auth';
         else if (/credit|billing|balance/i.test(msg)) err.code = 'credit';
         else if (resp.status === 404 || /model.*(not found|not available|does not exist|not have access)/i.test(msg)) err.code = 'model';
-        else if (resp.status === 429) err.code = 'busy';
+        else if (resp.status === 429 || resp.status === 529 || resp.status === 503) err.code = 'busy';
         throw err;
       }
       const block = (data.content || []).find((b) => b.type === 'tool_use' && b.name === tool.name);
@@ -329,7 +333,11 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       const c = { activity_name: b.activity_name, class_unit: b.class_unit, risk_level: b.risk_level, consent_required: b.consent_required === 'true' };
       for (const k of Object.keys(DRAFT_FIELDS)) c[k] = b[k];
       for (const [k] of COHORT_FIELDS) c[k] = b[k];
-      for (const k of ['cara_type', 'location_detail', 'vet_units', 'delivery_context', 'vet_safety_requirements']) c[k] = b[k];
+      for (const k of ['cara_type', 'location_detail', 'vet_units', 'delivery_context', 'vet_safety_requirements', 'activity_brief', 'materials', 'sds_refs']) c[k] = b[k];
+      {
+        const rulesMod = require('./project-rules');
+        c.screening_text = rulesMod.QUESTIONS.filter((q) => ['Yes', 'Unsure'].includes(b[`q_${q.key}`])).map((q) => `- ${q.text} → ${b[`q_${q.key}`]}`).join('\n');
+      }
       if (!String(c.activity_name || '').trim()) return res.status(400).json({ ok: false, error: 'Enter the activity name first.' });
       const peras = await loadPeras(b.tool_ids);
       const wantStudents = b.students_notes_empty === '1';
@@ -510,21 +518,21 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         </div>
         ${notice ? `<div class="ai-notice">${escapeHtml(notice)}</div>` : ''}
         ${rules.length ? `<p class="ai-sub">Automatic checks</p>${issueList(rules)}` : '<p class="ai-sub ai-allclear">Automatic checks: nothing flagged.</p>'}
-        ${aiHtml || (canRun ? '<p class="ai-meta">The AI check reviews the hazards, controls, supervision and induction against the PERAs and lists things for you and the reviewer to look at. It is advice only; it does not approve anything. ${escapeHtml(aiPrivacy.AI_SENT_TEXT)}</p>' : '')}
+        ${aiHtml || (canRun ? `<p class="ai-meta">The AI check reviews the hazards, controls, supervision and induction against the PERAs and lists things for you and the reviewer to look at. It is advice only; it does not approve anything.</p><details class="ai-privacy-more"><summary>What information is sent?</summary>${escapeHtml(aiPrivacy.AI_SENT_TEXT)}</details>` : '')}
       </div>`;
   }
 
   // Assistant panel + script for the CARA new/edit form.
-  function draftPanelHtml() {
+  function draftPanelHtml(opts = {}) {
     if (!apiEnabled()) return '';
     return `
       <div class="ai-draft-panel" id="ai_draft_panel">
         <div class="ai-draft-text">
-          <strong>AI assistant</strong>
-          <span>Fill in the activity name and select the PERAs, then get suggested wording for the rest of the form. Nothing is filled in until you choose <em>Use this</em>.</span>
-          <span class="ai-privacy-note">${escapeHtml(aiPrivacy.AI_SENT_TEXT)}</span>
+          <strong>AI draft</strong>
+          <span>${opts.compact ? 'Uses what you entered in steps 1 and 2. Each suggestion appears under its box; nothing changes until you choose <em>Use this</em>. You can also fill the sections in yourself.' : 'Fill in the activity name and select the PERAs, then get suggested wording for the rest of the form. Nothing is filled in until you choose <em>Use this</em>.'}</span>
+          <span class="ai-privacy-note">Student notes, names and signatures are never sent. <details class="ai-privacy-more"><summary>What information is sent?</summary>${escapeHtml(aiPrivacy.AI_SENT_TEXT)}</details></span>
         </div>
-        <button type="button" class="btn btn-secondary" id="ai_draft_btn">Suggest content</button>
+        <button type="button" class="btn btn-primary" id="ai_draft_btn">${opts.compact ? 'Generate draft' : 'Suggest content'}</button>
         <div class="ai-draft-status" id="ai_draft_status" role="status" aria-live="polite"></div>
       </div>
       <script>
@@ -562,7 +570,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
             .then(function (r) { return r.json(); })
             .then(function (d) {
               btn.disabled = false;
-              if (!d.ok) { statusEl.textContent = d.error || 'Something went wrong.'; return; }
+              if (!d.ok) { statusEl.textContent = (d.error || 'Something went wrong.') + ' Nothing you entered has been lost — try again, or fill the sections in yourself.'; return; }
               clearOld();
               var count = 0;
               Object.keys(d.suggestions || {}).forEach(function (k) {
@@ -581,7 +589,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
               statusEl.appendChild(el('div', null, count ? count + ' suggestion' + (count === 1 ? '' : 's') + ' added below the matching boxes. Review each one before using it.' : 'No changes suggested.'));
               if (msgs.length) { var ul = el('ul', 'ai-draft-notes'); msgs.forEach(function (m) { ul.appendChild(el('li', null, m)); }); statusEl.appendChild(ul); }
             })
-            .catch(function () { btn.disabled = false; statusEl.textContent = 'Could not reach the AI assistant. Try again.'; });
+            .catch(function () { btn.disabled = false; statusEl.textContent = 'Could not reach the AI assistant. Nothing you entered has been lost — check your connection and try again, or fill the sections in yourself.'; });
         });
       })();
       </script>`;

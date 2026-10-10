@@ -175,7 +175,16 @@ const TRIGGERS = {
 
 const ACTIVITY_CLASSES = ['Needs review', 'Educational practice / simulation', 'Actual construction work', 'Other vocational activity'];
 const DOC_PURPOSES = ['Not yet decided', 'Project safe work procedure', 'SWMS for training/assessment', 'Legally required SWMS'];
-const PRACTICE_TYPES = ['Unsure', 'Temporary educational practice', 'Permanent installation for use'];
+// What the work is for. Guides screening only; it never decides the legal
+// classification. Keeping a finished product does not make it construction work.
+const PRACTICE_TYPES = ['Unsure', 'Educational practice or simulation', 'Making a product for use', 'Installation or work on a structure/site'];
+// Older projects used these values; they are read as the new ones.
+const LEGACY_PRACTICE = { 'Temporary educational practice': 'Educational practice or simulation', 'Permanent installation for use': 'Installation or work on a structure/site' };
+const practiceOf = (v) => LEGACY_PRACTICE[v] || (PRACTICE_TYPES.includes(v) ? v : 'Unsure');
+
+// Stored document purposes and how they are shown.
+const DOC_PURPOSE_LABELS = { 'Legally required SWMS': 'Potential legally required SWMS — reviewer decision needed' };
+const purposeLabel = (v) => DOC_PURPOSE_LABELS[v] || v;
 const STATUSES = ['Draft', 'Awaiting review', 'Approved', 'Superseded', 'Archived'];
 
 // Project templates: a starting point only. Nothing here is asserted as fact
@@ -218,14 +227,14 @@ function suggestedGroups(text) {
 // returns the classification to "Needs review".
 function classificationBasis(p) {
   const a = p.answers || {};
-  return JSON.stringify([p.practice_type || '', ...QUESTIONS.filter((q) => q.trigger || q.critical).map((q) => `${q.key}=${a[q.key] || ''}`)]);
+  return JSON.stringify([practiceOf(p.practice_type), ...QUESTIONS.filter((q) => q.trigger || q.critical).map((q) => `${q.key}=${a[q.key] || ''}`)]);
 }
 
 const RELEVANCE_MAP = [
   [/fryer|oven|grill|stove|cook|boil|steam|kitchen/, ['hot_cooking', 'gas_appliances', 'wet_floors']],
-  [/knife|knives|slicer|mandoline|mixer|food processor/, ['food_equipment']],
+  [/\bknife|\bknives|slicer|mandoline|food processor|stand mixer|planetary mixer|dough mixer|food mixer/, ['food_equipment']],
   [/serv(e|ing) food|cafe|catering|customers/, ['food_served']],
-  [/hoist|jack|vehicle|car\b|engine|exhaust|tyre|brake/, ['vehicle_raised', 'engine_running', 'vehicles_moving']],
+  [/\bhoists?\b|\bjacks?\b|\bvehicles?\b|\bengines?\b|exhaust|\btyres?\b|\bbrakes\b|\bbrake (?:pads?|discs?|rotors?|calipers?|fluid|lines?)|car servic/, ['vehicle_raised', 'engine_running', 'vehicles_moving']],
   [/battery|batteries|hybrid|electric vehicle|\bev\b|high[- ]voltage/, ['vehicle_electrical']],
   [/build|construct|frame|framing|wall|slab|footing|brick|block|concrete|til(e|ing)|fence|shed|deck|demolish|renovat/, ['construction_work']],
   [/weld|plasma|oxy|braz|grind|spark|mig|tig|arc/, ['hot_work', 'welding_fumes', 'gas_cylinders']],
@@ -242,6 +251,7 @@ const RELEVANCE_MAP = [
 // Questions most relevant to this project: template focus plus questions
 // matching the description, tools and materials. All questions remain.
 function relevantKeys(p, toolNames) {
+  if (practiceOf(p.practice_type) === 'Installation or work on a structure/site') { /* construction_work is asked first anyway */ }
   const t = `${p.description || ''} ${p.materials || ''} ${p.conditions || ''} ${(toolNames || []).join(' ')}`.toLowerCase();
   const keys = new Set(((TEMPLATES[p.project_type] || {}).focus) || []);
   const map = RELEVANCE_MAP;
@@ -304,21 +314,26 @@ function evaluate(project) {
   if (excavationNoServices) flags.push({ level: 'bad', text: 'Digging is planned but underground services have not been located yet.' });
   if (unanswered.length) flags.push({ level: 'bad', text: `${unanswered.length} critical question${unanswered.length === 1 ? '' : 's'} unanswered.` });
   if (unsure.length) flags.push({ level: 'mid', text: `${unsure.length} answer${unsure.length === 1 ? ' is' : 's are'} "Unsure" — a reviewer must resolve ${unsure.length === 1 ? 'it' : 'them'}.` });
-  if (project.practice_type === 'Permanent installation for use') flags.push({ level: 'mid', text: 'Permanent installation for use: the work may be "construction work" (WHS Regulation s289), not only educational practice. Needs reviewer classification.' });
-  if (project.practice_type === 'Unsure' || !project.practice_type) flags.push({ level: 'mid', text: 'Temporary practice vs permanent installation not decided.' });
+  const practice = practiceOf(project.practice_type);
+  if (practice === 'Installation or work on a structure/site') flags.push({ level: 'mid', text: 'Installation or work on a structure/site: this may be "construction work" (WHS Regulation s289), not only educational practice. Needs reviewer classification.' });
+  if (practice === 'Unsure') flags.push({ level: 'mid', text: 'What the work is for (practice, a product, or an installation) is not decided yet.' });
   if (unconfirmedTriggers.length) flags.push({ level: 'mid', text: `${unconfirmedTriggers.length} possible high risk construction work trigger${unconfirmedTriggers.length === 1 ? '' : 's'} not yet confirmed by a reviewer.` });
 
   // Suggested (not decided) classification, shown next to the human choice.
   let suggestedClass = 'Needs review';
   // Hidden or unanswered questions are never treated as "No".
   const anyUnanswered = qs.some((q) => !a[q.key]);
-  if (project.practice_type === 'Temporary educational practice' && !unsure.length && !anyUnanswered && !triggers.length) suggestedClass = 'Educational practice / simulation';
+  if (practice === 'Educational practice or simulation' && !unsure.length && !anyUnanswered && !triggers.length) suggestedClass = 'Educational practice / simulation';
+  // Suggested document purpose (after screening). A reviewer decides.
+  let suggestedPurpose = 'Project safe work procedure';
+  if (triggers.length && practice !== 'Educational practice or simulation') suggestedPurpose = 'Legally required SWMS';
+  else if (triggers.length || (a.construction_work === 'Yes')) suggestedPurpose = 'SWMS for training/assessment';
 
   const blocking = [];
   if (stops.length) blocking.push('Engineered stone answered Yes.');
   if (unanswered.length) blocking.push('Answer all critical questions.');
   if (excavationNoServices) blocking.push('Locate underground services before digging (or change the answer when done).');
-  return { questions: qs, unanswered, unsure, triggers, unconfirmedTriggers, confirmedApplies, flags, suggestedClass, blocking };
+  return { questions: qs, unanswered, unsure, triggers, unconfirmedTriggers, confirmedApplies, flags, suggestedClass, suggestedPurpose, blocking };
 }
 
 // Extra conditions only checked at approval time (reviewer decisions).
@@ -337,7 +352,7 @@ function approvalBlockers(project) {
 }
 
 module.exports = {
-  JURISDICTION, TEMPLATE_GROUPS, RELEVANCE_MAP, constructionApplies, isCritical, suggestedGroups, classificationBasis, relevantKeys,
+  JURISDICTION, TEMPLATE_GROUPS, RELEVANCE_MAP, constructionApplies, isCritical, practiceOf, purposeLabel, LEGACY_PRACTICE, suggestedGroups, classificationBasis, relevantKeys,
   RULES_VERSION, SOURCES, QUESTIONS, TRIGGERS, ACTIVITY_CLASSES, DOC_PURPOSES, PRACTICE_TYPES, STATUSES, TEMPLATES,
   visibleQuestions, evaluate, approvalBlockers,
 };

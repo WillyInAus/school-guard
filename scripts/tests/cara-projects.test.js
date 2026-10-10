@@ -34,7 +34,9 @@ async function req(who, method, p, form) {
 const html = (s) => s.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
 const QS = ['construction_work', 'cutting', 'chemicals', 'manual_handling', 'hot_work', 'gas_cylinders', 'rotating_machinery', 'noise', 'sharp_edges', 'fall_2m', 'heights_any', 'excavation', 'services', 'mobile_plant', 'traffic', 'structural', 'asbestos', 'tilt_up', 'confined_space', 'atmosphere', 'water', 'temperature', 'other_listed'];
 const allNo = () => Object.fromEntries(QS.map((q) => [`q_${q}`, 'No']));
+const QS_ALL = ['construction_work', 'cutting', 'chemicals', 'manual_handling', 'fall_2m', 'heights_any', 'excavation', 'services', 'mobile_plant', 'traffic', 'structural', 'asbestos', 'tilt_up', 'confined_space', 'atmosphere', 'water', 'temperature', 'other_listed'];
 const fullCara = {
+  screening_fields: '1', ...Object.fromEntries(QS_ALL.map((q) => [`q_${q}`, 'No'])), q_construction_work: 'Yes',
   activity_name: 'Cert II Construction', class_unit: 'Construction', risk_level: 'High', course: 'CPC20220 Certificate II in Construction Pathways',
   year_level: 'Year 11', class_size: '14', age_range: '16–17', prior_experience: 'Completed Year 10 IDT and workshop induction.',
   activity_scope: 'Students build practice projects (brick wall, sawhorse, small slab).', students_notes: 'SECRET-STUDENT-XYZ medical plan for J. Smith',
@@ -55,7 +57,7 @@ const fullCara = {
   // ===== 1. Unsafe first aid =====
   let r = await req('approver', 'GET', '/cara/3');
   ok(html(r.text).includes('Unsafe first aid wording in Emergency and first aid: "- For severe burns, apply cool water or ice."'), 'existing CARA: unsafe burns wording detected');
-  ok(r.text.includes('This approved CARA contains unsafe first aid wording'), 'approved CARA with unsafe wording is visibly flagged for review');
+  ok(r.text.includes('Unsafe first aid wording — must be corrected.') && r.text.includes('Correct the unsafe first aid wording'), 'unsafe wording shown prominently with a clear next step');
   const audit = execFileSync('node', [path.join(__dirname, '..', 'audit-cara-content.js')], { env: { ...process.env, DATABASE_URL: DB, DATABASE_SSL: 'false' } }).toString();
   ok(audit.includes('CARA #3') && audit.includes('UNSAFE FIRST AID') && audit.includes('first appeared: edit on'), 'audit script lists affected record and where the wording first appeared');
   ok(!audit.includes('CARA #2 '), 'audit script does not list clean records');
@@ -118,15 +120,15 @@ const fullCara = {
   ok(sent.length > 0 && !sent.includes('SECRET-STUDENT') && !sent.includes('epilepsy'), 'CARA AI check (from saved record) uses the allowlist and redaction');
   for (const k of ['students_notes', 'teacher_signature', 'submitted_by']) ok(!new RegExp(`"${k}"|${k}:`).test(sent), `AI request has no ${k} field`);
   r = await req('teacher', 'GET', '/cara/1/edit');
-  ok(r.text.includes('Sent to the AI: the activity, hazard, supervision and emergency text') && !r.text.includes('The Students box is never sent.'), 'CARA form describes accurately what is sent to the AI');
+  ok(r.text.includes('What information is sent?') && r.text.includes('Sent to the AI: the activity description') && r.text.includes('Not sent: the Students box'), 'CARA form has a short privacy line with details of what is sent');
 
   // ===== 6. Projects =====
   r = await req('teacher', 'GET', '/cara/3/projects/new');
   ok(r.text.includes('Engineering (suggested)') && r.text.includes('Welding') && r.text.includes('Machining'), 'engineering CARA suggests engineering templates');
   r = await req('teacher', 'GET', '/cara/1/projects/new');
   ok(r.text.includes('Construction (suggested)') && r.text.includes('<optgroup label="Engineering">') && r.text.includes('Welding'), 'construction CARA suggests construction templates; others still available');
-  ok(r.text.includes('Most relevant to this project') && r.text.includes('Hazard screening (Queensland)'), 'questionnaire shows relevant questions first and a Queensland screening section');
-  ok(r.text.includes('Sent to the AI: this project') && r.text.includes("Not sent: the CARA's Students box"), 'project form privacy wording is accurate');
+  ok(r.text.includes('Most relevant to this activity') && r.text.includes('Hazard screening (Queensland)'), 'questionnaire shows relevant questions first and a Queensland screening section');
+  ok(r.text.includes('What information is sent?') && r.text.includes("Not sent: the CARA's Students box") && r.text.includes('never sent'), 'project form privacy wording is accurate');
 
   const brick = { cara_id: 1, name: 'Brick and block laying', project_type: 'brick_block', description: 'Practice wall', practice_type: 'Temporary educational practice',
     room_id: 2, pera_ids: ['1', '3'], edited_by: 'Teacher T', in_cara_scope: 'Unsure', q_cutting: 'Yes', q_dry_cutting: 'Unsure', q_engineered_stone: 'No',
@@ -214,13 +216,13 @@ const fullCara = {
 
   // ===== 7. CARA type: general curriculum / VET =====
   r = await req('teacher', 'GET', '/cara/new');
-  ok(r.text.includes('What are you planning?') && r.text.includes('/cara/new?type=general') && r.text.includes('/cara/new?type=vet'), 'New CARA starts with the general/VET choice');
+  ok(r.text.includes('What are you planning?') && r.text.includes('name="cara_type" value="general"') && r.text.includes('name="cara_type" value="vet"') && r.text.includes('1. Describe the activity'), 'New CARA starts at step 1 with the general/VET choice (no separate landing page)');
   r = await req('teacher', 'GET', '/cara/new?type=general');
-  ok(/<option value="general" selected/.test(r.text) && r.text.includes('id="vet_section" data-show-for="vet"'), 'general form preselects general; VET section only shown for VET');
+  ok(r.text.includes('name="cara_type" value="general" checked') && r.text.includes('id="vet_section" data-show-for="vet"'), 'general preselected; VET details only shown for VET');
   r = await req('teacher', 'GET', '/cara/3');
   ok(r.status === 200 && r.text.includes('Type not set') && html(r.text).includes('Choose whether this is a general curriculum activity or a VET course'), 'existing CARA stays accessible; type shown as not set and must be confirmed');
   r = await req('teacher', 'GET', '/cara/3/edit');
-  ok(r.status === 200 && r.text.includes('— Choose (not set yet) —') && (await db.query('SELECT cara_type FROM cara_records WHERE id=3')).rows[0].cara_type === null, 'existing CARA editable and not auto-classified from its title');
+  ok(r.status === 200 && r.text.includes('created before types existed') && (await db.query('SELECT cara_type FROM cara_records WHERE id=3')).rows[0].cara_type === null, 'existing CARA editable and not auto-classified from its title');
 
   // General curriculum construction activity: same screening when the work triggers it
   r = await req('teacher', 'POST', '/cara', { activity_name: 'Year 9 Design Tech garden shed', class_unit: 'Year 9 Design and Technologies', risk_level: 'High', cara_type_fields: '1', cara_type: 'general',
@@ -228,7 +230,7 @@ const fullCara = {
   const gc = Number(r.loc.split('/').pop());
   ok((await db.query('SELECT cara_type FROM cara_records WHERE id=$1', [gc])).rows[0].cara_type === 'general', 'general curriculum CARA created with its type stored');
   r = await req('teacher', 'GET', `/cara/${gc}`);
-  ok(!r.text.includes('VET details') && !html(r.text).includes('VET: '), 'general curriculum CARA shows no VET fields or VET checks');
+  ok(!/<[^>]*>\s*VET details\s*</.test(r.text) && !r.text.includes('vet_units') && !html(r.text).includes('VET: '), 'general curriculum CARA shows no VET fields or VET checks');
   ok(r.text.includes('Optional: add projects'), 'projects are optional for general curriculum');
   r = await req('teacher', 'POST', `/cara/${gc}/projects`, { cara_id: gc, name: 'Shed frame', project_type: 'wall_frame', practice_type: 'Permanent installation for use', pera_ids: ['3'], edited_by: 'Teacher T', q_construction_work: 'Yes', q_fall_2m: 'Yes' });
   const gp = Number(r.loc.split('/').pop());
