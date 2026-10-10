@@ -18,6 +18,7 @@ const caraChecks = require('./cara-checks');
 const caraType = require('./cara-type');
 const caraForm = require('./cara-form');
 const qldRisk = require('./qld-risk');
+const features = require('./features');
 
 function caraApprovalTexts() {
   const out = { '': 'Set a proposed activity risk rating to see the approval requirement.' };
@@ -2057,7 +2058,7 @@ async function loadCaraIssues(r) {
   const peras = (await pool.query(
     `SELECT p.id, p.activity_name, p.risk_level, p.status, p.archived, p.supervision_level, p.required_supervision
      FROM cara_tool_links l JOIN pera_records p ON p.id = l.pera_id WHERE l.cara_id = $1 ORDER BY p.activity_name`, [r.id])).rows;
-  const projectReviews = await caraProjects.openReviews(r.id);
+  const projectReviews = features.projects ? await caraProjects.openReviews(r.id) : [];
   return caraChecks.caraIssues(r, { peras, projectReviews });
 }
 
@@ -2278,6 +2279,7 @@ app.post('/cara/:id/edit', async (req, res, next) => {
       return res.status(403).send('You can only edit CARA records you created yourself. <a href="/cara">Back to CARA list</a>');
     }
     const before = existingResult.rows[0];
+    if (extra.screening) extra.screening = caraForm.keepUnasked(before.screening, extra.screening);
 
     const linkedResult = await pool.query('SELECT pera_id FROM cara_tool_links WHERE cara_id = $1', [req.params.id]);
     const beforeToolIds = linkedResult.rows.map((row) => String(row.pera_id));
@@ -2459,7 +2461,7 @@ app.get('/cara/:id', async (req, res, next) => {
       : `<div class="detail-value">No PERA linked.</div>`;
 
     const checkPanel = r.archived ? '' : await caraAi.checkPanelHtml(r, req.staffUser, req.query);
-    const projectsPanel = await caraProjects.caraPanelHtml(r, req.staffUser);
+    const projectsPanel = features.projects ? await caraProjects.caraPanelHtml(r, req.staffUser) : '';
     const roomName = r.room_id ? ((await pool.query('SELECT name FROM rooms WHERE id = $1', [r.room_id])).rows[0] || {}).name : null;
     const caraVersions = (await pool.query('SELECT version, approved_by, approved_at, superseded_at FROM cara_versions WHERE cara_id = $1 ORDER BY version DESC', [r.id])).rows;
     const vetHtml = r.cara_type === 'vet' ? `
@@ -2734,7 +2736,7 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     // ?preview=html shows the print layout in the browser (handy for tweaking
     // the design in cara-pdf.js without downloading a PDF each time).
     if (req.query.preview === 'html') {
-      r.projects = await caraProjects.projectsForCaraPdf(r.id);
+      r.projects = features.projects ? await caraProjects.projectsForCaraPdf(r.id) : [];
       r.issues = caraChecks.openIssues(await loadCaraIssues(r));
       r.room_name = r.room_id ? ((await pool.query('SELECT name FROM rooms WHERE id = $1', [r.room_id])).rows[0] || {}).name : null;
       return res.send(renderCaraHtml(r, toolsResult.rows, { brand: BRAND }));
@@ -2742,7 +2744,7 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
 
     // Preferred: HTML layout rendered by headless Chromium. If Chromium isn't
     // available, fall through to the older PDFKit export below.
-    r.projects = await caraProjects.projectsForCaraPdf(r.id);
+    r.projects = features.projects ? await caraProjects.projectsForCaraPdf(r.id) : [];
     r.issues = caraChecks.openIssues(await loadCaraIssues(r));
     r.room_name = r.room_id ? ((await pool.query('SELECT name FROM rooms WHERE id = $1', [r.room_id])).rows[0] || {}).name : null;
     try {

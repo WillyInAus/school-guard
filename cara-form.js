@@ -11,6 +11,7 @@ const aiPrivacy = require('./ai-privacy');
 const screening = require('./screening-ui');
 const checks = require('./cara-checks');
 const qldRisk = require('./qld-risk');
+const features = require('./features');
 
 const STAGES = ['Describe', 'Select', 'Draft and review', 'Check and submit'];
 
@@ -199,7 +200,7 @@ async function caraFormHtml(o) {
       <fieldset class="type-radios" id="cara_type"><legend>What are you planning? ${req}</legend>
         ${Object.entries(caraType.TYPES).map(([k, t]) => `
           <label class="type-radio"><input type="radio" name="cara_type" value="${k}"${type === k ? ' checked' : ''}>
-            <span><strong>${escapeHtml(t.label)}</strong><small>${escapeHtml(t.desc)}</small></span></label>`).join('')}
+            <span><strong>${escapeHtml(t.label)}</strong><small>${escapeHtml(features.projects ? t.desc : t.desc.replace(/\s*(You can still add projects\.|Projects are usually needed\.)/, ''))}</small></span></label>`).join('')}
       </fieldset>
       ${!isNew && !r.cara_type ? '<p class="field-help">This CARA was created before types existed. Choose the one that fits.</p>' : ''}
       ${field('activity_name', 'Activity name', `<input type="text" id="activity_name" name="activity_name" required value="${v('activity_name')}" data-ph-general="${escapeHtml(EXAMPLES.general.name)}" data-ph-vet="${escapeHtml(EXAMPLES.vet.name)}" placeholder="${escapeHtml(ex.name)}">`, null, true)}
@@ -236,7 +237,7 @@ async function caraFormHtml(o) {
       ${field('materials', 'Materials', ta('materials', 2, 'e.g. mild steel flat bar, MIG wire, shielding gas, primer'))}
       ${field('sds_refs', 'Safety data sheet references', ta('sds_refs', 2, 'e.g. Primer — SDS in the workshop SDS folder'))}
       <h3 class="stage-sub" id="screening">Hazard questions</h3>
-      ${screening.questionsHtml(r.screening || {}, escapeHtml, { subject: 'activity' })}
+      ${screening.questionsHtml(r.screening || {}, escapeHtml, { subject: 'activity', noConstruction: !features.projects })}
     </section>`;
 
   const vetIncomplete = ['vet_units', 'trainer_competencies', 'vet_safety_requirements'].filter((k) => !String(r[k] || '').trim()).length + (r.vet_codes_checked ? 0 : 1);
@@ -343,7 +344,7 @@ async function caraFormHtml(o) {
       </div>
     </form>
     ${checks.placeholderClientScript('cara_form')}
-    ${screening.clientScript({ formId: 'cara_form', textIds: ['activity_brief', 'activity_scope', 'materials', 'activity_name', 'course'], peraName: 'tool_ids', templateId: null })}
+    ${screening.clientScript({ formId: 'cara_form', textIds: ['activity_brief', 'activity_scope', 'materials', 'activity_name', 'course'], peraName: 'tool_ids', templateId: null, noConstruction: !features.projects })}
     <script>
     (function () {
       var form = document.getElementById('cara_form');
@@ -507,6 +508,21 @@ function extraFromBody(b) {
   }
   return out;
 }
+// Answers to questions that weren't on the form (e.g. construction
+// questions while projects/SWMS are switched off) are kept, not deleted.
+function keepUnasked(prev, next) {
+  if (!next) return next;
+  const out = { ...next };
+  for (const [k, v] of Object.entries(prev || {})) if (!(k in out) && !askedKeys().has(k)) out[k] = v;
+  return out;
+}
+function askedKeys() {
+  const rules = require('./project-rules');
+  const skip = new Set();
+  if (!features.projects) for (const q of rules.QUESTIONS) if (q.key === 'construction_work' || q.hideIfNo === 'construction_work' || skip.has(q.showIf)) skip.add(q.key);
+  return new Set(rules.QUESTIONS.map((q) => q.key).filter((k) => !skip.has(k)));
+}
+
 async function saveExtra(pool, id, e) {
   const keys = Object.keys(e);
   if (!keys.length) return;
@@ -514,4 +530,4 @@ async function saveExtra(pool, id, e) {
   await pool.query(`UPDATE cara_records SET ${sets.join(', ')} WHERE id = $${keys.length + 1}`, [...keys.map((k) => (k === 'screening' ? JSON.stringify(e[k]) : e[k])), id]);
 }
 
-module.exports = { EXTRA_FIELDS, extraFromBody, saveExtra, caraFormHtml, STAGES, STAGE_OF_FIELD, issueGroups, groupedIssuesHtml, issueHref, submitBlockers, blockedSummaryHtml, signaturePadHtml, submitFormTag };
+module.exports = { keepUnasked, EXTRA_FIELDS, extraFromBody, saveExtra, caraFormHtml, STAGES, STAGE_OF_FIELD, issueGroups, groupedIssuesHtml, issueHref, submitBlockers, blockedSummaryHtml, signaturePadHtml, submitFormTag };

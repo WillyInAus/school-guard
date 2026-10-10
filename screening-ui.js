@@ -11,7 +11,12 @@ function questionsHtml(answers, escapeHtml, opts = {}) {
   const a = answers || {};
   // CARA forms ask about "the activity"; project forms keep "the project".
   const say = (t) => (opts.subject === 'activity' ? t.replace(/\bthe project\b/g, 'the activity').replace(/\bThe project\b/g, 'The activity') : t);
-  const groups = [...new Set(rules.QUESTIONS.map((q) => q.group))];
+  // noConstruction: the construction-type work question and its follow-ups
+  // (used for SWMS / high risk construction work) are not asked.
+  const skip = new Set();
+  if (opts.noConstruction) for (const q of rules.QUESTIONS) if (q.key === 'construction_work' || q.hideIfNo === 'construction_work' || skip.has(q.showIf)) skip.add(q.key);
+  const QS = rules.QUESTIONS.filter((q) => !skip.has(q.key));
+  const groups = [...new Set(QS.map((q) => q.group))];
   return `
     <fieldset class="prj-qgroup prj-qrelevant" id="prj_relevant"><legend>Most relevant to this activity</legend>
       <p class="form-section-hint prj-relevant-empty">Describe the work, materials and equipment to bring the relevant questions here.</p>
@@ -19,7 +24,7 @@ function questionsHtml(answers, escapeHtml, opts = {}) {
     <div class="prj-screen-head"><strong>Hazard screening (${escapeHtml(rules.JURISDICTION)})</strong> — answer every question marked <span class="prj-crit">*</span>. "Unsure" is fine; a reviewer will settle it.</div>
     ${groups.map((g, gi) => `
     <fieldset class="prj-qgroup" id="prj_g${gi}"><legend>${escapeHtml(g)}</legend>
-      ${rules.QUESTIONS.filter((q) => q.group === g).map((q) => `
+      ${QS.filter((q) => q.group === g).map((q) => `
         <div class="prj-q" id="q_${q.key}" data-q="${q.key}" data-home="prj_g${gi}" data-critical="${q.critical === true ? 'yes' : (q.critical || 'no')}"${q.showIf ? ` data-show-if="${q.showIf}"` : ''}${q.hideIfNo ? ` data-hide-if-no="${q.hideIfNo}"` : ''}${q.onlyWhenRelevant ? ' data-only-relevant="1"' : ''}>
           <div class="prj-q-text" id="qt_${q.key}">${escapeHtml(say(q.text))} <span class="prj-crit" title="Must be answered">*</span></div>${q.key === 'construction_work' ? '<p class="prj-gate-hint">Answer this first. Construction follow-up questions appear only if it is Yes or Unsure.</p>' : ''}
           <div class="prj-q-opts" role="radiogroup" aria-labelledby="qt_${q.key}">${['Yes', 'No', 'Unsure'].map((v) => `
@@ -33,7 +38,7 @@ function questionsHtml(answers, escapeHtml, opts = {}) {
 
 // textIds: ids of inputs whose words drive relevance; peraName: checkbox name
 // for equipment; templateId: optional template <select>.
-function clientScript({ formId, textIds, peraName, templateId }) {
+function clientScript({ formId, textIds, peraName, templateId, noConstruction }) {
   return `
   <script>
   (function () {
@@ -50,7 +55,7 @@ function clientScript({ formId, textIds, peraName, templateId }) {
       words = words.toLowerCase();
       var rel = {}; tpl.focus.forEach(function (k) { rel[k] = 1; });
       RELEVANCE.forEach(function (r) { if (new RegExp(r[0]).test(words)) r[1].forEach(function (k) { rel[k] = 1; }); });
-      var construction = ans('construction_work') !== 'No';
+      var construction = ${noConstruction ? 'false' : "ans('construction_work') !== 'No'"};
       var box = document.getElementById('prj_relevant'), more = document.getElementById('prj_more');
       // Same rule as project-rules.js visibleQuestions: a follow-up shows only
       // when the question it depends on is shown and answered Yes or Unsure.
@@ -90,6 +95,8 @@ function clientScript({ formId, textIds, peraName, templateId }) {
     TEXT_IDS.forEach(function (id) { var t = document.getElementById(id); if (t) t.addEventListener('blur', refresh); });
     window.screeningRefresh = refresh;
     refresh();
+    // Run again once the whole page (later scripts and fields) is ready.
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', refresh);
   })();
   </script>`;
 }

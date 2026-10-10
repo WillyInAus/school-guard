@@ -32,7 +32,7 @@ const DRAFT_FIELDS = {
 // two boxes (e.g. Supervision vs Supervisor qualification).
 const FIELD_GUIDE = {
   activity_scope: 'What students will do: the tasks, processes, equipment and materials. No hazards, controls or supervision here.',
-  induction_instruction: 'How students are prepared before and during the activity: workshop and machine inductions, demonstrations, SOPs/SWMS, competency sign-off. Not supervision levels or staff qualifications.',
+  induction_instruction: 'How students are prepared before and during the activity: workshop and machine inductions, demonstrations, SOPs, competency sign-off. Not supervision levels or staff qualifications.',
   supervision_notes: 'HOW the activity is supervised: level of supervision (direct vs general) per process or machine, staff-to-student ratios, maximum students on machines, teacher positioning, what happens if the teacher leaves, rules on access outside class. Do NOT state staff qualifications, licences or training here; they belong in Supervisor qualification.',
   supervisor_qualification: 'WHO may supervise and what they must hold: required qualifications, trade background, licences/tickets, current first aid, workshop/machine induction or competency for staff, requirements for relief staff. Do NOT describe supervision levels, ratios or positioning here; they belong in Supervision.',
   facilities_equipment: 'The room and fixed safety provisions: workshop layout, extraction/ventilation, welding screens/bays, spray booth, emergency stops, eyewash, fire equipment, PPE available. Not hazards or controls.',
@@ -74,7 +74,7 @@ Rules:
 - Base everything on the PERA details provided. Do not contradict a PERA, and never relax a PERA control or supervision requirement. If PERAs give different supervision levels, state each equipment item's level; never write a blanket rule that a later line contradicts.
 - Never write first aid treatment instructions (e.g. how to treat burns, eye injuries, bleeding, shock). The school inserts reviewed first aid wording separately.
 - For VET activities use only the qualification and unit codes the teacher entered. Never invent or guess codes, unit titles, assessment requirements, completed inductions, trainer or student competency, consent or first aid arrangements. If something is missing, write [confirm: ...].
-- The CARA type (general curriculum or VET) does not by itself change the risk level or require a SWMS.
+- The CARA type (general curriculum or VET) does not by itself change the risk level.
 - A suggested activity risk level is only a suggestion for the teacher and reviewer to confirm. Use the Queensland Department of Education levels, rated on INHERENT risk (before control measures): Low = little chance of an incident resulting in an injury; Medium = some chance of an incident resulting in an injury requiring first aid; High = inherently dangerous, high chance of a serious incident with major consequences (e.g. specialist treatment or hospitalisation); Extreme = inherently dangerous, high chance of a serious incident with critical consequences (e.g. permanent disability or loss of life). Base it on the actual activity, not on the highest equipment rating.
 - Do not invent school-specific facts (names, room numbers, staff, qualifications held, first aid locations). Where something school-specific is needed, write a short placeholder in square brackets, e.g. [name of supervising teacher].
 - Use Australian English, plain language a teacher can paste straight in, and short "- " bullet lines where a list helps.
