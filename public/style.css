@@ -1638,3 +1638,10 @@ html { scroll-padding-bottom: calc(var(--stage-bar-h) + 24px); scroll-padding-to
   .ws-page .prj-table td { padding: 2px 0; border: none; }
   .ws-page .prj-table td[data-label]::before { content: attr(data-label) ": "; font-weight: 600; color: #6B6659; font-size: 12.5px; }
 }
+/* Placeholders still to fill in, shown under the text box */
+.ph-hint { font-size: 13px; color: #8A4B0F; background: #FFF4E5; border: 1px solid #F0C98A; border-radius: 8px; padding: 6px 10px; margin: 6px 0 4px; line-height: 1.9; }
+.ph-chip { font: inherit; font-size: 12.5px; background: #fff; border: 1px solid #E0A33B; color: #7A4A00; border-radius: 999px; padding: 0 9px; margin: 0 4px 0 0; cursor: pointer; }
+.ph-chip:hover, .ph-chip:focus-visible { background: #FBE3B8; outline: none; }
+textarea.ph-flash { animation: phflash 1.6s ease-out; }
+@keyframes phflash { 0% { box-shadow: 0 0 0 4px #F3C16B; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.ph-mark { background: #FBE3B8; color: #7A4A00; border-radius: 4px; padding: 0 3px; font-weight: 600; }

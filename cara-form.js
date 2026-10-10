@@ -48,7 +48,8 @@ function issueGroups(issues) {
 function issueHref(caraId, i, inForm) {
   if (i.field === 'projects') return `/cara/${caraId}#projects`;
   if (i.key.startsWith('pera:unapproved')) return `/pera/${i.key.split(':')[2]}`;
-  return inForm ? `#${i.field}` : `/cara/${caraId}/edit#${i.field}`;
+  if (inForm) return `#${i.field}`;
+  return `/cara/${caraId}/edit${i.find ? `?find=${encodeURIComponent(i.find)}` : ''}#${i.field}`;
 }
 
 // Stage that holds an issue's field (null = not in the form).
@@ -61,7 +62,7 @@ function stageOfIssue(i) {
 function groupedIssuesHtml(caraId, issues, escapeHtml, { reviewer, resolveForms, inForm }) {
   const g = issueGroups(issues);
   const stageTag = (i) => { const st = inForm && stageOfIssue(i); return st ? ` <span class="chk-stage">step ${st}</span>` : ''; };
-  const li = (i) => `<li><a href="${issueHref(caraId, i, inForm)}">${escapeHtml(i.text)}</a>${stageTag(i)}${resolveForms && reviewer && i.level === 'review' ? `
+  const li = (i) => `<li><a href="${issueHref(caraId, i, inForm)}"${i.find && inForm ? ` data-find="${escapeHtml(i.find)}"` : ''}>${escapeHtml(i.text)}</a>${stageTag(i)}${resolveForms && reviewer && i.level === 'review' ? `
       <form method="post" action="/cara/${caraId}/issues/resolve" class="chk-resolve"><input type="hidden" name="key" value="${escapeHtml(i.key)}">
         <input type="text" name="note" placeholder="Reviewer decision and reason" required aria-label="Reviewer decision and reason">
         <button class="btn btn-secondary btn-sm" type="submit">Record decision</button></form>` : ''}</li>`;
@@ -341,6 +342,7 @@ async function caraFormHtml(o) {
         <button type="submit" class="btn btn-primary" id="stage_check" hidden>${checked ? 'Save and run checks again' : 'Save draft and run checks'}</button>
       </div>
     </form>
+    ${checks.placeholderClientScript('cara_form')}
     ${screening.clientScript({ formId: 'cara_form', textIds: ['activity_brief', 'activity_scope', 'materials', 'activity_name', 'course'], peraName: 'tool_ids', templateId: null })}
     <script>
     (function () {
@@ -414,6 +416,7 @@ async function caraFormHtml(o) {
         var d = target.closest('details'); if (d) d.open = true;
         target.scrollIntoView({ block: focusEl ? 'center' : 'start' });
         if (focusEl && !focusEl.matches('input,select,textarea,button,a,[tabindex]')) { var inner = focusEl.querySelector('input,select,textarea'); if (inner) target = inner; }
+        if (window.prettyReveal) window.prettyReveal(target);
         try { target.focus({ preventScroll: true }); } catch (e) {}
         todo();
       }
