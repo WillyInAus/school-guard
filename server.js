@@ -2495,24 +2495,36 @@ app.get('/cara/:id', async (req, res, next) => {
         : `${canManageOwnRecord(req.staffUser, r) ? `${caraForm.submitFormTag('cara_submit_form', r.id)}<div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Teacher signature</div>${caraForm.signaturePadHtml('cara_submit_form')}` : '<p class="form-section-hint">Ready for the teacher to sign and submit.</p>'}
            ${checkPanel}`;
     } else if (r.status === 'Pending approval' || r.status === 'Changes requested') {
-      actionsHtml = `
-        ${unapprovedNotice.replace("Can't submit yet.", "Can't approve yet.")}
-        ${checkPanel}
-        <form method="post" action="/cara/${r.id}/approve" style="margin-bottom:10px;">
-          <div class="form-row">
-            <label for="approver">Approved by</label>
-            <input type="text" id="approver" name="approver" placeholder="Principal / school leader name" value="${escapeHtml(req.staffUser.name)}" required>
-          </div>
-          <button type="submit" class="btn btn-primary" style="width:100%;">Approve</button>
-        </form>
-        <form method="post" action="/cara/${r.id}/reject">
-          <div class="form-row">
-            <label for="review_notes">Notes for changes requested</label>
-            <textarea id="review_notes" name="review_notes" placeholder="What needs to change?"></textarea>
-          </div>
-          <button type="submit" class="btn btn-secondary" style="width:100%;">Request changes</button>
-        </form>
-      `;
+      const isReviewer = ['admin', 'approver'].includes(req.staffUser.role);
+      const sentBack = r.status === 'Changes requested';
+      const notesBox = sentBack && r.review_notes ? `<div class="review-sentback"><strong>Sent back for changes:</strong><div class="pretty-text">${escapeHtml(r.review_notes)}</div></div>` : '';
+      if (!isReviewer) {
+        actionsHtml = sentBack
+          ? `${notesBox}<p class="form-section-hint">Make the changes, then run the checks and submit again from step 4.</p>
+             ${canManageOwnRecord(req.staffUser, r) ? `<a class="btn btn-primary btn-sm" href="/cara/${r.id}/edit">Make the changes</a>` : ''}`
+          : '<p class="form-section-hint"><strong>Waiting for approval.</strong> A reviewer will approve it or send it back with notes.</p>';
+      } else {
+        const blocked = caraForm.submitBlockers(caraIssueList);
+        actionsHtml = `
+        ${notesBox}
+        ${sentBack ? '<p class="form-section-hint">This CARA was sent back to the teacher. You can still approve it if the changes are no longer needed.</p>' : ''}
+        <div class="review-decision">
+          <form method="post" action="/cara/${r.id}/approve" class="review-col review-approve">
+            <h3>Approve</h3>
+            <div class="form-row"><label for="approver">Approved by</label>
+              <input type="text" id="approver" name="approver" placeholder="Principal / school leader name" value="${escapeHtml(req.staffUser.name)}" required></div>
+            ${blocked.length ? `<p class="review-blocked">Can't approve yet: <a href="#approval-checks">${blocked.length} item${blocked.length === 1 ? '' : 's'} in the checks</a> must be resolved first${unapprovedPeras.length ? `, including ${unapprovedPeras.length} equipment approval${unapprovedPeras.length === 1 ? '' : 's'}` : ''}. Send it back if the teacher needs to fix them.</p>
+            <button type="submit" class="btn btn-primary" disabled>Approve</button>` : '<button type="submit" class="btn btn-primary">Approve</button>'}
+          </form>
+          <form method="post" action="/cara/${r.id}/reject" class="review-col review-return">
+            <h3>Send back for more work</h3>
+            <div class="form-row"><label for="review_notes">What needs to change?</label>
+              <textarea id="review_notes" name="review_notes" rows="3" required placeholder="e.g. Add the eyewash location and the supervision ratio for the guillotine."></textarea></div>
+            <button type="submit" class="btn btn-return">Send back to teacher</button>
+          </form>
+        </div>
+        ${checkPanel}`;
+      }
     } else if (r.status === 'Approved') {
       actionsHtml = `
         <div class="detail-section">

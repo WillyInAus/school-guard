@@ -128,6 +128,28 @@ const allNo = () => Object.fromEntries(rules.QUESTIONS.map((q) => [q.key, 'No'])
   r = await req('teacher', 'POST', `/cara/${ck}/submit`, { teacher_signature: SIG });
   ok(r.status === 400, 'an already submitted CARA cannot be submitted again');
 
+  // ===== 5b. Reviewer decision: approve or send back =====
+  r = await req('approver', 'GET', `/cara/${ck}`);
+  t = html(r.text);
+  ok(t.includes('class="review-decision"') && t.includes('Send back for more work') && t.includes(`action="/cara/${ck}/approve"`) && !/<button type="submit" class="btn btn-primary" disabled>Approve/.test(t), 'reviewer sees Approve and Send back side by side');
+  ok(!t.includes('style="width:100%;">Approve'), 'Approve button is not full width');
+  r = await req('teacher', 'GET', `/cara/${ck}`);
+  t = html(r.text);
+  ok(t.includes('Waiting for approval') && !t.includes(`action="/cara/${ck}/approve"`), 'teacher sees "Waiting for approval", not the reviewer buttons');
+  r = await req('approver', 'POST', `/cara/${ck}/reject`, { review_notes: '' });
+  ok(r.status === 400, 'sending back needs a note');
+  r = await req('approver', 'POST', `/cara/${ck}/reject`, { review_notes: 'Add the guillotine supervision ratio.' });
+  ok(r.status === 302 && (await db.query('SELECT status FROM cara_records WHERE id=$1', [ck])).rows[0].status === 'Changes requested', 'reviewer sends it back for more work');
+  r = await req('teacher', 'GET', `/cara/${ck}`);
+  t = html(r.text);
+  ok(t.includes('Sent back for changes:') && t.includes('Add the guillotine supervision ratio.') && t.includes(`href="/cara/${ck}/edit"`), 'teacher sees the reviewer notes and a link to make the changes');
+  await req('teacher', 'POST', `/cara/${ck}/edit`, { ...base, activity_name: 'Bench hook — checks', tool_ids: ['3'], ...screen({ ...allNo() }), ...complete, supervision_notes: 'Teacher present at all times; 1:10 ratio at the guillotine.', stage: '4', after: 'checks' });
+  ok((await db.query('SELECT status FROM cara_records WHERE id=$1', [ck])).rows[0].status === 'Draft', 'editing after it was sent back returns it to Draft');
+  r = await req('teacher', 'POST', `/cara/${ck}/submit`, { teacher_signature: SIG });
+  ok(r.status === 302 && (await db.query('SELECT status FROM cara_records WHERE id=$1', [ck])).rows[0].status === 'Pending approval', 'teacher resubmits');
+  r = await req('approver', 'GET', '/cara/3');
+  ok(!html(r.text).includes('<h3>Optional AI review</h3>\n        </div>\n      </div>'), 'no empty AI review box');
+
   // ===== 6. Equipment warnings once =====
   const draftPera = (await db.query("INSERT INTO pera_records (activity_name,class_unit,risk_level,status,supervision_level) VALUES ('Scroll saw — Plant & Equipment Risk Assessment','Woodwork','Medium','Draft','Direct supervision') RETURNING id")).rows[0].id;
   r = await req('teacher', 'POST', '/cara', { ...base, activity_name: 'Scroll saw puzzles', tool_ids: [String(draftPera)], ...screen({ ...allNo() }), ...complete, stage: '4' });
