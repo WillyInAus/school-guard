@@ -1582,11 +1582,11 @@ tr.row-link:hover {
 .risk-level-row .badge { flex: none; min-width: 64px; text-align: center; }
 
 /* ---------- Laptop layout for CARA and project pages ----------
-   Forms are about 25% wider (640 → 800px) and overview pages are capped
+   Forms are wider (640 → 880px) and overview pages are capped
    for readable line length. The sidebar is unchanged. Grids respond to
    the form's own width (container queries), so zoom and narrow windows
    fall back to fewer columns without horizontal scrolling. */
-:root { --stage-form-max: 800px; --ws-page-max: 1040px; --stage-bar-h: 64px; }
+:root { --stage-form-max: 880px; --ws-page-max: 1144px; --stage-bar-h: 64px; }
 .form-card.cara-stages { max-width: var(--stage-form-max); width: 100%; box-sizing: border-box; container-type: inline-size; container-name: stageform; }
 .ws-page { max-width: var(--ws-page-max); min-width: 0; }
 .ws-page .prj-table-wrap { overflow-x: auto; }
