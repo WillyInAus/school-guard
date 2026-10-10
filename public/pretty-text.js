@@ -10,7 +10,13 @@
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
-  function inline(s) { return esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>'); }
+  // Placeholders such as [confirm: location] are highlighted when the page
+  // provides the rule (window.isPlaceholderText, set by the CARA/project forms).
+  function inline(s) {
+    var h = esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    if (window.isPlaceholderText) h = h.replace(/\[([^\[\]]{0,100})\]/g, function (m, inner) { return window.isPlaceholderText(inner) ? '<mark class="ph-mark">' + m + '</mark>' : m; });
+    return h;
+  }
 
   function render(text) {
     var lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
@@ -41,6 +47,7 @@
     var last = null;
 
     function showView() {
+      if (document.activeElement === ta) return;
       var v = ta.value;
       if (!v.trim()) { view.style.display = 'none'; ta.style.display = ''; return; }
       if (v !== last) { view.innerHTML = render(v); last = v; }
@@ -54,6 +61,7 @@
       if (h) ta.style.height = Math.max(h, 90) + 'px';
       ta.focus();
     }
+    ta.prettyEdit = edit;
     view.addEventListener('click', function (e) { if (!e.target.closest('a')) edit(); });
     view.addEventListener('focus', edit);
     ta.addEventListener('blur', showView);
@@ -71,5 +79,8 @@
       if (t.trim() && t.trim() !== '—') { el.innerHTML = render(t); el.classList.add('pretty-done'); }
     });
   }
+  // Show the real text box (if the formatted view is covering it) so it can
+  // take focus — used by issue links and "jump to field".
+  window.prettyReveal = function (el) { if (el && el.prettyEdit && el.style.display === 'none') el.prettyEdit(); };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

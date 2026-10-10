@@ -183,7 +183,7 @@ function caraIssues(r, ctx = {}) {
 
   for (const [k, label] of CARA_TEXT_FIELDS) {
     const ph = findPlaceholders(r[k]);
-    if (ph.length) add(`placeholder:${k}`, 'block', `${label} still has placeholder${ph.length === 1 ? '' : 's'} to fill in: ${ph.slice(0, 4).join(', ')}${ph.length > 4 ? '…' : ''}`, k);
+    if (ph.length) { add(`placeholder:${k}`, 'block', `${label} still has placeholder${ph.length === 1 ? '' : 's'} to fill in: ${ph.slice(0, 4).join(', ')}${ph.length > 4 ? '…' : ''}`, k); issues[issues.length - 1].find = ph[0]; }
     for (const f of firstAid.scanUnsafe(r[k])) add(`unsafe:${k}:${f.id}`, 'block', `Unsafe first aid wording in ${label}: "${f.sentence}" — ${f.message}`, k);
   }
 
@@ -220,4 +220,53 @@ function applyResolutions(issues, resolutions) {
 }
 const openIssues = (issues) => issues.filter((i) => !i.resolved);
 
-module.exports = { scopeTooThin, findPlaceholders, isPlaceholder, supervisionLevel, supervisionConflicts, equipmentTerms, caraIssues, applyResolutions, openIssues, CARA_TEXT_FIELDS, LEVEL_NAME };
+// Browser helper: under every text box in a form, list the placeholders
+// still in it (same rule as findPlaceholders); clicking one selects it in
+// the box. Issue links carrying ?find= / data-find use the same function.
+function placeholderClientScript(formId) {
+  return `<script>
+  (function () {
+    var form = document.getElementById(${JSON.stringify(formId)}); if (!form) return;
+    var WORDS = new RegExp(${JSON.stringify(PLACEHOLDER_WORDS.source)}, 'i'), LEGIT = new RegExp(${JSON.stringify(LEGIT_BRACKET.source)}, 'i');
+    function isPh(s) { s = s.trim(); if (!s) return true; if (/^(x+|n|\\?+|\\.{2,}|_+|-+)$/i.test(s)) return true; if (LEGIT.test(s)) return false; return WORDS.test(s); }
+    function find(t) { var re = /\\[([^\\[\\]\\n]{0,100})\\]/g, m, out = []; while ((m = re.exec(t))) if (isPh(m[1]) && out.indexOf(m[0]) < 0) out.push(m[0]); return out; }
+    function select(ta, needle) {
+      var i = ta.value.indexOf(needle); if (i < 0) return false;
+      var d = ta.closest('details'); if (d) d.open = true;
+      if (window.prettyReveal) window.prettyReveal(ta);
+      ta.focus({ preventScroll: true });
+      ta.setSelectionRange(i, i + needle.length);
+      var lh = parseFloat(getComputedStyle(ta).lineHeight) || 20, line = ta.value.slice(0, i).split('\\n').length - 1;
+      ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 3);
+      ta.scrollIntoView({ block: 'center' });
+      ta.classList.remove('ph-flash'); void ta.offsetWidth; ta.classList.add('ph-flash');
+      return true;
+    }
+    window.selectPlaceholder = select;
+    window.isPlaceholderText = isPh;
+    function hint(ta) {
+      var box = ta.parentElement.querySelector('.ph-hint[data-for="' + ta.name + '"]');
+      var ph = find(ta.value);
+      if (!ph.length) { if (box) box.remove(); return; }
+      if (!box) { box = document.createElement('div'); box.className = 'ph-hint'; box.dataset.for = ta.name; ta.insertAdjacentElement('afterend', box); }
+      box.innerHTML = '';
+      box.appendChild(document.createTextNode('Still to fill in: '));
+      ph.forEach(function (p, n) { var b = document.createElement('button'); b.type = 'button'; b.className = 'ph-chip'; b.textContent = p; b.title = 'Select it in the box'; b.addEventListener('click', function () { select(ta, p); }); box.appendChild(b); });
+      box.appendChild(document.createTextNode(' Replace each with the real detail for your school.'));
+    }
+    form.querySelectorAll('textarea').forEach(function (ta) { hint(ta); ta.addEventListener('input', function () { hint(ta); }); ta.addEventListener('change', function () { hint(ta); }); });
+    // Suggestions applied with "Use this" change the value without typing.
+    form.addEventListener('click', function () { setTimeout(function () { form.querySelectorAll('textarea').forEach(hint); }, 0); });
+    // Issue links: #field plus data-find (in the form) or ?find= (from the overview).
+    form.addEventListener('click', function (e) {
+      var a = e.target.closest('a[data-find]'); if (!a) return;
+      var ta = form.querySelector('[name="' + decodeURIComponent(a.getAttribute('href').slice(1)) + '"]');
+      if (ta) setTimeout(function () { select(ta, a.dataset.find); }, 60);
+    });
+    var q = new URLSearchParams(location.search).get('find'), h = decodeURIComponent((location.hash || '').slice(1));
+    if (q && h) { var ta = form.querySelector('[name="' + h + '"]'); if (ta) setTimeout(function () { select(ta, q); }, 120); }
+  })();
+  </script>`;
+}
+
+module.exports = { placeholderClientScript, scopeTooThin, findPlaceholders, isPlaceholder, supervisionLevel, supervisionConflicts, equipmentTerms, caraIssues, applyResolutions, openIssues, CARA_TEXT_FIELDS, LEVEL_NAME };

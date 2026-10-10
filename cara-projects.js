@@ -169,7 +169,7 @@ module.exports = function registerCaraProjects(app, deps) {
     if (p.class_stale) add('class:stale', 'block', 'Screening answers changed after the reviewer classified this project, so the classification is back to "Needs review".', '#review');
     for (const [k, label] of PROJECT_TEXT_FIELDS) {
       const ph = checks.findPlaceholders(p[k]);
-      if (ph.length) add(`placeholder:${k}`, 'block', `${label} still has placeholder${ph.length === 1 ? '' : 's'}: ${ph.slice(0, 4).join(', ')}`, k);
+      if (ph.length) { add(`placeholder:${k}`, 'block', `${label} still has placeholder${ph.length === 1 ? '' : 's'}: ${ph.slice(0, 4).join(', ')}`, k); out[out.length - 1].find = ph[0]; }
       for (const f of firstAid.scanUnsafe(p[k])) add(`unsafe:${k}:${f.id}`, 'block', `Unsafe first aid wording in ${label}: "${f.sentence}" — ${f.message}`, k);
     }
     (p.work_steps || []).forEach((st, i) => {
@@ -395,6 +395,7 @@ module.exports = function registerCaraProjects(app, deps) {
           <button type="submit" class="btn btn-primary" id="stage_submit" hidden>${isNew ? 'Save draft and run checks' : 'Save and go to submit'}</button>
         </div>
       </form>
+      ${checks.placeholderClientScript('prj_form')}
       ${screeningUi.clientScript({ formId: 'prj_form', textIds: ['description', 'materials', 'conditions', 'name'], peraName: 'pera_ids', templateId: 'project_type' })}
       <script>
       (function () {
@@ -424,6 +425,7 @@ module.exports = function registerCaraProjects(app, deps) {
           var d = t.closest('details'); if (d) d.open = true;
           t.scrollIntoView({ block: focusEl ? 'center' : 'start' });
           if (focusEl && !focusEl.matches('input,select,textarea,button,a,[tabindex]')) { var inner = focusEl.querySelector('input,select,textarea'); if (inner) t = inner; }
+          if (window.prettyReveal) window.prettyReveal(t);
           try { t.focus({ preventScroll: true }); } catch (e) {}
           todo();
         }
@@ -725,7 +727,7 @@ module.exports = function registerCaraProjects(app, deps) {
       const issues = projectIssues(p, cara);
       const openIss = checks.openIssues(issues);
       const blockers = openIss.map((i) => i.text);
-      const issueLink = (i) => (i.field && i.field.startsWith('#') ? i.field : `/projects/${p.id}/edit#${i.field}`);
+      const issueLink = (i) => (i.field && i.field.startsWith('#') ? i.field : `/projects/${p.id}/edit${i.find ? `?find=${encodeURIComponent(i.find)}` : ''}#${i.field}`);
       const issuesHtml = issues.length ? `
         <div class="chk-panel" id="approval-checks">
           <div class="chk-head"><strong>Before approval</strong><span>${openIss.filter((i) => i.level === 'block').length} to fix · ${openIss.filter((i) => i.level === 'review').length} for the reviewer</span></div>
