@@ -75,6 +75,7 @@ Rules:
 - Never write first aid treatment instructions (e.g. how to treat burns, eye injuries, bleeding, shock). The school inserts reviewed first aid wording separately.
 - For VET activities use only the qualification and unit codes the teacher entered. Never invent or guess codes, unit titles, assessment requirements, completed inductions, trainer or student competency, consent or first aid arrangements. If something is missing, write [confirm: ...].
 - The CARA type (general curriculum or VET) does not by itself change the risk level or require a SWMS.
+- A suggested activity risk level is only a suggestion for the teacher and reviewer to confirm. Use the Queensland Department of Education levels, rated on INHERENT risk (before control measures): Low = little chance of an incident resulting in an injury; Medium = some chance of an incident resulting in an injury requiring first aid; High = inherently dangerous, high chance of a serious incident with major consequences (e.g. specialist treatment or hospitalisation); Extreme = inherently dangerous, high chance of a serious incident with critical consequences (e.g. permanent disability or loss of life). Base it on the actual activity, not on the highest equipment rating.
 - Do not invent school-specific facts (names, room numbers, staff, qualifications held, first aid locations). Where something school-specific is needed, write a short placeholder in square brackets, e.g. [name of supervising teacher].
 - Use Australian English, plain language a teacher can paste straight in, and short "- " bullet lines where a list helps.
 - Plain text only: NO markdown. Never use **, __, # headings or backticks. To group bullets, put a short sub-heading on its own line ending in ":" (e.g. "Prior experience:"), then its "- " bullets underneath. Keep each bullet to one or two short lines.
@@ -286,7 +287,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
     const highest = peras.reduce((m, p) => (RISK_ORDER[p.risk_level] > RISK_ORDER[m] ? p.risk_level : m), 'Low');
     if (peras.length && RISK_ORDER[c.risk_level] < RISK_ORDER[highest]) {
       const which = peras.filter((p) => p.risk_level === highest).map((p) => p.activity_name).join(', ');
-      add('Should fix', `Risk level is ${c.risk_level}, but ${which} ${which.includes(',') ? 'are' : 'is'} rated ${highest}. The CARA risk level is usually at least the highest PERA's.`);
+      add('Suggestion', `${which} ${which.includes(',') ? 'are' : 'is'} rated ${highest} as equipment and the activity is rated ${c.risk_level}. Check the basis explains how the controls for this activity reduce the risk. Equipment ratings inform the activity rating but don't set it.`);
     }
     if (c.risk_level === 'Extreme' && !c.consent_required) add('Must fix', 'Extreme risk activities need parent consent. Tick "Parent consent required".');
     if (c.risk_level === 'High' && !c.consent_required) add('Suggestion', 'Parent consent is recommended for High risk activities.');
@@ -316,7 +317,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       properties: {
         ...Object.fromEntries(Object.entries(DRAFT_FIELDS).map(([k, label]) => [k, { type: 'string', description: `Suggested text for "${label}". ${FIELD_GUIDE[k] || ''} Omit or leave empty if the existing text is already good.` }])),
         suggested_risk_level: { type: 'string', enum: RISK_LEVELS },
-        risk_reason: { type: 'string', description: 'One sentence explaining the suggested risk level.' },
+        risk_reason: { type: 'string', description: 'One or two sentences: the main hazards of this activity and how likely and how serious an injury could be BEFORE control measures (inherent risk, Queensland Department of Education levels). Do not set it simply from the highest equipment rating.' },
         consent_recommended: { type: 'boolean' },
         consent_reason: { type: 'string', description: 'One sentence.' },
         notes: { type: 'array', items: { type: 'string' }, description: 'Up to 3 short notes for the teacher, e.g. missing information.' },
@@ -324,6 +325,18 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       required: ['suggested_risk_level', 'risk_reason'],
     },
   };
+
+  // Minimum inputs for a useful draft (also checked in the browser).
+  function draftMissing(b) {
+    const out = [];
+    const t = (k) => String(b[k] || '').trim();
+    if (!t('activity_name')) out.push('the activity name (step 1)');
+    if (!['general', 'vet'].includes(t('cara_type'))) out.push('general curriculum or VET (step 1)');
+    if ((t('activity_brief') || t('activity_scope')).length < 15) out.push('what students will actually do (step 1)');
+    const tools = [].concat(b.tool_ids || []).filter(Boolean);
+    if (!tools.length && b.no_equipment !== 'true') out.push('the tools and equipment, or tick "No tools or equipment are used" (step 2)');
+    return out;
+  }
 
   app.post('/cara/ai/draft', async (req, res) => {
     try {
@@ -338,7 +351,8 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         const rulesMod = require('./project-rules');
         c.screening_text = rulesMod.QUESTIONS.filter((q) => ['Yes', 'Unsure'].includes(b[`q_${q.key}`])).map((q) => `- ${q.text} → ${b[`q_${q.key}`]}`).join('\n');
       }
-      if (!String(c.activity_name || '').trim()) return res.status(400).json({ ok: false, error: 'Enter the activity name first.' });
+      const missing = draftMissing(b);
+      if (missing.length) return res.status(400).json({ ok: false, missing, error: `Before generating a draft, add: ${missing.join('; ')}.` });
       const peras = await loadPeras(b.tool_ids);
       const wantStudents = b.students_notes_empty === '1';
       // Every EMPTY box must get a suggestion (the model used to skip some,
@@ -512,12 +526,11 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
     return `
       <div class="ai-check-panel" id="ai-check">
         <div class="ai-check-head">
-          <h3>Check before submitting</h3>
+          <h3>Optional AI review</h3>
           ${canRun ? `<form method="post" action="/cara/${cara.id}/ai/check" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Checking… (up to a minute)';">
             <button type="submit" class="btn btn-secondary btn-sm">${latest ? 'Run AI check again' : 'Run AI check'}</button></form>` : ''}
         </div>
         ${notice ? `<div class="ai-notice">${escapeHtml(notice)}</div>` : ''}
-        ${rules.length ? `<p class="ai-sub">Automatic checks</p>${issueList(rules)}` : '<p class="ai-sub ai-allclear">Automatic checks: nothing flagged.</p>'}
         ${aiHtml || (canRun ? `<p class="ai-meta">The AI check reviews the hazards, controls, supervision and induction against the PERAs and lists things for you and the reviewer to look at. It is advice only; it does not approve anything.</p><details class="ai-privacy-more"><summary>What information is sent?</summary>${escapeHtml(aiPrivacy.AI_SENT_TEXT)}</details>` : '')}
       </div>`;
   }
@@ -533,6 +546,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
           <span class="ai-privacy-note">Student notes, names and signatures are never sent. <details class="ai-privacy-more"><summary>What information is sent?</summary>${escapeHtml(aiPrivacy.AI_SENT_TEXT)}</details></span>
         </div>
         <button type="button" class="btn btn-primary" id="ai_draft_btn">${opts.compact ? 'Generate draft' : 'Suggest content'}</button>
+        <div class="ai-draft-ready" id="ai_draft_ready" aria-live="polite"></div>
         <div class="ai-draft-status" id="ai_draft_status" role="status" aria-live="polite"></div>
       </div>
       <script>
@@ -541,6 +555,29 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         var statusEl = document.getElementById('ai_draft_status');
         var form = btn.closest('form');
         function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+        // Same minimum inputs as the server (draftMissing).
+        function missing() {
+          var v = function (n) { var e = form.elements[n]; if (!e) return ''; if (e.length && e[0] && e[0].type === 'radio') { var c = form.querySelector('input[name="' + n + '"]:checked'); return c ? c.value : ''; } return String(e.value || '').trim(); };
+          var out = [];
+          if (!v('activity_name')) out.push(['the activity name', 'activity_name']);
+          if (v('cara_type') !== 'general' && v('cara_type') !== 'vet') out.push(['general curriculum or VET', 'cara_type']);
+          if ((v('activity_brief') || v('activity_scope')).length < 15) out.push(['what students will actually do', 'activity_brief']);
+          var ne = form.querySelector('input[name="no_equipment"]');
+          if (!form.querySelector('input[name="tool_ids"]:checked') && !(ne && ne.checked)) out.push(['the tools and equipment (or "No tools or equipment are used")', 'tool_ids']);
+          return out;
+        }
+        var readyEl = document.getElementById('ai_draft_ready');
+        function readiness() {
+          var m = missing();
+          btn.disabled = !!m.length;
+          readyEl.innerHTML = '';
+          if (m.length) {
+            readyEl.appendChild(el('span', null, 'To generate a draft, first add: '));
+            m.forEach(function (x, i) { var a = el('a', null, x[0]); a.href = '#' + x[1]; readyEl.appendChild(a); if (i < m.length - 1) readyEl.appendChild(document.createTextNode('; ')); });
+            readyEl.appendChild(document.createTextNode('. You can also fill in the sections yourself.'));
+          }
+        }
+        form.addEventListener('input', readiness); form.addEventListener('change', readiness); readiness();
         function clearOld() { document.querySelectorAll('.ai-suggest').forEach(function (n) { n.remove(); }); }
         function suggestBox(target, title, text, onUse, onAdd) {
           var box = el('div', 'ai-suggest');
@@ -563,13 +600,14 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
           fd.delete('students_notes'); fd.delete('submitted_by');
           fd.append('students_notes_empty', studentsEmpty ? '1' : '0');
           var params = new URLSearchParams();
+          if (!form.querySelector('input[name="no_equipment"]') || !form.querySelector('input[name="no_equipment"]').checked) fd.delete('no_equipment');
           fd.forEach(function (v, k) { if (typeof v === 'string') params.append(k, v); });
-          if (!(fd.get('activity_name') || '').trim()) { statusEl.textContent = 'Enter the activity name first.'; return; }
+          if (missing().length) { readiness(); return; }
           btn.disabled = true; statusEl.textContent = 'Thinking… this can take up to a minute.';
           fetch('/cara/ai/draft', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(), credentials: 'same-origin' })
             .then(function (r) { return r.json(); })
             .then(function (d) {
-              btn.disabled = false;
+              readiness();
               if (!d.ok) { statusEl.textContent = (d.error || 'Something went wrong.') + ' Nothing you entered has been lost — try again, or fill the sections in yourself.'; return; }
               clearOld();
               var count = 0;
@@ -581,7 +619,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
                   f.value.trim() ? function () { f.value = f.value.trim() + '\\n' + d.suggestions[k]; } : null);
               });
               var risk = form.querySelector('[name="risk_level"]');
-              if (d.risk && risk && d.risk.level !== risk.value) { count++; suggestBox(risk, 'Suggested risk level: ' + d.risk.level, d.risk.reason, function () { risk.value = d.risk.level; }); }
+              if (d.risk && risk && d.risk.level !== risk.value) { count++; suggestBox(risk, 'AI-suggested risk level: ' + d.risk.level + ' (you and the reviewer must confirm it)', d.risk.reason, function () { risk.value = d.risk.level; risk.dispatchEvent(new Event('change', { bubbles: true })); var rb = form.querySelector('[name="risk_basis"]'); if (rb && !rb.value.trim() && d.risk.reason) rb.value = 'AI suggestion, to be checked: ' + d.risk.reason; }); }
               var consent = form.querySelector('[name="consent_required"]');
               if (d.consent && consent && d.consent.recommended && !consent.checked) { count++; suggestBox(consent.parentElement, 'Parent consent recommended', d.consent.reason, function () { consent.checked = true; }); }
               var msgs = (d.notes || []).concat((d.rules || []).map(function (r) { return r.message; }));
@@ -589,7 +627,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
               statusEl.appendChild(el('div', null, count ? count + ' suggestion' + (count === 1 ? '' : 's') + ' added below the matching boxes. Review each one before using it.' : 'No changes suggested.'));
               if (msgs.length) { var ul = el('ul', 'ai-draft-notes'); msgs.forEach(function (m) { ul.appendChild(el('li', null, m)); }); statusEl.appendChild(ul); }
             })
-            .catch(function () { btn.disabled = false; statusEl.textContent = 'Could not reach the AI assistant. Nothing you entered has been lost — check your connection and try again, or fill the sections in yourself.'; });
+            .catch(function () { readiness(); statusEl.textContent = 'Could not reach the AI assistant. Nothing you entered has been lost — check your connection and try again, or fill the sections in yourself.'; });
         });
       })();
       </script>`;

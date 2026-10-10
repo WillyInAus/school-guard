@@ -1823,6 +1823,8 @@ async function migrate() {
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS risk_basis TEXT;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS screening JSONB;`);
   await pool.query(`ALTER TABLE cara_records ALTER COLUMN risk_level DROP NOT NULL;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS no_equipment BOOLEAN NOT NULL DEFAULT false;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS residual_risk TEXT;`);
   // Approved CARA versions are kept when a CARA is changed and re-approved.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cara_versions (

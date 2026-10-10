@@ -121,13 +121,13 @@ const describeGeneral = {
   ok(r.text.includes('Tools and equipment') && !/PERA used/.test(r.text), '"PERA used" renamed to "Tools and equipment"');
 
   // ===== D. AI failure and retry =====
-  r = await req('teacher', 'POST', '/cara/ai/draft', { ...describeGeneral, activity_name: 'FAIL-AI test', ...screen({ construction_work: 'No' }) });
+  r = await req('teacher', 'POST', '/cara/ai/draft', { ...describeGeneral, tool_ids: ['3'], activity_name: 'FAIL-AI test', ...screen({ construction_work: 'No' }) });
   let d = JSON.parse(r.text);
   ok(!d.ok && /busy|try again/i.test(d.error), 'AI failure returns a useful retry message', r.text);
   r = await req('teacher', 'GET', `/cara/${sm}/edit`);
   ok(r.text.includes('Nothing you entered has been lost'), 'the form tells the teacher nothing was lost when AI fails');
   fs.writeFileSync(AI_LOG, '');
-  r = await req('teacher', 'POST', '/cara/ai/draft', { ...describeGeneral, students_notes: 'STUDENT-SECRET', ...screen({ construction_work: 'No', cutting: 'Yes' }) });
+  r = await req('teacher', 'POST', '/cara/ai/draft', { ...describeGeneral, tool_ids: ['3'], students_notes: 'STUDENT-SECRET', ...screen({ construction_work: 'No', cutting: 'Yes' }) });
   d = JSON.parse(r.text);
   const sent = fs.readFileSync(AI_LOG, 'utf8');
   ok(d.ok && sent.includes('tin snips') && sent.includes('Hazard') && !sent.includes('STUDENT-SECRET'), 'retry works; AI gets the description and hazard answers but not the Students box');

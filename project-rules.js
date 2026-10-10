@@ -268,11 +268,20 @@ const constructionApplies = (a) => (a || {}).construction_work !== 'No';
 function visibleQuestions(answers, p) {
   const a = answers || {};
   const rel = p ? relevantKeys(p, (p.peras || []).map((x) => x.activity_name)) : null;
+  // Follow-ups appear progressively: a follow-up is shown only when the
+  // question it depends on is itself shown and answered Yes or Unsure.
+  // Construction-specific follow-ups (hideIfNo) wait for an explicit Yes or
+  // Unsure to the work-type question. Hidden questions are never treated as
+  // "No": the question they depend on stays unanswered and is required.
+  const shown = new Set();
+  const opens = (k) => shown.has(k) && (a[k] === 'Yes' || a[k] === 'Unsure');
   return QUESTIONS.filter((q) => {
-    if (q.showIf && a[q.showIf] !== 'Yes' && a[q.showIf] !== 'Unsure') return false;
-    if (q.hideIfNo && a[q.hideIfNo] === 'No') return false;
-    if (q.onlyWhenRelevant && !a[q.key] && !(rel && rel.has(q.key))) return false;
-    return true;
+    let ok = true;
+    if (q.showIf && !opens(q.showIf)) ok = false;
+    if (q.hideIfNo && !opens(q.hideIfNo)) ok = false;
+    if (q.onlyWhenRelevant && !a[q.key] && !(rel && rel.has(q.key))) ok = false;
+    if (ok) shown.add(q.key);
+    return ok;
   });
 }
 function isCritical(q, a, rel) {

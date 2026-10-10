@@ -141,13 +141,23 @@ function caraIssues(r, ctx = {}) {
   ];
   for (const [k, msg] of required) if (blank(r[k])) add(`missing:${k}`, 'block', msg, k);
   if (blank(r.course) && blank(r.class_unit)) add('missing:course', 'block', 'Class group: course / subject is missing.', 'course');
-  if (!r.risk_level) add('missing:risk_level', 'block', 'Proposed activity risk rating not set (step 4).', 'risk_level');
+  if (!r.risk_level) add('missing:risk_level', 'block', 'Activity risk level not set (step 4).', 'risk_level');
+  // Department of Education CARA procedure: consent is mandatory for
+  // Extreme and strongly recommended for High.
+  if (r.risk_level === 'Extreme' && !r.consent_required) add('consent:extreme', 'block', 'Extreme risk: parent/carer consent is mandatory. Tick "Parent consent required" (step 4).', 'consent_required');
+  if (r.risk_level === 'High' && !r.consent_required) add('consent:high', 'review', 'High risk: parent/carer consent is strongly recommended as a condition of approval, but is not marked as required.', 'consent_required');
+  if (r.risk_level && r.residual_risk && RISK_ORDER[r.residual_risk] > RISK_ORDER[r.risk_level]) add('risk:residual-above', 'block', `The risk with controls (${r.residual_risk}) is higher than the inherent risk (${r.risk_level}). Check both ratings (step 4).`, 'residual_risk');
   // Hazard screening for the activity itself (same rules as projects).
   {
     const ev = rules.evaluate({ answers: r.screening || {}, project_type: null, description: `${r.activity_brief || ''} ${r.activity_scope || ''}`, materials: r.materials, peras });
-    if (ev.unanswered.length) add('screening:unanswered', 'block', `Hazard screening: ${ev.unanswered.length} question${ev.unanswered.length === 1 ? '' : 's'} to answer (step 2).`, 'screening');
+    if (ev.unanswered.length) {
+      const gate = ev.unanswered.some((q) => q.key === 'construction_work');
+      add('screening:unanswered', 'block', gate
+        ? `Hazard screening: answer whether the activity involves construction-type work${ev.unanswered.length > 1 ? `, then ${ev.unanswered.length - 1} more question${ev.unanswered.length === 2 ? '' : 's'}` : ''} (step 2).`
+        : `Hazard screening: ${ev.unanswered.length} question${ev.unanswered.length === 1 ? '' : 's'} to answer (step 2).`, gate ? 'q_construction_work' : `q_${ev.unanswered[0].key}`);
+    }
     for (const f of ev.flags.filter((x) => x.level === 'stop')) add('screening:stop', 'block', f.text, 'screening');
-    if (ev.unsure.length) add('screening:unsure', 'review', `Hazard screening: ${ev.unsure.length} answer${ev.unsure.length === 1 ? ' is' : 's are'} "Unsure" (${ev.unsure.map((q) => q.key.replace(/_/g, ' ')).join(', ')}). A reviewer must settle ${ev.unsure.length === 1 ? 'it' : 'them'}.`, 'screening');
+    if (ev.unsure.length) add('screening:unsure', 'review', `Hazard screening: ${ev.unsure.length} answer${ev.unsure.length === 1 ? ' is' : 's are'} "Unsure" (${ev.unsure.map((q) => q.key.replace(/_/g, ' ')).join(', ')}). A reviewer must settle ${ev.unsure.length === 1 ? 'it' : 'them'}.`, `q_${ev.unsure[0].key}`);
     for (const t of ev.triggers) add(`screening:trigger:${t.key}`, 'review', `Possible high risk construction work (${rules.JURISDICTION}): ${t.label}. Consider a project document for this work; a reviewer decides whether a SWMS is legally required.`, 'screening');
   }
   if (!caraType.TYPES[r.cara_type]) add('missing:cara_type', 'block', 'Choose whether this is a general curriculum activity or a VET course (top of the form).', 'cara_type');
@@ -165,7 +175,7 @@ function caraIssues(r, ctx = {}) {
     if (!r.vet_codes_checked) add('vet:codes-checked', 'block', 'VET: confirm the qualification and unit codes were checked against training.gov.au.', 'vet_section');
     if (/Workplace|Mixed/.test(r.delivery_context || '')) add('vet:workplace', 'review', 'VET delivery includes a workplace or placement. The host workplace has its own WHS duties; a reviewer should confirm placement arrangements (agreement, host induction, supervision) are in place.', 'delivery_context');
   }
-  if (!peras.length) add('missing:peras', 'review', 'No equipment (PERA) is linked. Confirm the activity uses no plant or equipment.', 'tool_search');
+  if (!peras.length && !r.no_equipment) add('missing:peras', 'block', 'Tools and equipment: select what is used, or tick "No tools or equipment are used" (step 2).', 'tool_ids');
 
   for (const [h, c, label] of [['environmental_hazards', 'environmental_controls', 'Environmental'], ['facilities_hazards', 'facilities_controls', 'Facilities and equipment'], ['student_hazards', 'student_controls', 'Student']]) {
     if (!blank(r[h]) && blank(r[c])) add(`missing:${c}`, 'block', `${label} hazards are listed but there are no control measures.`, c);

@@ -131,7 +131,7 @@ const fullCara = {
   ok(r.text.includes('What information is sent?') && r.text.includes("Not sent: the CARA's Students box") && r.text.includes('never sent'), 'project form privacy wording is accurate');
 
   const brick = { cara_id: 1, name: 'Brick and block laying', project_type: 'brick_block', description: 'Practice wall', practice_type: 'Temporary educational practice',
-    room_id: 2, pera_ids: ['1', '3'], edited_by: 'Teacher T', in_cara_scope: 'Unsure', q_cutting: 'Yes', q_dry_cutting: 'Unsure', q_engineered_stone: 'No',
+    room_id: 2, pera_ids: ['1', '3'], edited_by: 'Teacher T', in_cara_scope: 'Unsure', q_construction_work: 'Unsure', q_cutting: 'Yes', q_dry_cutting: 'Unsure', q_engineered_stone: 'No',
     work_steps_json: JSON.stringify([{ step: 'Set out wall', hazards: 'Trips', controls: 'Housekeeping' }]) };
   r = await req('teacher', 'POST', '/cara/1/projects', brick); const p1 = Number(r.loc.split('/').pop());
   r = await req('teacher', 'POST', '/cara/1/projects', { cara_id: 1, name: 'Sawhorse', project_type: 'sawhorse', practice_type: 'Temporary educational practice', pera_ids: ['3'], in_cara_scope: 'Yes', edited_by: 'Teacher T', ...allNo() });

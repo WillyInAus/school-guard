@@ -7,8 +7,10 @@
 
 const rules = require('./project-rules');
 
-function questionsHtml(answers, escapeHtml) {
+function questionsHtml(answers, escapeHtml, opts = {}) {
   const a = answers || {};
+  // CARA forms ask about "the activity"; project forms keep "the project".
+  const say = (t) => (opts.subject === 'activity' ? t.replace(/\bthe project\b/g, 'the activity').replace(/\bThe project\b/g, 'The activity') : t);
   const groups = [...new Set(rules.QUESTIONS.map((q) => q.group))];
   return `
     <fieldset class="prj-qgroup prj-qrelevant" id="prj_relevant"><legend>Most relevant to this activity</legend>
@@ -19,10 +21,11 @@ function questionsHtml(answers, escapeHtml) {
     <fieldset class="prj-qgroup" id="prj_g${gi}"><legend>${escapeHtml(g)}</legend>
       ${rules.QUESTIONS.filter((q) => q.group === g).map((q) => `
         <div class="prj-q" id="q_${q.key}" data-q="${q.key}" data-home="prj_g${gi}" data-critical="${q.critical === true ? 'yes' : (q.critical || 'no')}"${q.showIf ? ` data-show-if="${q.showIf}"` : ''}${q.hideIfNo ? ` data-hide-if-no="${q.hideIfNo}"` : ''}${q.onlyWhenRelevant ? ' data-only-relevant="1"' : ''}>
-          <div class="prj-q-text" id="qt_${q.key}">${escapeHtml(q.text)} <span class="prj-crit" title="Must be answered">*</span></div>
+          <div class="prj-q-text" id="qt_${q.key}">${escapeHtml(say(q.text))} <span class="prj-crit" title="Must be answered">*</span></div>${q.key === 'construction_work' ? '<p class="prj-gate-hint">Answer this first. Construction follow-up questions appear only if it is Yes or Unsure.</p>' : ''}
           <div class="prj-q-opts" role="radiogroup" aria-labelledby="qt_${q.key}">${['Yes', 'No', 'Unsure'].map((v) => `
             <label><input type="radio" name="q_${q.key}" value="${v}"${a[q.key] === v ? ' checked' : ''}> ${v}</label>`).join('')}</div>
-          ${q.note ? `<details class="prj-q-note"><summary>More info</summary>${escapeHtml(q.note)}</details>` : ''}
+          ${q.note ? `<details class="prj-q-note"><summary>More info</summary>${escapeHtml(say(q.note))}</details>` : ''}
+          <p class="prj-unsure-note">Unsure — left open for the reviewer to settle.</p>
         </div>`).join('')}
     </fieldset>`).join('')}
     <details class="prj-qgroup prj-more" id="prj_more"><summary>More hazard questions (not matched to this activity — open if any apply)</summary></details>`;
@@ -37,6 +40,7 @@ function clientScript({ formId, textIds, peraName, templateId }) {
     var form = document.getElementById(${JSON.stringify(formId)}); if (!form) return;
     var TEMPLATES = ${JSON.stringify(rules.TEMPLATES).replace(/</g, '\\u003c')};
     var RELEVANCE = ${JSON.stringify(rules.RELEVANCE_MAP.map(([re, ks]) => [re.source, ks])).replace(/</g, '\\u003c')};
+    var ORDER = ${JSON.stringify(rules.QUESTIONS.map((q) => q.key))};
     var TEXT_IDS = ${JSON.stringify(textIds)}, PERA = ${JSON.stringify(peraName)}, TPL = ${JSON.stringify(templateId || null)};
     function ans(k) { var c = form.querySelector('input[name="q_' + k + '"]:checked'); return c ? c.value : ''; }
     function refresh() {
@@ -48,13 +52,25 @@ function clientScript({ formId, textIds, peraName, templateId }) {
       RELEVANCE.forEach(function (r) { if (new RegExp(r[0]).test(words)) r[1].forEach(function (k) { rel[k] = 1; }); });
       var construction = ans('construction_work') !== 'No';
       var box = document.getElementById('prj_relevant'), more = document.getElementById('prj_more');
+      // Same rule as project-rules.js visibleQuestions: a follow-up shows only
+      // when the question it depends on is shown and answered Yes or Unsure.
+      var vis = {};
+      function opens(k) { var v = ans(k); return vis[k] && (v === 'Yes' || v === 'Unsure'); }
+      ORDER.forEach(function (key) {
+        var el = document.getElementById('q_' + key); if (!el) return;
+        var ok = true;
+        if (el.dataset.showIf && !opens(el.dataset.showIf)) ok = false;
+        if (el.dataset.hideIfNo && !opens(el.dataset.hideIfNo)) ok = false;
+        vis[key] = ok;
+      });
+      var gate = document.getElementById('q_construction_work');
+      if (gate) gate.classList.toggle('prj-q-gate-open', !ans('construction_work'));
       form.querySelectorAll('.prj-q').forEach(function (el) {
         var key = el.dataset.q, parentKey = el.dataset.showIf;
         var isRel = rel[key] || (parentKey && rel[parentKey]);
-        var shown = true;
-        if (parentKey) { var pv = ans(parentKey); shown = pv === 'Yes' || pv === 'Unsure'; }
-        if (el.dataset.hideIfNo && ans(el.dataset.hideIfNo) === 'No') shown = false;
+        var shown = !!vis[key];
         el.style.display = shown ? '' : 'none';
+        el.classList.toggle('prj-q-unsure', shown && ans(key) === 'Unsure');
         // The work-type question always comes first.
         var target = key === 'construction_work' ? box : (isRel ? box : (el.dataset.onlyRelevant && !ans(key) ? more : document.getElementById(el.dataset.home)));
         if (key === 'construction_work' && box.firstElementChild !== el) box.insertBefore(el, box.querySelector('.prj-q') || null);

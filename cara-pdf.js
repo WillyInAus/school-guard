@@ -274,7 +274,7 @@ function renderCaraHtml(r, peraRows, { brand = 'PracReady', generatedAt = new Da
     <table class="meta">
       <tr>
         <th>Class / unit</th><td>${escapeHtml(r.class_unit || '—')}</td>
-        <th>Activity risk</th><td>${riskPill(r.risk_level)}</td>
+        <th>Activity risk (inherent)</th><td>${riskPill(r.risk_level)}${r.residual_risk ? `<br><small>With controls: ${escapeHtml(r.residual_risk)}</small>` : ''}</td>
         <th>Status</th><td><span class="pill ${statusCls}">${escapeHtml(r.status)}</span></td>
         <th>Parent consent</th><td>${r.consent_required ? 'Required' : 'Not required'}</td>
         <th>Next review</th><td>${escapeHtml(formatDate(r.next_review_date))}</td>
