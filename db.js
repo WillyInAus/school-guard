@@ -146,6 +146,13 @@ async function migrate() {
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS class_size INTEGER;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS age_range TEXT;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS prior_experience TEXT;`);
+  // Emergency confirmation and reviewer decisions on pre-approval checks (cara-safety.js, cara-checks.js)
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS first_aid_kit_location TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS first_aid_person TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS emergency_confirmed BOOLEAN NOT NULL DEFAULT false;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS emergency_confirmed_by TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS emergency_confirmed_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS issue_resolutions JSONB NOT NULL DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS signed_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT false;`);
 
@@ -1777,6 +1784,26 @@ async function migrate() {
       changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  await pool.query(`ALTER TABLE cara_projects ADD COLUMN IF NOT EXISTS issue_resolutions JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+  // Allow project drafts in the AI usage log (the original check only allowed 'draft' and 'check').
+  await pool.query(`
+    DO $$
+    DECLARE c record;
+    BEGIN
+      FOR c IN SELECT conname FROM pg_constraint
+               WHERE conrelid = 'cara_ai_reviews'::regclass AND contype = 'c'
+                 AND pg_get_constraintdef(oid) ILIKE '%kind%' AND pg_get_constraintdef(oid) NOT ILIKE '%project_draft%'
+      LOOP
+        EXECUTE format('ALTER TABLE cara_ai_reviews DROP CONSTRAINT %I', c.conname);
+      END LOOP;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'cara_ai_reviews'::regclass AND conname = 'cara_ai_reviews_kind_check2') THEN
+        ALTER TABLE cara_ai_reviews ADD CONSTRAINT cara_ai_reviews_kind_check2 CHECK (kind IN ('draft','check','project_draft'));
+      END IF;
+    END $$;
+  `);
+  await pool.query(`ALTER TABLE cara_projects ADD COLUMN IF NOT EXISTS class_basis TEXT;`);
+  await pool.query(`ALTER TABLE cara_projects ADD COLUMN IF NOT EXISTS class_reviewed_by TEXT;`);
+  await pool.query(`ALTER TABLE cara_projects ADD COLUMN IF NOT EXISTS class_reviewed_at TIMESTAMPTZ;`);
 }
 
 module.exports = { pool, migrate, MIN_SAFETY_REQUIREMENTS, ELECTRICAL_REQUIREMENTS };

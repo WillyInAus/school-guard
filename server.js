@@ -13,6 +13,8 @@ const { page, escapeHtml, requestContext, BRAND } = require('./views/layout');
 const { renderLanding } = require('./landing');
 const { renderCaraHtml, renderCaraPdf } = require('./cara-pdf');
 const { cohortFromBody, saveCohort, cohortSummary, cohortFormHtml, COHORT_FIELDS } = require('./cara-cohort');
+const caraSafety = require('./cara-safety');
+const caraChecks = require('./cara-checks');
 
 // Faith Lutheran College — Plainland letterhead, shown at the top of CARA PDF
 // exports (see GET /cara/:id/pdf below). Read once at startup; if the file
@@ -2032,6 +2034,59 @@ const caraProjects = require('./cara-projects')(app, {
   pool, page, escapeHtml, requireRole, canManageOwnRecord, formatDate, formatDateTime, riskBadgeClass, caraAi, BRAND,
 });
 
+// Deterministic pre-approval checks for a CARA (cara-checks.js).
+async function loadCaraIssues(r) {
+  const peras = (await pool.query(
+    `SELECT p.id, p.activity_name, p.risk_level, p.status, p.archived, p.supervision_level, p.required_supervision
+     FROM cara_tool_links l JOIN pera_records p ON p.id = l.pera_id WHERE l.cara_id = $1 ORDER BY p.activity_name`, [r.id])).rows;
+  const projectReviews = await caraProjects.openReviews(r.id);
+  return caraChecks.caraIssues(r, { peras, projectReviews });
+}
+
+function caraIssuesPanelHtml(r, issues, user) {
+  const open = caraChecks.openIssues(issues);
+  const resolved = issues.filter((i) => i.resolved);
+  const reviewer = user && ['admin', 'approver', 'system_admin'].includes(user.role);
+  const link = (i) => (i.field === 'projects' ? '#projects' : `/cara/${r.id}/edit#${i.field}`);
+  if (!issues.length) return '<div class="chk-panel chk-ok"><strong>Approval checks:</strong> nothing outstanding.</div>';
+  return `
+    <div class="chk-panel" id="approval-checks">
+      <div class="chk-head"><strong>${r.status === 'Approved' ? 'Issues found in this approved CARA' : 'Before approval'}</strong>
+        <span>${open.filter((i) => i.level === 'block').length} to fix · ${open.filter((i) => i.level === 'review').length} for the reviewer</span></div>
+      ${r.status === 'Approved' && open.some((i) => i.key.startsWith('unsafe:')) ? '<p class="chk-alert">This approved CARA contains unsafe first aid wording. It needs correcting and re-approval.</p>' : ''}
+      <ul class="chk-list">
+        ${open.map((i) => `<li class="chk-${i.level}">
+          <a href="${link(i)}">${escapeHtml(i.text)}</a>
+          ${i.level === 'review' && reviewer ? `
+            <form method="post" action="/cara/${r.id}/issues/resolve" class="chk-resolve">
+              <input type="hidden" name="key" value="${escapeHtml(i.key)}">
+              <input type="text" name="note" placeholder="Reviewer decision and reason" required>
+              <button class="btn btn-secondary btn-sm" type="submit">Record decision</button>
+            </form>` : (i.level === 'review' ? '<span class="chk-tag">Reviewer to decide</span>' : '')}
+        </li>`).join('')}
+      </ul>
+      ${resolved.length ? `<details class="chk-resolved"><summary>${resolved.length} reviewer decision${resolved.length === 1 ? '' : 's'} recorded</summary><ul>${resolved.map((i) => `<li>${escapeHtml(i.text)}<br><em>${escapeHtml(i.resolved.note)} — ${escapeHtml(i.resolved.by)}, ${formatDate(i.resolved.at)}</em></li>`).join('')}</ul></details>` : ''}
+    </div>`;
+}
+
+app.post('/cara/:id/issues/resolve', requireRole('admin', 'approver', 'system_admin'), async (req, res, next) => {
+  try {
+    const r = (await pool.query('SELECT * FROM cara_records WHERE id = $1', [req.params.id])).rows[0];
+    if (!r) return res.status(404).send('CARA record not found.');
+    const note = normalizeText(req.body.note || '').trim();
+    const issue = (await loadCaraIssues(r)).find((i) => i.key === req.body.key);
+    if (!issue || issue.level !== 'review' || !note) return res.status(400).send('That issue can\'t be resolved by a reviewer decision (fix it by editing the CARA), or the note is missing. <a href="javascript:history.back()">Back</a>');
+    const res2 = { ...(r.issue_resolutions || {}) };
+    res2[issue.key] = { basis: issue.text, note, by: req.staffUser.name, at: new Date().toISOString() };
+    await pool.query('UPDATE cara_records SET issue_resolutions = $1 WHERE id = $2', [JSON.stringify(res2), r.id]);
+    await pool.query('INSERT INTO cara_change_log (cara_id, changed_by, summary, brief) VALUES ($1,$2,$3,$4)',
+      [r.id, req.staffUser.name, `Reviewer decision: ${issue.text}\nDecision: ${note}`, 'Reviewer decision']);
+    res.redirect(`/cara/${r.id}#approval-checks`);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Linked PERAs that aren't approved (or are archived). A CARA can list these
 // while it's being drafted, but can't be submitted or approved until they are.
 async function unapprovedCaraPeras(caraId) {
@@ -2140,10 +2195,9 @@ ${cohortFormHtml(null, escapeHtml)}
         <div class="form-section-title">Emergency and first aid</div>
         <p class="form-section-hint">Pre-filled with standard procedure — edit if this activity needs anything extra (e.g. off-site, remote location, higher-risk equipment).</p>
         <div class="form-row">
-          <textarea id="emergency_first_aid" name="emergency_first_aid">If an injury occurs, assess severity and apply first aid. If the injury is reportable, the school's sick bay/nurse station is to be notified immediately.
-First aid kit location: [confirm for this activity's location]
-Person with current first aid/CPR: [confirm name]</textarea>
+          <textarea id="emergency_first_aid" name="emergency_first_aid">If an injury occurs, assess severity and apply first aid. Call 000 in an emergency. If the injury is reportable, notify the school's sick bay/nurse station immediately.</textarea>
         </div>
+${caraSafety.emergencyFormHtml(null, escapeHtml)}
 
         <div class="form-section-title">Induction and instruction</div>
         <div class="form-row">
@@ -2279,6 +2333,7 @@ app.post('/cara', async (req, res, next) => {
 
     const caraId = result.rows[0].id;
     await saveCohort(pool, caraId, cohortFromBody(req.body));
+    await caraSafety.saveEmergency(pool, caraId, caraSafety.emergencyFromBody(req.body), normalizeText(req.body.submitted_by) || req.staffUser.name, null);
 
     const toolIds = [].concat(req.body.tool_ids || []).filter(Boolean);
     if (toolIds.length) {
@@ -2414,6 +2469,7 @@ ${cohortFormHtml(r, escapeHtml)}
         <div class="form-row">
           <textarea id="emergency_first_aid" name="emergency_first_aid">${escapeHtml(r.emergency_first_aid || '')}</textarea>
         </div>
+${caraSafety.emergencyFormHtml(r, escapeHtml)}
 
         <div class="form-section-title">Induction and instruction</div>
         <div class="form-row">
@@ -2567,11 +2623,13 @@ app.post('/cara/:id/edit', async (req, res, next) => {
 
     const newConsentRequired = consent_required === 'true';
     const cohort = cohortFromBody(req.body);
+    const emergency = caraSafety.emergencyFromBody(req.body);
 
     const fields = [
       ['activity_name', 'Activity name', activity_name],
       ['class_unit', 'Class / unit', class_unit || null],
       ...COHORT_FIELDS.map(([k, label]) => [k, label, cohort[k]]),
+      ...caraSafety.EMERGENCY_FIELDS.map(([k, label]) => [k, label, emergency[k]]),
       ['activity_scope', 'Activity scope', activity_scope || null],
       ['risk_level', 'Risk level', risk_level],
       ['students_notes', 'Students', students_notes || null],
@@ -2654,6 +2712,7 @@ app.post('/cara/:id/edit', async (req, res, next) => {
       ]
     );
     await saveCohort(pool, req.params.id, cohort);
+    await caraSafety.saveEmergency(pool, req.params.id, emergency, edited_by.trim(), before);
 
     await pool.query('DELETE FROM cara_tool_links WHERE cara_id = $1', [req.params.id]);
     if (afterToolIds.length) {
@@ -2726,6 +2785,8 @@ app.get('/cara/:id', async (req, res, next) => {
 
     const checkPanel = r.archived ? '' : await caraAi.checkPanelHtml(r, req.staffUser, req.query);
     const projectsPanel = await caraProjects.caraPanelHtml(r, req.staffUser);
+    const caraIssueList = r.archived ? [] : await loadCaraIssues(r);
+    const issuesPanel = r.archived ? '' : caraIssuesPanelHtml(r, caraIssueList, req.staffUser);
     const unapprovedPeras = toolsResult.rows.filter((t) => t.archived || t.status !== 'Approved');
     const unapprovedNotice = unapprovedPeras.length
       ? `<div class="alert alert-warning cara-unapproved">
@@ -2890,6 +2951,7 @@ app.get('/cara/:id', async (req, res, next) => {
         <span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
         ${r.archived ? `<span class="badge" style="background:#F0EDE5;color:#6B6659;margin-left:6px;">Archived</span>` : ''}
       </div>
+      ${issuesPanel}
       ${projectsPanel}
       <div class="detail-grid">
         <div>
@@ -3022,12 +3084,14 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     // the design in cara-pdf.js without downloading a PDF each time).
     if (req.query.preview === 'html') {
       r.projects = await caraProjects.projectsForCaraPdf(r.id);
+    r.issues = caraChecks.openIssues(await loadCaraIssues(r));
       return res.send(renderCaraHtml(r, toolsResult.rows, { brand: BRAND }));
     }
 
     // Preferred: HTML layout rendered by headless Chromium. If Chromium isn't
     // available, fall through to the older PDFKit export below.
     r.projects = await caraProjects.projectsForCaraPdf(r.id);
+    r.issues = caraChecks.openIssues(await loadCaraIssues(r));
     try {
       const pdf = await renderCaraPdf(r, toolsResult.rows, { brand: BRAND });
       res.setHeader('Content-Type', 'application/pdf');
@@ -3283,6 +3347,13 @@ app.post('/cara/:id/approve', requireRole('admin', 'approver'), async (req, res,
     if (notApproved.length) {
       return res.status(400).send(`This CARA can't be approved until these PERAs are approved: ${notApproved.map((p) => escapeHtml(p.activity_name)).join(', ')}. <a href="/cara/${existing.id}">Back</a>`);
     }
+    {
+      const full = (await pool.query('SELECT * FROM cara_records WHERE id = $1', [existing.id])).rows[0];
+      const open = caraChecks.openIssues(await loadCaraIssues(full));
+      if (open.length) {
+        return res.status(400).send(`This CARA can't be approved yet:<ul>${open.map((i) => `<li>${escapeHtml(i.text)}</li>`).join('')}</ul><a href="/cara/${existing.id}#approval-checks">Back to the CARA</a>`);
+      }
+    }
     const approverName = normalizeText(req.body.approver) || req.staffUser.name;
     await pool.query(
       `UPDATE cara_records
@@ -3379,6 +3450,7 @@ app.post('/cara/:id/duplicate', async (req, res, next) => {
     );
     const newId = insertResult.rows[0].id;
     await saveCohort(pool, newId, r);
+    await caraSafety.saveEmergency(pool, newId, { first_aid_kit_location: r.first_aid_kit_location || null, first_aid_person: r.first_aid_person || null, emergency_confirmed: false }, req.staffUser.name, null);
 
     const toolLinks = await pool.query('SELECT pera_id FROM cara_tool_links WHERE cara_id = $1', [req.params.id]);
     if (toolLinks.rows.length) {
@@ -4809,9 +4881,15 @@ function adminHeader(title, subtitle) {
   `;
 }
 
+require('./content-review')(app, { pool, page, escapeHtml, requireRole, formatDate });
+
 require('./admin-approvals')(app, {
   pool, page, escapeHtml, requireRole, adminTabs, adminHeader, riskBadgeClass, statusBadgeClass, formatBrisbaneDate,
   approvalRequirement, caraApprovalRequirement, APPROVAL_DECISIONS, APPROVAL_REQUIRED_LEVELS,
+  caraOpenIssues: async (id) => {
+    const r = (await pool.query('SELECT * FROM cara_records WHERE id = $1', [id])).rows[0];
+    return r ? caraChecks.openIssues(await loadCaraIssues(r)) : [];
+  },
 });
 require('./admin-dashboard')(app, {
   pool, page, escapeHtml, requireRole, adminTabs, adminHeader, riskBadgeClass, statusBadgeClass, formatBrisbaneDate,
@@ -5623,6 +5701,7 @@ ${cohortFormHtml(r, escapeHtml)}
           <label for="emergency_first_aid">Emergency and first aid</label>
           <textarea id="emergency_first_aid" name="emergency_first_aid">${escapeHtml(r.emergency_first_aid || '')}</textarea>
         </div>
+${caraSafety.emergencyFormHtml(r, escapeHtml)}
         <div class="form-row">
           <label for="induction_instruction">Induction and instruction</label>
           <textarea id="induction_instruction" name="induction_instruction">${escapeHtml(r.induction_instruction || '')}</textarea>
@@ -5729,6 +5808,10 @@ app.post('/admin/cara/:id', requireRole('admin'), async (req, res, next) => {
       ]
     );
     await saveCohort(pool, req.params.id, cohortFromBody(req.body));
+    {
+      const prev = (await pool.query('SELECT first_aid_kit_location, first_aid_person, emergency_confirmed FROM cara_records WHERE id = $1', [req.params.id])).rows[0];
+      await caraSafety.saveEmergency(pool, req.params.id, caraSafety.emergencyFromBody(req.body), req.staffUser.name, prev);
+    }
 
     res.redirect(`/admin/cara/${req.params.id}/edit`);
   } catch (err) {

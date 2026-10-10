@@ -42,7 +42,7 @@ const FIELD_GUIDE = {
   facilities_controls: 'Controls for the facilities and equipment hazards listed, in the same order.',
   student_hazards: 'Hazards arising from the students themselves: inexperience, behaviour, fatigue, clothing/hair/jewellery, PPE non-use, medical needs (generic only).',
   student_controls: 'Controls for the student hazards listed, in the same order.',
-  emergency_first_aid: 'Emergency and first aid arrangements: first aid kit/burns kit, how to get help, emergency stops and isolation, fire response, incident reporting. Use [placeholders] for locations and names.',
+  emergency_first_aid: 'Emergency ARRANGEMENTS only: how to raise the alarm and get help, emergency stops and isolation, fire response, incident reporting and who to notify. Do NOT write first aid treatment steps (how to treat burns, eye injuries, bleeding, electric shock etc.); the teacher inserts reviewed first aid wording separately. Use [confirm: ...] for locations and names.',
 };
 
 // Students is only drafted when the teacher's box is empty, and its contents
@@ -71,7 +71,8 @@ const HAZARD_PAIRS = [
 const SYSTEM_PROMPT = `You help teachers in a Queensland school's practical subjects (Industrial Design and Technology, metalwork, woodwork, VET trades) write Curriculum Activity Risk Assessments (CARAs).
 A CARA covers one class activity. It draws on Plant & Equipment Risk Assessments (PERAs), which hold the approved hazards and controls for each machine or tool.
 Rules:
-- Base everything on the PERA details provided. Do not contradict a PERA, and never relax a PERA control or supervision requirement.
+- Base everything on the PERA details provided. Do not contradict a PERA, and never relax a PERA control or supervision requirement. If PERAs give different supervision levels, state each equipment item's level; never write a blanket rule that a later line contradicts.
+- Never write first aid treatment instructions (e.g. how to treat burns, eye injuries, bleeding, shock). The school inserts reviewed first aid wording separately.
 - Do not invent school-specific facts (names, room numbers, staff, qualifications held, first aid locations). Where something school-specific is needed, write a short placeholder in square brackets, e.g. [name of supervising teacher].
 - Use Australian English, plain language a teacher can paste straight in, and short "- " bullet lines where a list helps.
 - Plain text only: NO markdown. Never use **, __, # headings or backticks. To group bullets, put a short sub-heading on its own line ending in ":" (e.g. "Prior experience:"), then its "- " bullets underneath. Keep each bullet to one or two short lines.
@@ -121,6 +122,19 @@ function overLimit(userId, perHour = 30) {
 }
 
 const { cohortContextLines, COHORT_FIELDS } = require('./cara-cohort');
+const aiPrivacy = require('./ai-privacy');
+const firstAid = require('./first-aid');
+const checks = require('./cara-checks');
+
+// Remove unsafe first-aid sentences from AI text (never shown as a suggestion).
+function stripUnsafe(text, notes, label) {
+  const found = firstAid.scanUnsafe(text);
+  if (!found.length) return text;
+  let t = text;
+  for (const f of found) t = t.split(f.sentence).join('');
+  notes.push(`Removed unsafe first aid wording from the ${label} suggestion (${found[0].message}). Use the reviewed first aid buttons instead.`);
+  return t.replace(/\n{3,}/g, '\n\n').trim();
+}
 
 module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRecord }) {
   async function loadPeras(ids) {
@@ -167,7 +181,10 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       .join('\n\n');
   }
 
-  function caraContext(c) {
+  function caraContext(raw) {
+    // Explicit allowlist + redaction (ai-privacy.js); raw may be a full DB row.
+    const { cara: c, removed } = aiPrivacy.caraForAi(raw);
+    caraContext.lastRemoved = removed;
     const lines = [
       `Activity name: ${clip(c.activity_name, 200) || '(blank)'}`,
       `Class/unit: ${clip(c.class_unit, 200) || '(blank)'}`,
@@ -176,9 +193,9 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       ...cohortContextLines(c),
     ];
     for (const [key, label] of Object.entries(DRAFT_FIELDS)) {
+      if (!aiPrivacy.CARA_AI_ALLOWLIST.includes(key)) continue;
       lines.push(`${label}: ${clip(c[key], 1500) || '(blank)'}`);
     }
-    lines.push('Students notes: (withheld for privacy)');
     return lines.join('\n');
   }
 
@@ -314,18 +331,26 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       // silently cut off the last fields (e.g. Student controls). Allow more.
       const { result, usage, model, truncated } = await callClaude({ userText, tool, maxTokens: 8000 });
       await logUsage({ kind: 'draft', staffId: req.staffUser.id, model, usage, result: null });
+      const removedLines = caraContext.lastRemoved || 0;
+      const safety = [];
       const suggestions = {};
       for (const k of Object.keys(DRAFT_FIELDS)) {
-        const v = plainText(result[k]);
+        const v = stripUnsafe(plainText(result[k]), safety, DRAFT_FIELDS[k]);
         if (v && v !== String(c[k] || '').trim()) suggestions[k] = v.slice(0, 4000);
       }
-      if (wantStudents && String(result.students_notes || '').trim()) suggestions.students_notes = plainText(result.students_notes).slice(0, 4000);
+      if (wantStudents && String(result.students_notes || '').trim()) suggestions.students_notes = stripUnsafe(plainText(result.students_notes), safety, 'Students').slice(0, 4000);
+      // Flag (never silently accept) a suggestion that weakens PERA supervision.
+      if (suggestions.supervision_notes) {
+        for (const cf of checks.supervisionConflicts([{ label: 'the suggested Supervision text', text: suggestions.supervision_notes }], peras)) safety.push(`Check before using: ${cf.text}`);
+      }
       res.json({
         ok: true,
         suggestions,
         risk: RISK_LEVELS.includes(result.suggested_risk_level) ? { level: result.suggested_risk_level, reason: clip(result.risk_reason, 300) } : null,
         consent: typeof result.consent_recommended === 'boolean' ? { recommended: result.consent_recommended, reason: clip(result.consent_reason, 300) } : null,
         notes: [
+          ...safety,
+          ...(removedLines ? [aiPrivacy.redactedNote(removedLines)] : []),
           ...(truncated ? ['The AI ran out of space before finishing, so some fields may have no suggestion. Check every section, or run Draft again.'] : []),
           ...(Array.isArray(result.notes) ? result.notes.slice(0, 3).map((n) => clip(n, 300)) : []),
         ],
@@ -453,7 +478,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
         </div>
         ${notice ? `<div class="ai-notice">${escapeHtml(notice)}</div>` : ''}
         ${rules.length ? `<p class="ai-sub">Automatic checks</p>${issueList(rules)}` : '<p class="ai-sub ai-allclear">Automatic checks: nothing flagged.</p>'}
-        ${aiHtml || (canRun ? '<p class="ai-meta">The AI check reviews the hazards, controls, supervision and induction against the PERAs and lists anything to fix. Student notes are never sent.</p>' : '')}
+        ${aiHtml || (canRun ? '<p class="ai-meta">The AI check reviews the hazards, controls, supervision and induction against the PERAs and lists things for you and the reviewer to look at. It is advice only; it does not approve anything. ${escapeHtml(aiPrivacy.AI_SENT_TEXT)}</p>' : '')}
       </div>`;
   }
 
@@ -464,7 +489,8 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       <div class="ai-draft-panel" id="ai_draft_panel">
         <div class="ai-draft-text">
           <strong>AI assistant</strong>
-          <span>Fill in the activity name and select the PERAs, then get suggested wording for the rest of the form. Nothing is filled in until you choose <em>Use this</em>. The Students box is never sent.</span>
+          <span>Fill in the activity name and select the PERAs, then get suggested wording for the rest of the form. Nothing is filled in until you choose <em>Use this</em>.</span>
+          <span class="ai-privacy-note">${escapeHtml(aiPrivacy.AI_SENT_TEXT)}</span>
         </div>
         <button type="button" class="btn btn-secondary" id="ai_draft_btn">Suggest content</button>
         <div class="ai-draft-status" id="ai_draft_status" role="status" aria-live="polite"></div>

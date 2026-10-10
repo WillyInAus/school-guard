@@ -20,6 +20,16 @@
 const rules = require('./project-rules');
 const pdf = require('./cara-pdf');
 const { cohortSummary } = require('./cara-cohort');
+const checks = require('./cara-checks');
+const firstAid = require('./first-aid');
+const aiPrivacy = require('./ai-privacy');
+const caraSafety = require('./cara-safety');
+
+const PROJECT_TEXT_FIELDS = [
+  ['description', 'What students will do'], ['scope_exclusions', 'Scope and exclusions'], ['materials', 'Materials'], ['sds_refs', 'SDS references'],
+  ['conditions', 'Other conditions and hazards'], ['ppe', 'PPE'], ['induction_supervision', 'Induction, supervision and competency'],
+  ['emergency_notes', 'Emergency considerations'], ['first_aid_kit_location', 'First aid kit location'], ['first_aid_person', 'First aid person'],
+];
 
 const CONTENT_FIELDS = [
   ['name', 'Project name'], ['project_type', 'Project type'], ['description', 'Description'],
@@ -54,7 +64,7 @@ module.exports = function registerCaraProjects(app, deps) {
       `SELECT id, activity_name, class_unit, activity_scope, risk_level, status, archived, created_by_staff_id,
               supervision_notes, supervisor_qualification, induction_instruction, facilities_equipment, emergency_first_aid,
               environmental_hazards, environmental_controls, facilities_hazards, facilities_controls,
-              student_hazards, student_controls, year_level, course, class_size, age_range
+              student_hazards, student_controls, year_level, course, class_size, age_range, prior_experience
        FROM cara_records WHERE id = $1`, [id]);
     return rows[0] || null;
   }
@@ -68,7 +78,7 @@ module.exports = function registerCaraProjects(app, deps) {
     if (!rows[0]) return null;
     const p = rows[0];
     const peras = await pool.query(
-      `SELECT pr.id, pr.activity_name, pr.risk_level, pr.status, pr.archived
+      `SELECT pr.id, pr.activity_name, pr.risk_level, pr.status, pr.archived, pr.supervision_level, pr.required_supervision
        FROM cara_project_peras l JOIN pera_records pr ON pr.id = l.pera_id WHERE l.project_id = $1 ORDER BY pr.activity_name`, [id]);
     p.peras = peras.rows;
     return p;
@@ -109,8 +119,42 @@ module.exports = function registerCaraProjects(app, deps) {
     for (const [k, v] of Object.entries(p.trigger_reviews || {})) {
       if (v && v.basis === triggerBasis(p, k)) tr[k] = v;
     }
-    return { ...p, trigger_reviews: tr };
+    // A reviewer's classification only stands while the answers it was
+    // based on are unchanged.
+    const classStale = p.activity_class !== 'Needs review' && p.class_basis && p.class_basis !== rules.classificationBasis(p);
+    return { ...p, trigger_reviews: tr, activity_class: classStale ? 'Needs review' : p.activity_class, class_stale: !!classStale };
   }
+
+  // All approval checks for a project (deterministic). Review-level issues can
+  // be resolved by a reviewer's recorded decision tied to the issue text.
+  function projectIssues(p, cara) {
+    const out = [];
+    const add = (key, level, text, field) => out.push({ key, level, text, field });
+    for (const b of rules.approvalBlockers(p)) {
+      const field = /question|Unsure|services|Engineered/i.test(b) ? 'screening' : /trigger/i.test(b) ? '#triggers' : /classification|document purpose/i.test(b) ? '#review' : /emergency/i.test(b) ? 'emergency_notes' : 'name';
+      add(`rule:${b.slice(0, 50)}`, 'block', b, field);
+    }
+    if (p.class_stale) add('class:stale', 'block', 'Screening answers changed after the reviewer classified this project, so the classification is back to "Needs review".', '#review');
+    for (const [k, label] of PROJECT_TEXT_FIELDS) {
+      const ph = checks.findPlaceholders(p[k]);
+      if (ph.length) add(`placeholder:${k}`, 'block', `${label} still has placeholder${ph.length === 1 ? '' : 's'}: ${ph.slice(0, 4).join(', ')}`, k);
+      for (const f of firstAid.scanUnsafe(p[k])) add(`unsafe:${k}:${f.id}`, 'block', `Unsafe first aid wording in ${label}: "${f.sentence}" — ${f.message}`, k);
+    }
+    (p.work_steps || []).forEach((st, i) => {
+      const t = `${st.step}\n${st.hazards}\n${st.controls}`;
+      const ph = checks.findPlaceholders(t);
+      if (ph.length) add(`placeholder:step${i}`, 'block', `Work step ${i + 1} still has placeholders: ${ph.slice(0, 3).join(', ')}`, 'prj_steps');
+      for (const f of firstAid.scanUnsafe(t)) add(`unsafe:step${i}:${f.id}`, 'block', `Unsafe first aid wording in work step ${i + 1}: "${f.sentence}"`, 'prj_steps');
+    });
+    if (p.open_questions && p.open_questions.trim()) add('open-questions', 'block', 'Outstanding questions and assumptions are not resolved. Answer them in the right sections, then clear that box.', 'open_questions');
+    if (!cara || cara.status !== 'Approved') add('parent:unapproved', 'block', `The parent CARA is "${cara ? cara.status : 'missing'}". It must be approved before this project can be approved.`, '#parent');
+    for (const x of p.peras || []) if (x.archived || x.status !== 'Approved') add(`pera:${x.id}`, 'block', `PERA "${pdf.toolName(x.activity_name)}" is not approved.`, 'prj_pera_list');
+    const texts = [{ label: 'this project (induction/supervision)', text: p.induction_supervision }, ...(p.work_steps || []).map((st, i) => ({ label: `work step ${i + 1}`, text: st.controls }))];
+    if (cara && cara.supervision_notes) texts.push({ label: 'the parent CARA (Supervision)', text: cara.supervision_notes });
+    for (const c of checks.supervisionConflicts(texts, p.peras || [])) add(c.key, 'review', c.text, 'induction_supervision');
+    return checks.applyResolutions(out, p.issue_resolutions);
+  }
+  const authorised = (p, cara) => p.status === 'Approved' && cara && cara.status === 'Approved' && (p.peras || []).every((x) => !x.archived && x.status === 'Approved');
 
   // ---------- Panel on the CARA page ----------
   async function caraPanelHtml(cara, user) {
@@ -199,16 +243,27 @@ module.exports = function registerCaraProjects(app, deps) {
       <p class="form-section-hint">Equipment outside the CARA's list flags the CARA for review.</p>`;
 
     const groups = [...new Set(rules.QUESTIONS.map((q) => q.group))];
-    const questionsHtml = groups.map((g) => `
-      <fieldset class="prj-qgroup"><legend>${escapeHtml(g)}</legend>
+    const questionsHtml = `
+      <fieldset class="prj-qgroup prj-qrelevant" id="prj_relevant"><legend>Most relevant to this project</legend>
+        <p class="form-section-hint prj-relevant-empty">Choose a template and describe the project, tools and materials above to bring the relevant questions here.</p>
+      </fieldset>
+      <div class="prj-screen-head"><strong>Hazard screening (${escapeHtml(rules.JURISDICTION)})</strong> — answer every question marked <span class="prj-crit">*</span>. Use "Unsure" if you don't know; it stays unresolved until a reviewer settles it. Unanswered questions are never treated as "No".</div>
+      ` + groups.map((g, gi) => `
+      <fieldset class="prj-qgroup" id="prj_g${gi}"><legend>${escapeHtml(g)}</legend>
         ${rules.QUESTIONS.filter((q) => q.group === g).map((q) => `
-          <div class="prj-q${q.critical ? ' prj-q-critical' : ''}" data-q="${q.key}"${q.showIf ? ` data-show-if="${q.showIf}"` : ''}>
+          <div class="prj-q${q.critical ? ' prj-q-critical' : ''}" data-q="${q.key}" data-home="prj_g${gi}"${q.showIf ? ` data-show-if="${q.showIf}"` : ''}>
             <div class="prj-q-text">${escapeHtml(q.text)}${q.critical ? ' <span class="prj-crit" title="Critical question">*</span>' : ''}</div>
             <div class="prj-q-opts">${['Yes', 'No', 'Unsure'].map((v) => `
               <label><input type="radio" name="q_${q.key}" value="${v}"${a[q.key] === v ? ' checked' : ''}> ${v}</label>`).join('')}</div>
             ${q.note ? `<div class="prj-q-note">${escapeHtml(q.note)}</div>` : ''}
           </div>`).join('')}
       </fieldset>`).join('');
+
+    const suggested = rules.suggestedGroups(`${cara.course || ''} ${cara.class_unit || ''} ${cara.activity_name || ''} ${cara.activity_scope || ''}`);
+    const order = [...suggested, ...rules.TEMPLATE_GROUPS.filter((g) => !suggested.includes(g))];
+    const current = p.project_type || (suggested[0] === 'Engineering' ? 'fabrication' : 'custom');
+    const templateOptions = order.map((g) => `<optgroup label="${escapeHtml(suggested.includes(g) ? `${g} (suggested)` : g)}">${Object.entries(rules.TEMPLATES).filter(([, t]) => t.group === g)
+      .map(([k, t]) => `<option value="${k}"${current === k ? ' selected' : ''}>${escapeHtml(t.label)}</option>`).join('')}</optgroup>`).join('');
 
     const steps = Array.isArray(p.work_steps) ? p.work_steps : [];
     const caraSummary = `
@@ -231,7 +286,8 @@ module.exports = function registerCaraProjects(app, deps) {
           </div>
           <div class="form-row">
             <label for="project_type">Type / template</label>
-            <select id="project_type" name="project_type">${Object.entries(rules.TEMPLATES).map(([k, t]) => `<option value="${k}"${(p.project_type || 'custom') === k ? ' selected' : ''}>${escapeHtml(t.label)}</option>`).join('')}</select>
+            <select id="project_type" name="project_type">${templateOptions}</select>
+            ${suggested.length ? `<p class="form-section-hint">Suggested for ${escapeHtml(cara.course || cara.class_unit || 'this course')}: ${escapeHtml(suggested.join(', '))} templates. Any template can be used; a template never decides SWMS requirements.</p>` : ''}
           </div>
         </div>
         <div class="form-row">
@@ -273,8 +329,7 @@ module.exports = function registerCaraProjects(app, deps) {
           <textarea id="sds_refs" name="sds_refs" rows="2" placeholder="e.g. Cement GP – SDS in ChemWatch / workshop SDS folder, issued [date]">${nl2(p.sds_refs)}</textarea>
         </div>
 
-        <div class="form-section-title">Project conditions and hazards</div>
-        <p class="form-section-hint">Answer each question. Use "Unsure" if you don't know yet; a reviewer will resolve it. Questions marked * are critical.</p>
+        <div class="form-section-title" id="screening">Hazard questions</div>
         ${questionsHtml}
         <div class="form-row">
           <label for="conditions">Other project-specific conditions and hazards</label>
@@ -284,7 +339,8 @@ module.exports = function registerCaraProjects(app, deps) {
         ${caraAi.apiEnabled() ? `
         <div class="ai-draft-panel" id="prj_ai_panel">
           <div class="ai-draft-text"><strong>AI assistant</strong>
-            <span>Fill in the project, equipment and questions above, then generate suggested wording for the sections below. Nothing is filled in until you choose <em>Use this</em>. Student information is never sent.</span></div>
+            <span>Fill in the project, equipment and questions above, then generate suggested wording for the sections below. Nothing is filled in until you choose <em>Use this</em>.</span>
+            <span class="ai-privacy-note">Sent to the AI: this project's details and answers, the selected PERAs, and the parent CARA's activity, hazard, supervision and emergency text with its class-level details (year level, course, class size, age range, prior experience). Not sent: the CARA's Students box, names or signatures. Lines that look like individual student or medical details are removed first.</span></div>
           <button type="button" class="btn btn-secondary" id="prj_ai_btn">Generate project draft</button>
           <div class="ai-draft-status" id="prj_ai_status" role="status" aria-live="polite"></div>
         </div>` : ''}
@@ -311,8 +367,9 @@ module.exports = function registerCaraProjects(app, deps) {
           <div class="form-row"><label for="first_aid_person">Person with current first aid</label>
             <input type="text" id="first_aid_person" name="first_aid_person" value="${nl2(p.first_aid_person)}" placeholder="Name"></div>
         </div>
-        <div class="form-row"><label for="emergency_notes">Other emergency considerations</label>
-          <textarea id="emergency_notes" name="emergency_notes" rows="3">${nl2(p.emergency_notes)}</textarea></div>
+        <div class="form-row"><label for="emergency_notes">Other emergency considerations and first aid</label>
+          <textarea id="emergency_notes" name="emergency_notes" rows="4">${nl2(p.emergency_notes)}</textarea></div>
+        ${caraSafety.firstAidButtonsHtml('emergency_notes', escapeHtml)}
         <label class="checkbox-row"><input type="checkbox" name="emergency_confirmed" value="true"${p.emergency_confirmed ? ' checked' : ''}> I have confirmed these emergency and first aid details for this location</label>
 
         <div class="form-section-title">Outstanding questions and assumptions</div>
@@ -337,6 +394,7 @@ module.exports = function registerCaraProjects(app, deps) {
       (function () {
         var form = document.getElementById('prj_form');
         var TEMPLATES = ${JSON.stringify(rules.TEMPLATES).replace(/</g, '\\u003c')};
+        var RELEVANCE = ${JSON.stringify(rules.RELEVANCE_MAP.map(([re, ks]) => [re.source, ks])).replace(/</g, '\\u003c')};
         var steps = ${JSON.stringify(steps).replace(/</g, '\\u003c')};
         window.prjFilter = function (q) {
           q = q.toLowerCase();
@@ -351,13 +409,29 @@ module.exports = function registerCaraProjects(app, deps) {
             el.style.display = show ? '' : 'none';
           });
           var tpl = TEMPLATES[document.getElementById('project_type').value] || { focus: [] };
+          // Relevant questions: template focus + words in description, materials, conditions and ticked equipment.
+          var words = ['description', 'materials', 'conditions'].map(function (id) { return (document.getElementById(id) || {}).value || ''; }).join(' ');
+          form.querySelectorAll('input[name="pera_ids"]:checked').forEach(function (c) { var l = form.querySelector('label[for="' + c.id + '"]'); if (l) words += ' ' + l.textContent; });
+          words = words.toLowerCase();
+          var rel = {}; tpl.focus.forEach(function (k) { rel[k] = 1; });
+          RELEVANCE.forEach(function (r) { if (new RegExp(r[0]).test(words)) r[1].forEach(function (k) { rel[k] = 1; }); });
+          var box = document.getElementById('prj_relevant');
           document.querySelectorAll('.prj-q').forEach(function (el) {
-            el.classList.toggle('prj-q-focus', tpl.focus.indexOf(el.dataset.q) >= 0);
+            var key = el.dataset.q, parentKey = el.dataset.showIf;
+            var isRel = rel[key] || (parentKey && rel[parentKey]);
+            var target = isRel ? box : document.getElementById(el.dataset.home);
+            if (el.parentNode !== target) target.appendChild(el);
+          });
+          box.querySelector('.prj-relevant-empty').style.display = box.querySelector('.prj-q') ? 'none' : '';
+          document.querySelectorAll('.prj-qgroup[id^="prj_g"]').forEach(function (g) { g.style.display = g.querySelector('.prj-q') ? '' : 'none'; });
+          document.querySelectorAll('.prj-q').forEach(function (el) {
+            el.classList.toggle('prj-q-focus', false);
             var answered = form.querySelector('input[name="q_' + el.dataset.q + '"]:checked');
             el.classList.toggle('prj-q-missing', el.classList.contains('prj-q-critical') && !answered && el.style.display !== 'none');
           });
         }
-        form.addEventListener('change', function (e) { if (e.target.name && (e.target.name.indexOf('q_') === 0 || e.target.id === 'project_type')) refreshQuestions(); });
+        form.addEventListener('change', function (e) { if (e.target.name && (e.target.name.indexOf('q_') === 0 || e.target.id === 'project_type' || e.target.name === 'pera_ids')) refreshQuestions(); });
+        ['description', 'materials', 'conditions'].forEach(function (id) { var t = document.getElementById(id); if (t) t.addEventListener('blur', refreshQuestions); });
         document.getElementById('project_type').addEventListener('change', function () {
           var t = TEMPLATES[this.value]; if (!t) return;
           var d = document.getElementById('description'), m = document.getElementById('materials');
@@ -592,7 +666,19 @@ module.exports = function registerCaraProjects(app, deps) {
       const user = req.staffUser;
       const caraPeras = await caraPeraIds(cara.id);
       const ev = rules.evaluate(p);
-      const blockers = rules.approvalBlockers(p);
+      const issues = projectIssues(p, cara);
+      const openIss = checks.openIssues(issues);
+      const blockers = openIss.map((i) => i.text);
+      const issueLink = (i) => (i.field && i.field.startsWith('#') ? i.field : `/projects/${p.id}/edit#${i.field}`);
+      const issuesHtml = issues.length ? `
+        <div class="chk-panel" id="approval-checks">
+          <div class="chk-head"><strong>Before approval</strong><span>${openIss.filter((i) => i.level === 'block').length} to fix · ${openIss.filter((i) => i.level === 'review').length} for the reviewer</span></div>
+          <ul class="chk-list">${openIss.map((i) => `<li class="chk-${i.level}"><a href="${issueLink(i)}">${escapeHtml(i.text)}</a>
+            ${i.level === 'review' && reviewer ? `<form method="post" action="/projects/${p.id}/issues/resolve" class="chk-resolve"><input type="hidden" name="key" value="${escapeHtml(i.key)}"><input type="text" name="note" placeholder="Reviewer decision and reason" required><button class="btn btn-secondary btn-sm" type="submit">Record decision</button></form>` : ''}</li>`).join('')}</ul>
+          ${issues.some((i) => i.resolved) ? `<details class="chk-resolved"><summary>Reviewer decisions recorded</summary><ul>${issues.filter((i) => i.resolved).map((i) => `<li>${escapeHtml(i.text)}<br><em>${escapeHtml(i.resolved.note)} — ${escapeHtml(i.resolved.by)}</em></li>`).join('')}</ul></details>` : ''}
+        </div>` : '<div class="chk-panel chk-ok"><strong>Approval checks:</strong> nothing outstanding.</div>';
+      const notAuthorised = p.status === 'Approved' && !authorised(p, cara)
+        ? `<div class="chk-alert"><strong>Approved, but not authorised for use:</strong> ${cara.status !== 'Approved' ? `the parent CARA is "${escapeHtml(cara.status)}"` : 'a linked PERA is not approved'}. Do not run this project until that is approved.</div>` : '';
       const openReasons = caraReviewOpen(p, caraPeras);
       const editable = canEdit(user, p, cara) && p.status !== 'Archived';
       const reviewer = isReviewer(user);
@@ -635,7 +721,7 @@ module.exports = function registerCaraProjects(app, deps) {
         </tbody></table>` : '<p class="detail-value">No work steps yet.</p>';
 
       const reviewerPanel = reviewer && p.status !== 'Archived' ? `
-        <div class="detail-section prj-review">
+        <div class="detail-section prj-review" id="review">
           <div class="detail-label">Reviewer: classification</div>
           <form method="post" action="/projects/${p.id}/classify" class="prj-inline-form">
             <label>Activity classification <select name="activity_class">${rules.ACTIVITY_CLASSES.map((c) => `<option${c === p.activity_class ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('')}</select></label>
@@ -643,7 +729,7 @@ module.exports = function registerCaraProjects(app, deps) {
             <input type="text" name="note" placeholder="Reason (recorded in history)">
             <button class="btn btn-secondary btn-sm" type="submit">Save classification</button>
           </form>
-          <p class="form-section-hint">Checklist suggestion: <strong>${escapeHtml(ev.suggestedClass)}</strong>. This is a prompt only; ambiguous cases should stay "Needs review".</p>
+          <p class="form-section-hint">Checklist suggestion: <strong>${escapeHtml(ev.suggestedClass)}</strong>. This is a prompt only; ambiguous cases should stay "Needs review".${p.class_reviewed_by ? ` Last classified by ${escapeHtml(p.class_reviewed_by)}, ${escapeHtml(formatDate(p.class_reviewed_at))}.` : ''}${p.class_stale ? ' <strong>Answers have changed since then.</strong>' : ''}</p>
           ${p.status === 'Awaiting review' ? `
             ${blockers.length ? `<div class="cara-unapproved"><strong>Can't approve yet:</strong><ul>${blockers.map((b) => `<li>${escapeHtml(b)}</li>`).join('')}</ul></div>` : ''}
             <form method="post" action="/projects/${p.id}/approve" class="prj-inline-form">
@@ -663,7 +749,7 @@ module.exports = function registerCaraProjects(app, deps) {
         </div>` : '';
 
       const body = `
-        <a class="back-link" href="/cara/${cara.id}#projects">← ${escapeHtml(caraRef(cara.id))} ${escapeHtml(cara.activity_name)}</a>
+        <a class="back-link" href="/cara/${cara.id}#projects" id="parent">← ${escapeHtml(caraRef(cara.id))} ${escapeHtml(cara.activity_name)} (${escapeHtml(cara.status)})</a>
         <div class="page-header">
           <div>
             <span class="badge ${statusCls}">${escapeHtml(p.status)}</span> <span class="prj-sub">${escapeHtml(ref(p))} · version ${p.version}</span>
@@ -686,7 +772,9 @@ module.exports = function registerCaraProjects(app, deps) {
         </div>
         <p class="form-section-hint">The CARA risk rating (${escapeHtml(cara.risk_level)}) is separate from legal high risk construction work triggers below.</p>
 
+        ${notAuthorised}
         ${ev.flags.length ? `<div class="prj-flags">${ev.flags.map((f) => `<div class="${flagCls[f.level]}">${escapeHtml(f.text)}</div>`).join('')}</div>` : ''}
+        ${p.status !== 'Archived' ? issuesHtml : ''}
         ${submitPanel}
         ${reviewerPanel}
 
@@ -713,8 +801,8 @@ module.exports = function registerCaraProjects(app, deps) {
             ${p.cara_change_proposal ? `<div class="detail-section"><div class="detail-label">Suggested changes to the parent CARA (not applied)</div><div class="detail-value pretty-text">${nl2(p.cara_change_proposal)}</div></div>` : ''}
           </div>
           <div>
-            <div class="detail-section"><div class="detail-label">Possible legal SWMS triggers (high risk construction work)</div>
-              <p class="form-section-hint">From the rules checklist (version ${escapeHtml(p.rules_version || rules.RULES_VERSION)}). These are flags for a reviewer, not a legal determination.</p>
+            <div class="detail-section" id="triggers"><div class="detail-label">Possible legal SWMS triggers (${escapeHtml(rules.JURISDICTION)} high risk construction work)</div>
+              <p class="form-section-hint">${escapeHtml(rules.JURISDICTION)} rules checklist (version ${escapeHtml(p.rules_version || rules.RULES_VERSION)}). Flags for a reviewer, not a legal determination. Other states and territories have different rules.</p>
               ${triggersHtml}</div>
             <div class="detail-section"><div class="detail-label">Condition questions</div>${answersTable}</div>
             <div class="detail-section"><div class="detail-label">Approval</div>
@@ -772,8 +860,9 @@ module.exports = function registerCaraProjects(app, deps) {
       if (!p) return res.status(404).send('Project not found.');
       const ac = pick(req.body.activity_class, rules.ACTIVITY_CLASSES, p.activity_class);
       const dp = pick(req.body.doc_purpose, rules.DOC_PURPOSES, p.doc_purpose);
-      if (ac === p.activity_class && dp === p.doc_purpose) return res.redirect(`/projects/${p.id}`);
-      await pool.query('UPDATE cara_projects SET activity_class=$1, doc_purpose=$2, updated_at=now() WHERE id=$3', [ac, dp, p.id]);
+      if (ac === p.activity_class && dp === p.doc_purpose && p.class_basis === rules.classificationBasis(p)) return res.redirect(`/projects/${p.id}`);
+      await pool.query('UPDATE cara_projects SET activity_class=$1, doc_purpose=$2, class_basis=$3, class_reviewed_by=$4, class_reviewed_at=now(), updated_at=now() WHERE id=$5',
+        [ac, dp, rules.classificationBasis(p), req.staffUser.name, p.id]);
       await log(p.id, req.staffUser.name, 'Classified', `Activity classification: ${p.activity_class} → ${ac}; document purpose: ${p.doc_purpose} → ${dp}${clean(req.body.note) ? `. ${clean(req.body.note)}` : ''}`);
       res.redirect(`/projects/${p.id}`);
     } catch (err) { next(err); }
@@ -785,10 +874,10 @@ module.exports = function registerCaraProjects(app, deps) {
       if (!raw) return res.status(404).send('Project not found.');
       const p = withValidConfirmations(raw);
       if (p.status !== 'Awaiting review') return res.status(400).send(`This project is "${escapeHtml(p.status)}" and isn't waiting for review. <a href="/projects/${p.id}">Back</a>`);
-      const blockers = rules.approvalBlockers(p);
-      if (blockers.length) return res.status(400).send(`Can't approve yet: ${blockers.map(escapeHtml).join(' ')} <a href="/projects/${p.id}">Back</a>`);
-      const approver = clean(req.body.approver) || req.staffUser.name;
       const cara = await loadCara(p.cara_id);
+      const open = checks.openIssues(projectIssues(p, cara));
+      if (open.length) return res.status(400).send(`Can't approve yet:<ul>${open.map((i) => `<li>${escapeHtml(i.text)}</li>`).join('')}</ul><a href="/projects/${p.id}">Back</a>`);
+      const approver = clean(req.body.approver) || req.staffUser.name;
       const snapshot = { ...p, parent_cara: { id: cara.id, activity_name: cara.activity_name, status: cara.status, risk_level: cara.risk_level }, approved_by: approver, approved_at: new Date().toISOString() };
       await pool.query('UPDATE cara_project_versions SET superseded_at = now() WHERE project_id = $1 AND superseded_at IS NULL', [p.id]);
       await pool.query('INSERT INTO cara_project_versions (project_id, version, snapshot, approved_by) VALUES ($1,$2,$3,$4)', [p.id, p.version, JSON.stringify(snapshot), approver]);
@@ -849,7 +938,8 @@ module.exports = function registerCaraProjects(app, deps) {
   // ---------- AI project draft ----------
   const PROJECT_SYSTEM = `You help teachers in a Queensland school write project-level safety documents (safe work procedures) for practical VET and Industrial Design and Technology projects (e.g. carpentry, brick and block laying, concreting, tiling). Each project sits under a parent Curriculum Activity Risk Assessment (CARA) and uses equipment covered by Plant & Equipment Risk Assessments (PERAs).
 Rules:
-- Base hazards and controls on the PERA controls provided. Never relax a PERA control or the CARA's supervision requirements.
+- Base hazards and controls on the PERA controls provided. Never relax a PERA control or the CARA's supervision requirements, and never choose a lower supervision level than a PERA requires.
+- Never write first aid treatment instructions (how to treat burns, eye injuries, bleeding, electric shock etc.). The school inserts reviewed first aid wording separately.
 - Never invent or confirm: staff qualifications, parent consent, student competency, first aid arrangements or who holds first aid, first aid kit locations, equipment availability, or site conditions. Where these matter, write a short [confirm: ...] placeholder or list them as missing information.
 - Mark anything you assume with "ASSUMPTION:" at the start of the line.
 - Do not decide whether the work is legally "high risk construction work" or whether a SWMS is legally required. You may point out answers that a reviewer should check.
@@ -892,34 +982,42 @@ Rules:
       const peras = await caraAi.loadPeras(f.pera_ids);
       const room = f.room_id ? (await pool.query('SELECT name FROM rooms WHERE id=$1', [f.room_id])).rows[0] : null;
       const clip = caraAi.clip;
+      // Explicit allowlist + redaction: only class-level CARA fields; free text
+      // is filtered for lines that look like individual student details.
+      let removedLines = 0;
+      const red = (v) => { const r = aiPrivacy.redact(v); removedLines += r.removed; return r.text; };
+      const ca = aiPrivacy.caraForAi(cara);
+      removedLines += ca.removed;
+      const cs = ca.cara;
       const answerLines = rules.visibleQuestions(f.answers).map((q) => `- ${q.text} → ${f.answers[q.key] || 'Not answered'}`).join('\n');
       // Parent CARA context: explicit allowlist. The Students notes are never
       // loaded (see loadCara) and never sent.
       const caraText = [
-        `CARA: ${clip(cara.activity_name, 200)} (risk ${cara.risk_level}, status ${cara.status})`,
-        `Class group: ${clip(cohortSummary(cara), 200) || '(not set)'}`,
-        `Activity scope: ${clip(cara.activity_scope, 2000) || '(blank)'}`,
-        `Supervision: ${clip(cara.supervision_notes, 1200) || '(blank)'}`,
-        `Supervisor qualification: ${clip(cara.supervisor_qualification, 800) || '(blank)'}`,
-        `Induction and instruction: ${clip(cara.induction_instruction, 1200) || '(blank)'}`,
-        `Facilities and equipment: ${clip(cara.facilities_equipment, 800) || '(blank)'}`,
-        `Environmental hazards / controls: ${clip(cara.environmental_hazards, 800)} / ${clip(cara.environmental_controls, 800)}`,
-        `Facilities hazards / controls: ${clip(cara.facilities_hazards, 800)} / ${clip(cara.facilities_controls, 800)}`,
-        `Student hazards / controls: ${clip(cara.student_hazards, 800)} / ${clip(cara.student_controls, 800)}`,
+        `CARA: ${clip(cs.activity_name, 200)} (activity risk ${cs.risk_level}, status ${cara.status})`,
+        `Class group: ${clip(cohortSummary(cs), 200) || '(not set)'}`,
+        `Prior experience: ${clip(cs.prior_experience, 600) || '(blank)'}`,
+        `Activity scope: ${clip(cs.activity_scope, 2000) || '(blank)'}`,
+        `Supervision: ${clip(cs.supervision_notes, 1200) || '(blank)'}`,
+        `Supervisor qualification: ${clip(cs.supervisor_qualification, 800) || '(blank)'}`,
+        `Induction and instruction: ${clip(cs.induction_instruction, 1200) || '(blank)'}`,
+        `Facilities and equipment: ${clip(cs.facilities_equipment, 800) || '(blank)'}`,
+        `Environmental hazards / controls: ${clip(cs.environmental_hazards, 800)} / ${clip(cs.environmental_controls, 800)}`,
+        `Facilities hazards / controls: ${clip(cs.facilities_hazards, 800)} / ${clip(cs.facilities_controls, 800)}`,
+        `Student hazards / controls: ${clip(cs.student_hazards, 800)} / ${clip(cs.student_controls, 800)}`,
       ].join('\n');
       const projectText = [
         `Project: ${clip(f.name, 200)} (type: ${(rules.TEMPLATES[f.project_type] || {}).label || 'Custom'})`,
-        `What students will do: ${clip(f.description, 1500) || '(blank)'}`,
+        `What students will do: ${clip(red(f.description), 1500) || '(blank)'}`,
         `Temporary practice or permanent installation: ${f.practice_type}`,
-        `Location: ${room ? room.name : '(room not set)'}${f.location_detail ? ` — ${clip(f.location_detail, 300)}` : ''}`,
-        `Materials: ${clip(f.materials, 800) || '(blank)'}`,
-        `SDS references: ${clip(f.sds_refs, 500) || '(blank)'}`,
-        `Other conditions and hazards: ${clip(f.conditions, 1200) || '(blank)'}`,
+        `Location: ${room ? room.name : '(room not set)'}${f.location_detail ? ` — ${clip(red(f.location_detail), 300)}` : ''}`,
+        `Materials: ${clip(red(f.materials), 800) || '(blank)'}`,
+        `SDS references: ${clip(red(f.sds_refs), 500) || '(blank)'}`,
+        `Other conditions and hazards: ${clip(red(f.conditions), 1200) || '(blank)'}`,
         `Condition questions:\n${answerLines}`,
-        `Existing scope/exclusions: ${clip(f.scope_exclusions, 1200) || '(blank)'}`,
-        `Existing work steps: ${f.work_steps.length ? f.work_steps.map((s, i) => `${i + 1}. ${clip(s.step, 200)}`).join(' | ') : '(none)'}`,
-        `Existing PPE: ${clip(f.ppe, 600) || '(blank)'}`,
-        `Existing induction/supervision: ${clip(f.induction_supervision, 800) || '(blank)'}`,
+        `Existing scope/exclusions: ${clip(red(f.scope_exclusions), 1200) || '(blank)'}`,
+        `Existing work steps: ${f.work_steps.length ? f.work_steps.map((s, i) => `${i + 1}. ${clip(red(s.step), 200)}`).join(' | ') : '(none)'}`,
+        `Existing PPE: ${clip(red(f.ppe), 600) || '(blank)'}`,
+        `Existing induction/supervision: ${clip(red(f.induction_supervision), 800) || '(blank)'}`,
       ].join('\n');
       const userText = `Draft suggested content for this project safety document. Where existing text is already good, you may leave that field out.\n\n=== Parent CARA ===\n${caraText}\n\n=== Project ===\n${projectText}\n\n=== PERAs selected for this project ===\n${caraAi.peraContext(peras)}\n\nRespond only by calling the project_draft tool.`;
       const { result, usage, model, truncated } = await caraAi.callClaude({ userText, tool: PROJECT_TOOL, maxTokens: 8000, system: PROJECT_SYSTEM });
@@ -943,7 +1041,22 @@ Rules:
         s.work_steps = result.work_steps.slice(0, 20).map((w) => ({ step: pt(w && w.step).slice(0, 1000), hazards: pt(w && w.hazards).slice(0, 2000), controls: pt(w && w.controls).slice(0, 2000) }))
           .filter((w) => w.step || w.hazards || w.controls);
       }
-      res.json({ ok: true, suggestions: s, notes: truncated ? ['The AI ran out of space before finishing, so some sections may have no suggestion.'] : [] });
+      const notes = [];
+      const strip = (t, label) => {
+        const found = firstAid.scanUnsafe(t);
+        if (!found.length) return t;
+        notes.push(`Removed unsafe first aid wording from the ${label} suggestion (${found[0].message}). Use the reviewed first aid buttons instead.`);
+        return firstAid.splitSentences(t).length ? t.split('\n').filter((line) => !found.some((f) => line.includes(f.sentence))).join('\n').trim() : t;
+      };
+      for (const k of Object.keys(s)) if (typeof s[k] === 'string') s[k] = strip(s[k], k.replace(/_/g, ' '));
+      if (s.work_steps) s.work_steps = s.work_steps.map((w, i) => ({ ...w, controls: strip(w.controls, `step ${i + 1}`), hazards: strip(w.hazards, `step ${i + 1}`) }));
+      const supTexts = [];
+      if (s.induction_supervision) supTexts.push({ label: 'the suggested induction/supervision', text: s.induction_supervision });
+      (s.work_steps || []).forEach((w, i) => supTexts.push({ label: `suggested step ${i + 1}`, text: w.controls }));
+      for (const c of checks.supervisionConflicts(supTexts, peras)) notes.push(`Check before using: ${c.text}`);
+      if (removedLines) notes.push(aiPrivacy.redactedNote(removedLines));
+      if (truncated) notes.push('The AI ran out of space before finishing, so some sections may have no suggestion.');
+      res.json({ ok: true, suggestions: s, notes });
     } catch (err) {
       console.error('Project AI draft failed:', err.message);
       res.json({ ok: false, error: caraAi.errorMessage(err) });
@@ -951,8 +1064,9 @@ Rules:
   });
 
   // ---------- PDF ----------
-  function projectHtml(p, cara, { versionLabel } = {}) {
+  function projectHtml(p, cara, { versionLabel, issues } = {}) {
     const e = pdf.escapeHtml;
+    const openIss = issues || [];
     const ev = rules.evaluate(p);
     const approved = p.status === 'Approved' || !!versionLabel;
     const kv = (rows) => rows.map(([l, v]) => `<tr><th>${e(l)}</th><td>${v}</td></tr>`).join('');
@@ -968,6 +1082,10 @@ Rules:
     const notice = approved
       ? `<div class="notice" style="background:#EEF6F1;border-color:#9CC9AE;color:#1d4f33;">Approved by the school (${e(p.approver || '')}, ${e(pdf.formatDate(p.approved_at))}). Approval records the school's review; it is not a certification of legal compliance.</div>`
       : `<div class="notice"><b>DRAFT — NOT APPROVED.</b> Status: ${e(p.status)}. Do not use for work until approved. Generating this document does not mean it is approved or legally compliant.</div>`;
+    const authNote = approved && !versionLabel && !authorised(p, cara)
+      ? `<div class="unresolved"><b>NOT AUTHORISED FOR USE:</b> ${cara.status !== 'Approved' ? `the parent CARA is "${e(cara.status)}"` : 'a linked PERA is not approved'}.</div>` : '';
+    const unresolved = !approved && openIss.length
+      ? `<div class="unresolved"><b>Unresolved items (${openIss.length})</b><ul>${openIss.slice(0, 15).map((i) => `<li>${e(i.text)}${i.level === 'review' ? ' <i>(reviewer decision needed)</i>' : ''}</li>`).join('')}${openIss.length > 15 ? `<li>…and ${openIss.length - 15} more</li>` : ''}</ul></div>` : '';
     return `<!doctype html><html lang="en-AU"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
 <title>${e(ref(p))} ${e(p.name)}</title><style>${pdf.CSS}
@@ -979,6 +1097,8 @@ ${approved ? '' : 'body::before{content:"DRAFT";position:fixed;top:40%;left:18%;
 </div>
 <div class="titlebar"><h1>${e(p.name)}</h1><div class="sub">${e(pdf.SCHOOL_NAME)}</div></div>
 ${notice}
+${authNote}
+${unresolved}
 <table class="meta"><tr>
   <th>Parent CARA</th><td>${e(caraRef(cara.id))} ${e(cara.activity_name)} (${e(cara.risk_level)} risk, ${e(cara.status)})</td>
   <th>Activity classification</th><td>${e(p.activity_class)}</td>
@@ -1008,7 +1128,7 @@ ${steps}
   ['Confirmed', p.emergency_confirmed ? e(`${p.emergency_confirmed_by || ''}, ${pdf.formatDate(p.emergency_confirmed_at)}`) : '<b>Not confirmed</b>'],
   ['Other considerations', pdf.richText(p.emergency_notes)],
 ])}</table>
-<h2>5. Possible legal SWMS triggers (rules checklist ${e(p.rules_version || rules.RULES_VERSION)})</h2>
+<h2>5. Possible legal SWMS triggers (${e(rules.JURISDICTION)} rules checklist ${e(p.rules_version || rules.RULES_VERSION)})</h2>
 <div class="box" style="font-size:8.5pt;color:#6B6659;">Flags from a maintained checklist for reviewer confirmation. Not a legal determination. The CARA risk rating is separate from these triggers.</div>
 ${triggers}
 <h2>6. Condition questions</h2>
@@ -1037,7 +1157,7 @@ ${p.cara_change_proposal ? `<h2>8. Suggested changes to the parent CARA (not app
         p = { ...v.snapshot, status: 'Approved', approver: v.approved_by, approved_at: v.approved_at };
         versionLabel = v.superseded_at ? `superseded ${pdf.formatDate(v.superseded_at)}` : 'current approved version';
       }
-      const html = projectHtml(p, cara, { versionLabel });
+      const html = projectHtml(p, cara, { versionLabel, issues: versionLabel ? [] : checks.openIssues(projectIssues(p, cara)) });
       if (req.query.preview === 'html') return res.send(html);
       const safe = (p.name || 'Project').replace(/[^a-z0-9 \-_.]/gi, '').trim() || 'Project';
       const label = p.status === 'Approved' || versionLabel ? `v${p.version}` : 'DRAFT';
@@ -1054,5 +1174,35 @@ ${p.cara_change_proposal ? `<h2>8. Suggested changes to the parent CARA (not app
     return rows.map((r) => ({ ...r, ref: ref(r) }));
   }
 
-  return { caraPanelHtml, projectsForCaraPdf };
+  app.post('/projects/:id/issues/resolve', requireRole('admin', 'approver', 'system_admin'), async (req, res, next) => {
+    try {
+      const raw = await loadProject(req.params.id);
+      if (!raw) return res.status(404).send('Project not found.');
+      const p = withValidConfirmations(raw);
+      const cara = await loadCara(p.cara_id);
+      const note = clean(req.body.note);
+      const issue = projectIssues(p, cara).find((i) => i.key === req.body.key);
+      if (!issue || issue.level !== 'review' || !note) return res.status(400).send('That issue must be fixed by editing the project, or the note is missing. <a href="javascript:history.back()">Back</a>');
+      const r = { ...(raw.issue_resolutions || {}) };
+      r[issue.key] = { basis: issue.text, note, by: req.staffUser.name, at: new Date().toISOString() };
+      await pool.query('UPDATE cara_projects SET issue_resolutions=$1 WHERE id=$2', [JSON.stringify(r), p.id]);
+      await log(p.id, req.staffUser.name, 'Reviewer decision', `${issue.text}\nDecision: ${note}`);
+      res.redirect(`/projects/${p.id}#approval-checks`);
+    } catch (err) { next(err); }
+  });
+
+  // Projects whose possible extra scope hasn't been reviewed on the CARA.
+  async function openReviews(caraId) {
+    const { rows } = await pool.query(`SELECT * FROM cara_projects WHERE cara_id = $1 AND status <> 'Archived'`, [caraId]);
+    const caraPeras = await caraPeraIds(caraId);
+    const out = [];
+    for (const p of rows) {
+      p.peras = (await pool.query('SELECT pr.id, pr.activity_name FROM cara_project_peras l JOIN pera_records pr ON pr.id = l.pera_id WHERE l.project_id = $1', [p.id])).rows;
+      const reasons = caraReviewOpen(p, caraPeras);
+      if (reasons.length) out.push({ id: p.id, name: p.name, reasons });
+    }
+    return out;
+  }
+
+  return { caraPanelHtml, projectsForCaraPdf, openReviews };
 };

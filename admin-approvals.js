@@ -9,7 +9,7 @@
 module.exports = function registerAdminApprovals(app, deps) {
   const {
     pool, page, escapeHtml, requireRole, adminTabs, adminHeader, riskBadgeClass, statusBadgeClass, formatBrisbaneDate,
-    approvalRequirement, caraApprovalRequirement, APPROVAL_DECISIONS, APPROVAL_REQUIRED_LEVELS,
+    approvalRequirement, caraApprovalRequirement, APPROVAL_DECISIONS, APPROVAL_REQUIRED_LEVELS, caraOpenIssues,
   } = deps;
 
   const short = (s) => String(s || '').replace(' — Plant & Equipment Risk Assessment', '');
@@ -52,6 +52,8 @@ module.exports = function registerAdminApprovals(app, deps) {
           WHERE (l.summary LIKE 'Approved%' OR l.summary LIKE 'Changes requested%') AND l.changed_at > now() - interval '30 days'
           ORDER BY l.changed_at DESC LIMIT 15`),
       ]);
+
+      if (caraOpenIssues) for (const c of carasR.rows) c.open_issues = await caraOpenIssues(c.id);
 
       const peraCard = (p) => {
         const applicable = p.req_total - p.req_na;
@@ -110,6 +112,7 @@ module.exports = function registerAdminApprovals(app, deps) {
         const warnings = [];
         if (c.unapproved_tools) warnings.push(`${c.unapproved_tools} linked PERA${c.unapproved_tools === 1 ? ' is' : 's are'} not approved`);
         if (!c.teacher_signature) warnings.push('Not signed by the teacher');
+        if (c.open_issues && c.open_issues.length) warnings.push(`${c.open_issues.length} approval check${c.open_issues.length === 1 ? '' : 's'} outstanding — open the CARA to see them`);
         return `
         <article class="apv-card apv-risk-${escapeHtml(String(c.risk_level).toLowerCase())}">
           <header class="apv-head">
@@ -177,6 +180,7 @@ module.exports = function registerAdminApprovals(app, deps) {
           <a href="#pera">PERAs <span class="apv-count">${perasR.rows.length}</span></a>
           <a href="#projects">Projects <span class="apv-count">${projR.rows.length}</span></a>
           <a href="#recent">Recent decisions</a>
+          <a href="/admin/content-review">Content review</a>
         </nav>
 
         <section id="cara" class="apv-section">

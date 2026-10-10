@@ -11,7 +11,11 @@
 // and bump RULES_VERSION. Each project records the rules version it was
 // assessed against.
 
-const RULES_VERSION = '2026-10-10';
+const RULES_VERSION = '2026-10-10b';
+// These rules are QUEENSLAND rules (WHS Regulation 2011 (Qld) and WorkSafe
+// Queensland codes). Other states/territories differ (e.g. fall heights,
+// codes of practice) and need their own rule set.
+const JURISDICTION = 'Queensland';
 
 const SOURCES = {
   whs_reg: {
@@ -71,6 +75,19 @@ const QUESTIONS = [
     note: 'List each product and its SDS reference in Materials.' },
   { key: 'manual_handling', group: 'Dust and materials', critical: false,
     text: 'Will students lift or carry heavy or awkward items (e.g. bricks/blocks in bulk, 20 kg bags, sheets, formwork)?' },
+  { key: 'hot_work', group: 'Workshop processes', critical: true,
+    text: 'Will students weld, plasma or oxy-cut, braze, or grind/cut metal producing sparks or hot metal?' },
+  { key: 'welding_fumes', group: 'Workshop processes', critical: true, showIf: 'hot_work',
+    text: 'Will welding or cutting fumes be removed by working local exhaust ventilation at each bay?',
+    note: 'Answer "No" or "Unsure" if extraction is not confirmed for every bay. Consider the atmosphere question below too.' },
+  { key: 'gas_cylinders', group: 'Workshop processes', critical: true,
+    text: 'Will compressed gas cylinders be used (oxygen, acetylene, LPG, shielding gas)?' },
+  { key: 'rotating_machinery', group: 'Workshop processes', critical: false,
+    text: 'Will students use rotating machinery (lathe, mill, drill press, grinder, saw)?' },
+  { key: 'noise', group: 'Workshop processes', critical: false,
+    text: 'Is the work likely to be noisy (grinding, cutting, hammering sheet metal, compressors)?' },
+  { key: 'sharp_edges', group: 'Workshop processes', critical: false,
+    text: 'Will students handle sheet metal, swarf or other sharp-edged material?' },
   { key: 'fall_2m', group: 'Heights', critical: true,
     text: 'Could any person fall more than 2 metres (scaffold, trestles, roof, ladder, edge, pit or excavation)?',
     trigger: 'fall_2m', triggerSource: 'wsq_swms' },
@@ -110,10 +127,10 @@ const QUESTIONS = [
   { key: 'water', group: 'Environment', critical: true,
     text: 'Is work carried out in or near water or other liquid with a risk of drowning (including open pits or excavations that may fill with water)?',
     trigger: 'water', triggerSource: 'cop_construction' },
-  { key: 'temperature', group: 'Environment', critical: false,
+  { key: 'temperature', group: 'Environment', critical: true,
     text: 'Is work done in an area with artificial extremes of temperature (e.g. cool room, kiln or furnace area)?',
     trigger: 'temperature', triggerSource: 'cop_construction' },
-  { key: 'other_listed', group: 'Environment', critical: false,
+  { key: 'other_listed', group: 'Environment', critical: true,
     text: 'Does the work involve explosives, diving, or work on a telecommunication tower?',
     trigger: 'other_listed', triggerSource: 'cop_construction' },
 ];
@@ -142,15 +159,64 @@ const STATUSES = ['Draft', 'Awaiting review', 'Approved', 'Superseded', 'Archive
 
 // Project templates: a starting point only. Nothing here is asserted as fact
 // about a real project; it pre-fills empty boxes and highlights questions.
+// Templates are a starting point only: they pre-fill empty boxes and mark
+// questions as "likely relevant". A template never decides legal SWMS
+// requirements; those come only from the screening answers.
+const TEMPLATE_GROUPS = ['Engineering', 'Construction', 'Other'];
 const TEMPLATES = {
-  sawhorse: { label: 'Sawhorse / carpentry item', description: 'Students mark out, cut and assemble a timber sawhorse using hand and portable power tools.', materials: 'Structural pine (e.g. 90x45 MGP10), screws/nails, PVA adhesive', focus: ['manual_handling'] },
-  wall_frame: { label: 'Simulated wall frame', description: 'Students set out, cut and assemble a small timber wall frame (plates, studs, noggins) at ground level, then dismantle it.', materials: 'Pine framing timber, nails/framing connectors', focus: ['heights_any', 'manual_handling'] },
-  brick_block: { label: 'Brick and block laying', description: 'Students mix mortar and lay bricks/blocks to a practice wall, then clean down and dismantle.', materials: 'Bricks/blocks, mortar (cement, lime, sand), water', focus: ['cutting', 'chemicals', 'manual_handling'] },
-  concreting: { label: 'Concreting', description: 'Students set out and build formwork, place, screed and finish a small concrete slab or path.', materials: 'Formwork timber, pegs, reinforcing mesh, premixed bagged concrete or delivered concrete, curing compound', focus: ['excavation', 'chemicals', 'mobile_plant', 'manual_handling', 'cutting'] },
-  tiling: { label: 'Tiling', description: 'Students prepare a practice board/wall, cut tiles, lay with adhesive and grout.', materials: 'Ceramic tiles, tile adhesive, grout, sealer, backing board', focus: ['cutting', 'chemicals'] },
-  fencing: { label: 'Fencing / landscaping', description: 'Students set out and install fence posts/rails or landscape edging.', materials: 'Posts, rails, concrete, fixings', focus: ['excavation', 'services', 'mobile_plant'] },
-  custom: { label: 'Custom project', description: '', materials: '', focus: [] },
+  fabrication: { group: 'Engineering', label: 'Engineering / fabrication', description: 'Students mark out, cut, drill and join steel components to make a small fabricated item.', materials: 'Mild steel flat bar/angle, fasteners, paint/primer', focus: ['hot_work', 'rotating_machinery', 'noise', 'sharp_edges', 'manual_handling'] },
+  welding: { group: 'Engineering', label: 'Welding', description: 'Students set up and weld practice joints using MIG/MMAW in welding bays.', materials: 'Mild steel plate, welding wire/electrodes, shielding gas', focus: ['hot_work', 'welding_fumes', 'gas_cylinders', 'atmosphere', 'noise'] },
+  sheet_metal: { group: 'Engineering', label: 'Sheet-metal work', description: 'Students mark out, cut (guillotine/snips), fold (pan brake) and join light-gauge sheet metal.', materials: 'Galvanised or mild steel sheet, rivets, spot welds', focus: ['sharp_edges', 'noise', 'hot_work', 'rotating_machinery'] },
+  machining: { group: 'Engineering', label: 'Machining', description: 'Students turn, face and drill parts on the metal lathe and use the milling machine.', materials: 'Mild steel / aluminium bar stock, cutting fluid', focus: ['rotating_machinery', 'sharp_edges', 'noise', 'chemicals'] },
+  assembly: { group: 'Engineering', label: 'Assembly / fitting', description: 'Students assemble, fit and fasten components using hand and portable power tools.', materials: 'Prepared components, fasteners, lubricants', focus: ['manual_handling', 'rotating_machinery'] },
+  sawhorse: { group: 'Construction', label: 'Construction / carpentry item (e.g. sawhorse)', description: 'Students mark out, cut and assemble a timber sawhorse using hand and portable power tools.', materials: 'Structural pine (e.g. 90x45 MGP10), screws/nails, PVA adhesive', focus: ['manual_handling'] },
+  wall_frame: { group: 'Construction', label: 'Simulated wall frame', description: 'Students set out, cut and assemble a small timber wall frame (plates, studs, noggins) at ground level, then dismantle it.', materials: 'Pine framing timber, nails/framing connectors', focus: ['heights_any', 'manual_handling'] },
+  brick_block: { group: 'Construction', label: 'Brick and block laying', description: 'Students mix mortar and lay bricks/blocks to a practice wall, then clean down and dismantle.', materials: 'Bricks/blocks, mortar (cement, lime, sand), water', focus: ['cutting', 'chemicals', 'manual_handling'] },
+  concreting: { group: 'Construction', label: 'Concreting', description: 'Students set out and build formwork, place, screed and finish a small concrete slab or path.', materials: 'Formwork timber, pegs, reinforcing mesh, premixed bagged concrete or delivered concrete, curing compound', focus: ['excavation', 'chemicals', 'mobile_plant', 'manual_handling', 'cutting'] },
+  tiling: { group: 'Construction', label: 'Tiling', description: 'Students prepare a practice board/wall, cut tiles, lay with adhesive and grout.', materials: 'Ceramic tiles, tile adhesive, grout, sealer, backing board', focus: ['cutting', 'chemicals'] },
+  fencing: { group: 'Construction', label: 'Fencing / landscaping', description: 'Students set out and install fence posts/rails or landscape edging.', materials: 'Posts, rails, concrete, fixings', focus: ['excavation', 'services', 'mobile_plant'] },
+  custom: { group: 'Other', label: 'Custom project', description: '', materials: '', focus: [] },
 };
+
+// Suggest template groups from the parent CARA's course/subject and activity
+// text. Teachers can still pick any template.
+function suggestedGroups(text) {
+  const t = String(text || '');
+  const out = [];
+  if (/\b(MEM\d|engineer|metal|fabricat|weld|machin|fitting|sheet[- ]?metal|boilermak)/i.test(t)) out.push('Engineering');
+  if (/\b(CPC\d|construct|carpent|build|brick|block ?lay|concret|til(e|ing)|landscap|fenc)/i.test(t)) out.push('Construction');
+  return out;
+}
+
+// Answers that drive classification. Changing any of these (or the
+// temporary/permanent answer) after a reviewer classified the project
+// returns the classification to "Needs review".
+function classificationBasis(p) {
+  const a = p.answers || {};
+  return JSON.stringify([p.practice_type || '', ...QUESTIONS.filter((q) => q.trigger || q.critical).map((q) => `${q.key}=${a[q.key] || ''}`)]);
+}
+
+const RELEVANCE_MAP = [
+  [/weld|plasma|oxy|braz|grind|spark/, ['hot_work', 'welding_fumes', 'gas_cylinders']],
+  [/cylinder|acetylene|lpg|argon|shielding gas/, ['gas_cylinders']],
+  [/lathe|mill|drill|saw|grinder|router/, ['rotating_machinery', 'noise']],
+  [/sheet|guillotine|snips|swarf/, ['sharp_edges']],
+  [/concrete|brick|block|tile|mortar|render|stone|paver/, ['cutting', 'chemicals', 'manual_handling']],
+  [/dig|trench|footing|post hole|excavat/, ['excavation', 'services']],
+  [/ladder|scaffold|trestle|roof|platform|height/, ['heights_any', 'fall_2m']],
+  [/excavator|bobcat|skid steer|forklift|tractor|truck|ride-on/, ['mobile_plant']],
+  [/cement|adhesive|grout|solvent|paint|sealer|chemical|fluid/, ['chemicals']],
+];
+
+// Questions most relevant to this project: template focus plus questions
+// matching the description, tools and materials. All questions remain.
+function relevantKeys(p, toolNames) {
+  const t = `${p.description || ''} ${p.materials || ''} ${p.conditions || ''} ${(toolNames || []).join(' ')}`.toLowerCase();
+  const keys = new Set(((TEMPLATES[p.project_type] || {}).focus) || []);
+  const map = RELEVANCE_MAP;
+  for (const [re, ks] of map) if (re.test(t)) ks.forEach((k) => keys.add(k));
+  return keys;
+}
 
 function visibleQuestions(answers) {
   const a = answers || {};
@@ -193,7 +259,9 @@ function evaluate(project) {
 
   // Suggested (not decided) classification, shown next to the human choice.
   let suggestedClass = 'Needs review';
-  if (project.practice_type === 'Temporary educational practice' && !unsure.length && !unanswered.length && !triggers.length) suggestedClass = 'Educational practice / simulation';
+  // Hidden or unanswered questions are never treated as "No".
+  const anyUnanswered = qs.some((q) => !a[q.key]);
+  if (project.practice_type === 'Temporary educational practice' && !unsure.length && !anyUnanswered && !triggers.length) suggestedClass = 'Educational practice / simulation';
 
   const blocking = [];
   if (stops.length) blocking.push('Engineered stone answered Yes.');
@@ -218,6 +286,7 @@ function approvalBlockers(project) {
 }
 
 module.exports = {
+  JURISDICTION, TEMPLATE_GROUPS, RELEVANCE_MAP, suggestedGroups, classificationBasis, relevantKeys,
   RULES_VERSION, SOURCES, QUESTIONS, TRIGGERS, ACTIVITY_CLASSES, DOC_PURPOSES, PRACTICE_TYPES, STATUSES, TEMPLATES,
   visibleQuestions, evaluate, approvalBlockers,
 };
