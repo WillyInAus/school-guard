@@ -88,7 +88,8 @@ function supervisionConflicts(texts, peras) {
     for (const x of sentences) {
       if (x === blanket) continue;
       const lvl = supervisionLevel(x.s);
-      if (lvl !== null && lvl < 3 && TOOLISH.test(x.s) && !/hand tools?/i.test(x.s.match(TOOLISH)[0])) {
+      // Statements about low-risk hand tools are the exception the blanket rule already allows.
+      if (lvl !== null && lvl < 3 && TOOLISH.test(x.s) && !/\bhand tools?\b|\blow[- ]risk\b/i.test(x.s)) {
         out.push({ key: `conflict:blanket:${x.s.slice(0, 60)}`, text: `Supervision statements may contradict each other: "${blanket.s}" (${blanket.label}) and "${x.s}" (${x.label}).` });
       }
     }
