@@ -792,7 +792,7 @@ app.get('/pera/new', (req, res) => {
         <label for="submitted_by">Submitted by</label>
         <input type="text" id="submitted_by" name="submitted_by" value="${escapeHtml(req.staffUser.name)}">
       </div>
-      <div class="form-actions">
+      <div class="form-actions sticky-actions">
         <button type="submit" class="btn btn-primary">Save as draft</button>
         <a class="btn btn-secondary" href="/pera">Cancel</a>
       </div>
@@ -990,7 +990,7 @@ app.get('/pera/:id/edit', async (req, res, next) => {
           <input type="text" id="edited_by" name="edited_by" required value="${escapeHtml(req.staffUser.name)}">
         </div>
 
-        <div class="form-actions">
+        <div class="form-actions sticky-actions">
           <button type="submit" class="btn btn-primary">Save changes</button>
           <a class="btn btn-secondary" href="/pera/${r.id}">Cancel</a>
         </div>
