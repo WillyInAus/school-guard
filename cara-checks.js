@@ -11,6 +11,22 @@
 // Drafts can always be saved; these checks gate approval on the server.
 
 const firstAid = require('./first-aid');
+const caraType = require('./cara-type');
+
+// A scope must describe what students will do, not just name the course.
+const STOP = new Set(['the', 'and', 'of', 'in', 'a', 'an', 'to', 'for', 'with', 'vet', 'year', 'yr', 'students', 'student', 'unit', 'course', 'class']);
+function scopeTooThin(r) {
+  const scope = String(r.activity_scope || '').trim();
+  if (!scope) return false; // reported as missing instead
+  const words = scope.toLowerCase().match(/[a-z0-9]+/g) || [];
+  if (words.length < 8) return true;
+  const ref = `${r.course || ''} ${r.class_unit || ''} ${r.activity_name || ''}`.toLowerCase();
+  const content = words.filter((w) => !STOP.has(w));
+  // Words that say something about the actual work (not the course name, not filler).
+  const FILLER = /^(this|that|term|semester|week|weeks|practical|practicals|units?|activities|activity|tasks?|work|various|other|etc|will|be|are|is|as|part|program|programme|pathways?|certificate|cert|ii|iii|iv|i|qualification|training|assessment|school|lessons?|class|classes|on|at|by|from|their|they|all|some|undertake|complete|completing|do|doing|\d+)$/;
+  const informative = content.filter((w) => !ref.includes(w) && !FILLER.test(w));
+  return informative.length < 4;
+}
 
 // ---------- Placeholders ----------
 // Placeholders are things like [Year level], [Number], [location],
@@ -97,7 +113,8 @@ function supervisionConflicts(texts, peras) {
 
 // ---------- CARA ----------
 const CARA_TEXT_FIELDS = [
-  ['activity_scope', 'Activity scope'], ['prior_experience', 'Prior experience'], ['students_notes', 'Students'],
+  ['activity_scope', 'Activity scope'], ['location_detail', 'Location detail'],
+  ['vet_units', 'VET units'], ['trainer_competencies', 'Trainer/assessor competencies'], ['vet_safety_requirements', 'Training and assessment safety requirements'], ['prior_experience', 'Prior experience'], ['students_notes', 'Students'],
   ['emergency_first_aid', 'Emergency and first aid'], ['induction_instruction', 'Induction and instruction'],
   ['supervision_notes', 'Supervision'], ['supervisor_qualification', 'Supervisor qualification'], ['facilities_equipment', 'Facilities and equipment'],
   ['environmental_hazards', 'Environmental hazards'], ['environmental_controls', 'Environmental control measures'],
@@ -122,6 +139,21 @@ function caraIssues(r, ctx = {}) {
   ];
   for (const [k, msg] of required) if (blank(r[k])) add(`missing:${k}`, 'block', msg, k);
   if (blank(r.course) && blank(r.class_unit)) add('missing:course', 'block', 'Class group: course / subject is missing.', 'course');
+  if (!caraType.TYPES[r.cara_type]) add('missing:cara_type', 'block', 'Choose whether this is a general curriculum activity or a VET course (top of the form).', 'cara_type');
+  if (scopeTooThin(r)) add('scope:thin', 'block', 'Activity scope only names the course or activity. Describe what students will actually do, with which tools, materials and processes.', 'activity_scope');
+  if (!r.room_id && blank(r.location_detail)) add('missing:location', 'block', 'Location is missing.', 'room_id');
+  if (r.cara_type === 'vet') {
+    if (!caraType.QUAL_CODE.test(String(r.course || ''))) add('vet:qualification', 'block', 'VET: enter the qualification code and title in "Qualification (code and title)", e.g. MEM20422 Certificate II in Engineering Pathways.', 'course');
+    const units = String(r.vet_units || '').split('\n').map((x) => x.trim()).filter(Boolean);
+    if (!units.length) add('vet:units', 'block', 'VET: list the units of competency (code and title).', 'vet_units');
+    const noCode = units.filter((u) => !caraType.UNIT_CODE.test(u.replace(/^[-•*]\s*/, '')));
+    if (noCode.length) add('vet:unit-codes', 'block', `VET: these unit lines have no unit code: ${noCode.slice(0, 3).join('; ')}`, 'vet_units');
+    if (blank(r.delivery_context)) add('vet:delivery', 'block', 'VET: choose the delivery context.', 'delivery_context');
+    if (blank(r.trainer_competencies)) add('vet:trainer', 'block', 'VET: record the trainer/assessor competencies and where they are verified.', 'trainer_competencies');
+    if (blank(r.vet_safety_requirements)) add('vet:safety', 'block', 'VET: record the training and assessment safety requirements.', 'vet_safety_requirements');
+    if (!r.vet_codes_checked) add('vet:codes-checked', 'block', 'VET: confirm the qualification and unit codes were checked against training.gov.au.', 'vet_section');
+    if (/Workplace|Mixed/.test(r.delivery_context || '')) add('vet:workplace', 'review', 'VET delivery includes a workplace or placement. The host workplace has its own WHS duties; a reviewer should confirm placement arrangements (agreement, host induction, supervision) are in place.', 'delivery_context');
+  }
   if (!peras.length) add('missing:peras', 'review', 'No equipment (PERA) is linked. Confirm the activity uses no plant or equipment.', 'tool_search');
 
   for (const [h, c, label] of [['environmental_hazards', 'environmental_controls', 'Environmental'], ['facilities_hazards', 'facilities_controls', 'Facilities and equipment'], ['student_hazards', 'student_controls', 'Student']]) {
@@ -167,4 +199,4 @@ function applyResolutions(issues, resolutions) {
 }
 const openIssues = (issues) => issues.filter((i) => !i.resolved);
 
-module.exports = { findPlaceholders, isPlaceholder, supervisionLevel, supervisionConflicts, equipmentTerms, caraIssues, applyResolutions, openIssues, CARA_TEXT_FIELDS, LEVEL_NAME };
+module.exports = { scopeTooThin, findPlaceholders, isPlaceholder, supervisionLevel, supervisionConflicts, equipmentTerms, caraIssues, applyResolutions, openIssues, CARA_TEXT_FIELDS, LEVEL_NAME };

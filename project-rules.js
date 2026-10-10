@@ -62,7 +62,10 @@ const SOURCES = {
 //          work category under s291 -> reviewer must confirm.
 // showIf: only asked when another answer is Yes or Unsure.
 const QUESTIONS = [
-  { key: 'cutting', group: 'Dust and materials', critical: true,
+  { key: 'construction_work', group: 'Type of work', critical: true,
+    text: 'Does the project involve building, altering, repairing, demolishing or excavating a structure or ground (construction-type work), even as practice?',
+    note: 'Making products in a workshop, cooking or servicing vehicles is not construction-type work. Answering Yes does not decide that it is legally construction work; it switches on the construction screening questions for the reviewer.' },
+  { key: 'cutting', group: 'Dust and materials', critical: 'construction', hideIfNo: 'construction_work',
     text: 'Will students cut, grind, drill, chase, scabble or polish concrete, brick, block, tile, stone, render or mortar?' },
   { key: 'dry_cutting', group: 'Dust and materials', critical: true, showIf: 'cutting',
     text: 'Could any of that cutting or grinding be done DRY (no water suppression and no on-tool dust extraction)?',
@@ -75,62 +78,80 @@ const QUESTIONS = [
     note: 'List each product and its SDS reference in Materials.' },
   { key: 'manual_handling', group: 'Dust and materials', critical: false,
     text: 'Will students lift or carry heavy or awkward items (e.g. bricks/blocks in bulk, 20 kg bags, sheets, formwork)?' },
-  { key: 'hot_work', group: 'Workshop processes', critical: true,
+  { key: 'hot_work', group: 'Workshop processes', critical: 'relevant', onlyWhenRelevant: true,
     text: 'Will students weld, plasma or oxy-cut, braze, or grind/cut metal producing sparks or hot metal?' },
-  { key: 'welding_fumes', group: 'Workshop processes', critical: true, showIf: 'hot_work',
+  { key: 'welding_fumes', group: 'Workshop processes', critical: 'relevant', showIf: 'hot_work',
     text: 'Will welding or cutting fumes be removed by working local exhaust ventilation at each bay?',
     note: 'Answer "No" or "Unsure" if extraction is not confirmed for every bay. Consider the atmosphere question below too.' },
-  { key: 'gas_cylinders', group: 'Workshop processes', critical: true,
+  { key: 'gas_cylinders', group: 'Workshop processes', critical: 'relevant', onlyWhenRelevant: true,
     text: 'Will compressed gas cylinders be used (oxygen, acetylene, LPG, shielding gas)?' },
-  { key: 'rotating_machinery', group: 'Workshop processes', critical: false,
+  { key: 'rotating_machinery', group: 'Workshop processes', critical: false, onlyWhenRelevant: true,
     text: 'Will students use rotating machinery (lathe, mill, drill press, grinder, saw)?' },
-  { key: 'noise', group: 'Workshop processes', critical: false,
+  { key: 'noise', group: 'Workshop processes', critical: false, onlyWhenRelevant: true,
     text: 'Is the work likely to be noisy (grinding, cutting, hammering sheet metal, compressors)?' },
-  { key: 'sharp_edges', group: 'Workshop processes', critical: false,
+  { key: 'sharp_edges', group: 'Workshop processes', critical: false, onlyWhenRelevant: true,
     text: 'Will students handle sheet metal, swarf or other sharp-edged material?' },
-  { key: 'fall_2m', group: 'Heights', critical: true,
+  { key: 'hot_cooking', group: 'Kitchen and service', critical: 'relevant', onlyWhenRelevant: true,
+    text: 'Will students use hot oil, deep fryers, ovens, grills, steam or boiling liquids?' },
+  { key: 'food_equipment', group: 'Kitchen and service', critical: 'relevant', onlyWhenRelevant: true,
+    text: 'Will students use knives, slicers, mandolines, mixers or other powered food equipment?' },
+  { key: 'gas_appliances', group: 'Kitchen and service', critical: 'relevant', onlyWhenRelevant: true,
+    text: 'Will gas cooking appliances be used?' },
+  { key: 'wet_floors', group: 'Kitchen and service', critical: false, onlyWhenRelevant: true,
+    text: 'Will floors be wet or greasy during the activity?' },
+  { key: 'food_served', group: 'Kitchen and service', critical: false, onlyWhenRelevant: true,
+    text: 'Will food be served to other people (food safety and allergen information needed)?' },
+  { key: 'vehicle_raised', group: 'Vehicles', critical: 'relevant', onlyWhenRelevant: true,
+    text: 'Will anyone work under or beside a vehicle raised on a hoist, jack or stands?' },
+  { key: 'engine_running', group: 'Vehicles', critical: 'relevant', onlyWhenRelevant: true,
+    text: 'Will engines be run indoors (exhaust fumes) or will students work near hot engine/exhaust parts?' },
+  { key: 'vehicle_electrical', group: 'Vehicles', critical: 'relevant', onlyWhenRelevant: true,
+    text: 'Will students work on batteries, hybrid/electric vehicle high-voltage systems or vehicle electrical circuits?' },
+  { key: 'vehicles_moving', group: 'Vehicles', critical: false, onlyWhenRelevant: true,
+    text: 'Will vehicles be driven or moved inside the workshop or work area?' },
+  { key: 'fall_2m', group: 'Heights', critical: 'construction', hideIfNo: 'construction_work',
     text: 'Could any person fall more than 2 metres (scaffold, trestles, roof, ladder, edge, pit or excavation)?',
     trigger: 'fall_2m', triggerSource: 'wsq_swms' },
   { key: 'heights_any', group: 'Heights', critical: false,
     text: 'Will anyone work off the ground at all (ladder, step platform, trestle, scaffold) even below 2 metres?' },
-  { key: 'excavation', group: 'Excavation and services', critical: true,
+  { key: 'excavation', group: 'Excavation and services', critical: 'construction', hideIfNo: 'construction_work',
     text: 'Will there be any digging or excavation (footings, trenches, post holes, set-downs)?' },
   { key: 'trench_1_5m', group: 'Excavation and services', critical: true, showIf: 'excavation',
     text: 'Will any trench, shaft or excavation be deeper than 1.5 metres, or will work be in or near a tunnel?',
     trigger: 'trench_1_5m', triggerSource: 'cop_construction' },
-  { key: 'services', group: 'Excavation and services', critical: true,
+  { key: 'services', group: 'Excavation and services', critical: 'construction', hideIfNo: 'construction_work',
     text: 'Is the work on or near energised electrical services, pressurised gas mains or piping, or chemical, fuel or refrigerant lines (including buried services)?',
     trigger: 'services', triggerSource: 'cop_construction' },
   { key: 'services_located', group: 'Excavation and services', critical: true, showIf: 'excavation',
     text: 'Have underground services been located and marked before digging (e.g. Before You Dig / site plans)? Answer "No" if not yet done.' },
-  { key: 'mobile_plant', group: 'Plant and traffic', critical: true,
+  { key: 'mobile_plant', group: 'Plant and traffic', critical: 'construction', hideIfNo: 'construction_work',
     text: 'Will powered mobile plant move in or near the work area (e.g. excavator, skid steer, forklift, tractor, ride-on mower, concrete truck)?',
     trigger: 'mobile_plant', triggerSource: 'cop_construction' },
-  { key: 'traffic', group: 'Plant and traffic', critical: true,
+  { key: 'traffic', group: 'Plant and traffic', critical: 'construction', hideIfNo: 'construction_work',
     text: 'Is the work on or next to a road, driveway, car park or other area in use by vehicles?',
     trigger: 'traffic_corridor', triggerSource: 'cop_construction' },
-  { key: 'structural', group: 'Structures', critical: true,
+  { key: 'structural', group: 'Structures', critical: 'construction', hideIfNo: 'construction_work',
     text: 'Does the work involve demolishing a load-bearing element, or structural alterations/repairs needing temporary support to prevent collapse?',
     trigger: 'structural', triggerSource: 'cop_construction' },
-  { key: 'asbestos', group: 'Structures', critical: true,
+  { key: 'asbestos', group: 'Structures', critical: 'construction', hideIfNo: 'construction_work',
     text: 'Could the work disturb asbestos (e.g. existing buildings, sheeting or ground built or filled before 1990)?',
     trigger: 'asbestos', triggerSource: 'cop_construction' },
-  { key: 'tilt_up', group: 'Structures', critical: true,
+  { key: 'tilt_up', group: 'Structures', critical: 'construction', hideIfNo: 'construction_work',
     text: 'Does the work involve tilt-up or precast concrete elements?',
     trigger: 'tilt_up', triggerSource: 'cop_construction' },
-  { key: 'confined_space', group: 'Environment', critical: true,
+  { key: 'confined_space', group: 'Environment', critical: 'construction',
     text: 'Is any work in or near a confined space (pit, tank, enclosed void)?',
     trigger: 'confined_space', triggerSource: 'cop_construction' },
-  { key: 'atmosphere', group: 'Environment', critical: true,
+  { key: 'atmosphere', group: 'Environment', critical: 'construction',
     text: 'Could the work area have a contaminated or flammable atmosphere (fumes, solvent vapour, fuel, dust) for reasons other than dry cutting?',
     trigger: 'contaminated_atmosphere', triggerSource: 'cop_construction' },
-  { key: 'water', group: 'Environment', critical: true,
+  { key: 'water', group: 'Environment', critical: 'construction',
     text: 'Is work carried out in or near water or other liquid with a risk of drowning (including open pits or excavations that may fill with water)?',
     trigger: 'water', triggerSource: 'cop_construction' },
-  { key: 'temperature', group: 'Environment', critical: true,
+  { key: 'temperature', group: 'Environment', critical: 'construction',
     text: 'Is work done in an area with artificial extremes of temperature (e.g. cool room, kiln or furnace area)?',
     trigger: 'temperature', triggerSource: 'cop_construction' },
-  { key: 'other_listed', group: 'Environment', critical: true,
+  { key: 'other_listed', group: 'Environment', critical: 'construction', hideIfNo: 'construction_work',
     text: 'Does the work involve explosives, diving, or work on a telecommunication tower?',
     trigger: 'other_listed', triggerSource: 'cop_construction' },
 ];
@@ -162,19 +183,21 @@ const STATUSES = ['Draft', 'Awaiting review', 'Approved', 'Superseded', 'Archive
 // Templates are a starting point only: they pre-fill empty boxes and mark
 // questions as "likely relevant". A template never decides legal SWMS
 // requirements; those come only from the screening answers.
-const TEMPLATE_GROUPS = ['Engineering', 'Construction', 'Other'];
+const TEMPLATE_GROUPS = ['Engineering', 'Construction', 'Hospitality', 'Automotive', 'Other'];
 const TEMPLATES = {
   fabrication: { group: 'Engineering', label: 'Engineering / fabrication', description: 'Students mark out, cut, drill and join steel components to make a small fabricated item.', materials: 'Mild steel flat bar/angle, fasteners, paint/primer', focus: ['hot_work', 'rotating_machinery', 'noise', 'sharp_edges', 'manual_handling'] },
   welding: { group: 'Engineering', label: 'Welding', description: 'Students set up and weld practice joints using MIG/MMAW in welding bays.', materials: 'Mild steel plate, welding wire/electrodes, shielding gas', focus: ['hot_work', 'welding_fumes', 'gas_cylinders', 'atmosphere', 'noise'] },
   sheet_metal: { group: 'Engineering', label: 'Sheet-metal work', description: 'Students mark out, cut (guillotine/snips), fold (pan brake) and join light-gauge sheet metal.', materials: 'Galvanised or mild steel sheet, rivets, spot welds', focus: ['sharp_edges', 'noise', 'hot_work', 'rotating_machinery'] },
   machining: { group: 'Engineering', label: 'Machining', description: 'Students turn, face and drill parts on the metal lathe and use the milling machine.', materials: 'Mild steel / aluminium bar stock, cutting fluid', focus: ['rotating_machinery', 'sharp_edges', 'noise', 'chemicals'] },
   assembly: { group: 'Engineering', label: 'Assembly / fitting', description: 'Students assemble, fit and fasten components using hand and portable power tools.', materials: 'Prepared components, fasteners, lubricants', focus: ['manual_handling', 'rotating_machinery'] },
-  sawhorse: { group: 'Construction', label: 'Construction / carpentry item (e.g. sawhorse)', description: 'Students mark out, cut and assemble a timber sawhorse using hand and portable power tools.', materials: 'Structural pine (e.g. 90x45 MGP10), screws/nails, PVA adhesive', focus: ['manual_handling'] },
-  wall_frame: { group: 'Construction', label: 'Simulated wall frame', description: 'Students set out, cut and assemble a small timber wall frame (plates, studs, noggins) at ground level, then dismantle it.', materials: 'Pine framing timber, nails/framing connectors', focus: ['heights_any', 'manual_handling'] },
-  brick_block: { group: 'Construction', label: 'Brick and block laying', description: 'Students mix mortar and lay bricks/blocks to a practice wall, then clean down and dismantle.', materials: 'Bricks/blocks, mortar (cement, lime, sand), water', focus: ['cutting', 'chemicals', 'manual_handling'] },
-  concreting: { group: 'Construction', label: 'Concreting', description: 'Students set out and build formwork, place, screed and finish a small concrete slab or path.', materials: 'Formwork timber, pegs, reinforcing mesh, premixed bagged concrete or delivered concrete, curing compound', focus: ['excavation', 'chemicals', 'mobile_plant', 'manual_handling', 'cutting'] },
-  tiling: { group: 'Construction', label: 'Tiling', description: 'Students prepare a practice board/wall, cut tiles, lay with adhesive and grout.', materials: 'Ceramic tiles, tile adhesive, grout, sealer, backing board', focus: ['cutting', 'chemicals'] },
-  fencing: { group: 'Construction', label: 'Fencing / landscaping', description: 'Students set out and install fence posts/rails or landscape edging.', materials: 'Posts, rails, concrete, fixings', focus: ['excavation', 'services', 'mobile_plant'] },
+  sawhorse: { group: 'Construction', label: 'Construction / carpentry item (e.g. sawhorse)', description: 'Students mark out, cut and assemble a timber sawhorse using hand and portable power tools.', materials: 'Structural pine (e.g. 90x45 MGP10), screws/nails, PVA adhesive', focus: ['construction_work', 'manual_handling'] },
+  wall_frame: { group: 'Construction', label: 'Simulated wall frame', description: 'Students set out, cut and assemble a small timber wall frame (plates, studs, noggins) at ground level, then dismantle it.', materials: 'Pine framing timber, nails/framing connectors', focus: ['construction_work', 'heights_any', 'manual_handling'] },
+  brick_block: { group: 'Construction', label: 'Brick and block laying', description: 'Students mix mortar and lay bricks/blocks to a practice wall, then clean down and dismantle.', materials: 'Bricks/blocks, mortar (cement, lime, sand), water', focus: ['construction_work', 'cutting', 'chemicals', 'manual_handling'] },
+  concreting: { group: 'Construction', label: 'Concreting', description: 'Students set out and build formwork, place, screed and finish a small concrete slab or path.', materials: 'Formwork timber, pegs, reinforcing mesh, premixed bagged concrete or delivered concrete, curing compound', focus: ['construction_work', 'excavation', 'chemicals', 'mobile_plant', 'manual_handling', 'cutting'] },
+  tiling: { group: 'Construction', label: 'Tiling', description: 'Students prepare a practice board/wall, cut tiles, lay with adhesive and grout.', materials: 'Ceramic tiles, tile adhesive, grout, sealer, backing board', focus: ['construction_work', 'cutting', 'chemicals'] },
+  fencing: { group: 'Construction', label: 'Fencing / landscaping', description: 'Students set out and install fence posts/rails or landscape edging.', materials: 'Posts, rails, concrete, fixings', focus: ['construction_work', 'excavation', 'services', 'mobile_plant'] },
+  kitchen: { group: 'Hospitality', label: 'Commercial kitchen / food preparation', description: 'Students prepare, cook and plate food in the training kitchen using knives, stovetops, ovens and fryers, then clean down.', materials: 'Food ingredients, cooking oil, cleaning and sanitising chemicals', focus: ['hot_cooking', 'food_equipment', 'gas_appliances', 'wet_floors', 'food_served', 'chemicals', 'manual_handling'] },
+  vehicle_service: { group: 'Automotive', label: 'Light vehicle servicing', description: 'Students carry out basic servicing on light vehicles: checking and changing fluids, tyres and wheels, and inspecting brakes, using hoists or jacks and stands.', materials: 'Engine oil, coolant, brake fluid, parts cleaner, tyres', focus: ['vehicle_raised', 'engine_running', 'vehicle_electrical', 'vehicles_moving', 'chemicals', 'manual_handling', 'noise'] },
   custom: { group: 'Other', label: 'Custom project', description: '', materials: '', focus: [] },
 };
 
@@ -185,6 +208,8 @@ function suggestedGroups(text) {
   const out = [];
   if (/\b(MEM\d|engineer|metal|fabricat|weld|machin|fitting|sheet[- ]?metal|boilermak)/i.test(t)) out.push('Engineering');
   if (/\b(CPC\d|construct|carpent|build|brick|block ?lay|concret|til(e|ing)|landscap|fenc)/i.test(t)) out.push('Construction');
+  if (/\b(SIT\d|hospitality|kitchen|cookery|culinary|food|catering|cafe|barista)/i.test(t)) out.push('Hospitality');
+  if (/\b(AUR\d|automotive|vehicle|motor|mechanic|car servic)/i.test(t)) out.push('Automotive');
   return out;
 }
 
@@ -197,7 +222,13 @@ function classificationBasis(p) {
 }
 
 const RELEVANCE_MAP = [
-  [/weld|plasma|oxy|braz|grind|spark/, ['hot_work', 'welding_fumes', 'gas_cylinders']],
+  [/fryer|oven|grill|stove|cook|boil|steam|kitchen/, ['hot_cooking', 'gas_appliances', 'wet_floors']],
+  [/knife|knives|slicer|mandoline|mixer|food processor/, ['food_equipment']],
+  [/serv(e|ing) food|cafe|catering|customers/, ['food_served']],
+  [/hoist|jack|vehicle|car\b|engine|exhaust|tyre|brake/, ['vehicle_raised', 'engine_running', 'vehicles_moving']],
+  [/battery|batteries|hybrid|electric vehicle|\bev\b|high[- ]voltage/, ['vehicle_electrical']],
+  [/build|construct|frame|framing|wall|slab|footing|brick|block|concrete|til(e|ing)|fence|shed|deck|demolish|renovat/, ['construction_work']],
+  [/weld|plasma|oxy|braz|grind|spark|mig|tig|arc/, ['hot_work', 'welding_fumes', 'gas_cylinders']],
   [/cylinder|acetylene|lpg|argon|shielding gas/, ['gas_cylinders']],
   [/lathe|mill|drill|saw|grinder|router/, ['rotating_machinery', 'noise']],
   [/sheet|guillotine|snips|swarf/, ['sharp_edges']],
@@ -218,9 +249,27 @@ function relevantKeys(p, toolNames) {
   return keys;
 }
 
-function visibleQuestions(answers) {
+// Construction screening applies unless the teacher has said the work is not
+// construction-type. Unanswered never means "No".
+const constructionApplies = (a) => (a || {}).construction_work !== 'No';
+
+// p (optional) = project, used to work out which "only when relevant"
+// questions apply (template, description, materials, equipment).
+function visibleQuestions(answers, p) {
   const a = answers || {};
-  return QUESTIONS.filter((q) => !q.showIf || a[q.showIf] === 'Yes' || a[q.showIf] === 'Unsure');
+  const rel = p ? relevantKeys(p, (p.peras || []).map((x) => x.activity_name)) : null;
+  return QUESTIONS.filter((q) => {
+    if (q.showIf && a[q.showIf] !== 'Yes' && a[q.showIf] !== 'Unsure') return false;
+    if (q.hideIfNo && a[q.hideIfNo] === 'No') return false;
+    if (q.onlyWhenRelevant && !a[q.key] && !(rel && rel.has(q.key))) return false;
+    return true;
+  });
+}
+function isCritical(q, a, rel) {
+  if (q.critical === true) return true;
+  if (q.critical === 'construction') return constructionApplies(a);
+  if (q.critical === 'relevant') return !!(rel && rel.has(q.key));
+  return false;
 }
 
 // Deterministic evaluation of the checklist. Returns everything the UI and
@@ -228,12 +277,14 @@ function visibleQuestions(answers) {
 function evaluate(project) {
   const a = project.answers || {};
   const confirmations = project.trigger_reviews || {};
-  const qs = visibleQuestions(a);
-  const unanswered = qs.filter((q) => q.critical && !a[q.key]);
+  const rel = relevantKeys(project, (project.peras || []).map((x) => x.activity_name));
+  const qs = visibleQuestions(a, project);
+  const unanswered = qs.filter((q) => isCritical(q, a, rel) && !a[q.key]);
   const unsure = qs.filter((q) => a[q.key] === 'Unsure');
   const triggers = [];
   for (const q of qs) {
-    if (!q.trigger) continue;
+    // Legal high risk construction work triggers only arise for construction work.
+    if (!q.trigger || !constructionApplies(a)) continue;
     const ans = a[q.key];
     if (ans !== 'Yes' && ans !== 'Unsure') continue;
     let t = triggers.find((x) => x.key === q.trigger);
@@ -286,7 +337,7 @@ function approvalBlockers(project) {
 }
 
 module.exports = {
-  JURISDICTION, TEMPLATE_GROUPS, RELEVANCE_MAP, suggestedGroups, classificationBasis, relevantKeys,
+  JURISDICTION, TEMPLATE_GROUPS, RELEVANCE_MAP, constructionApplies, isCritical, suggestedGroups, classificationBasis, relevantKeys,
   RULES_VERSION, SOURCES, QUESTIONS, TRIGGERS, ACTIVITY_CLASSES, DOC_PURPOSES, PRACTICE_TYPES, STATUSES, TEMPLATES,
   visibleQuestions, evaluate, approvalBlockers,
 };

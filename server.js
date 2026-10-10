@@ -15,6 +15,7 @@ const { renderCaraHtml, renderCaraPdf } = require('./cara-pdf');
 const { cohortFromBody, saveCohort, cohortSummary, cohortFormHtml, COHORT_FIELDS } = require('./cara-cohort');
 const caraSafety = require('./cara-safety');
 const caraChecks = require('./cara-checks');
+const caraType = require('./cara-type');
 
 // Faith Lutheran College — Plainland letterhead, shown at the top of CARA PDF
 // exports (see GET /cara/:id/pdf below). Read once at startup; if the file
@@ -2108,6 +2109,11 @@ function peraPickerFlag(t) {
 
 app.get('/cara/new', async (req, res, next) => {
   try {
+    // First ask what kind of CARA this is (general curriculum or VET).
+    if (!caraType.TYPES[req.query.type]) {
+      return res.send(page({ title: 'New CARA', active: 'cara', body: caraType.choicePageHtml(escapeHtml) }));
+    }
+    const presetType = req.query.type;
     const toolsResult = await pool.query(
       `SELECT id, activity_name, class_unit, risk_level, status, archived FROM pera_records
        WHERE archived = false
@@ -2150,6 +2156,7 @@ app.get('/cara/new', async (req, res, next) => {
       <h1 class="page-title">New CARA</h1>
       <p class="page-subtitle" style="margin-bottom:24px;">Curriculum Activity Risk Assessment for a class or activity. Saved as a Draft until submitted for approval.</p>
       <form class="form-card" method="post" action="/cara" style="max-width:760px;" data-pretty>
+        ${caraType.selectorHtml(null, escapeHtml, presetType)}
 
         <div class="form-section-title">Activity scope</div>
         <p class="form-section-hint">Describe the activity as it applies to your unit/lesson planning.</p>
@@ -2166,6 +2173,7 @@ app.get('/cara/new', async (req, res, next) => {
           <textarea id="activity_scope" name="activity_scope" placeholder="What will students be doing, over what period, and where does it sit in the unit plan?"></textarea>
         </div>
 ${cohortFormHtml(null, escapeHtml)}
+${await caraType.detailsHtml(pool, null, escapeHtml)}
 
         <div class="form-section-title">Inherent risk level</div>
         <p class="form-section-hint">Based on the highest-risk hazard or tool involved. Low = document only. Medium = CARA recommended. High = CARA + principal/DP approval, consent recommended. Extreme = CARA + principal approval, consent required.</p>
@@ -2334,6 +2342,7 @@ app.post('/cara', async (req, res, next) => {
     const caraId = result.rows[0].id;
     await saveCohort(pool, caraId, cohortFromBody(req.body));
     await caraSafety.saveEmergency(pool, caraId, caraSafety.emergencyFromBody(req.body), normalizeText(req.body.submitted_by) || req.staffUser.name, null);
+    await caraType.save(pool, caraId, caraType.fromBody(req.body));
 
     const toolIds = [].concat(req.body.tool_ids || []).filter(Boolean);
     if (toolIds.length) {
@@ -2426,6 +2435,7 @@ app.get('/cara/:id/edit', async (req, res, next) => {
       <p class="page-subtitle" style="margin-bottom:24px;">Changes are recorded in the change history at the bottom of this CARA.</p>
       ${resetWarning}
       <form class="form-card" method="post" action="/cara/${r.id}/edit" style="max-width:760px;" data-pretty>
+        ${caraType.selectorHtml(r, escapeHtml)}
 
         <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Activity scope</div>
         <div class="form-row">
@@ -2441,6 +2451,7 @@ app.get('/cara/:id/edit', async (req, res, next) => {
           <textarea id="activity_scope" name="activity_scope">${escapeHtml(r.activity_scope || '')}</textarea>
         </div>
 ${cohortFormHtml(r, escapeHtml)}
+${await caraType.detailsHtml(pool, r, escapeHtml)}
 
         <div class="form-section-title">Inherent risk level</div>
         <div class="form-row">
@@ -2624,12 +2635,14 @@ app.post('/cara/:id/edit', async (req, res, next) => {
     const newConsentRequired = consent_required === 'true';
     const cohort = cohortFromBody(req.body);
     const emergency = caraSafety.emergencyFromBody(req.body);
+    const typeVals = caraType.fromBody(req.body);
 
     const fields = [
       ['activity_name', 'Activity name', activity_name],
       ['class_unit', 'Class / unit', class_unit || null],
       ...COHORT_FIELDS.map(([k, label]) => [k, label, cohort[k]]),
       ...caraSafety.EMERGENCY_FIELDS.map(([k, label]) => [k, label, emergency[k]]),
+      ...(typeVals ? caraType.TYPE_FIELDS.map(([k, label]) => [k, label, typeVals[k]]) : []),
       ['activity_scope', 'Activity scope', activity_scope || null],
       ['risk_level', 'Risk level', risk_level],
       ['students_notes', 'Students', students_notes || null],
@@ -2713,6 +2726,7 @@ app.post('/cara/:id/edit', async (req, res, next) => {
     );
     await saveCohort(pool, req.params.id, cohort);
     await caraSafety.saveEmergency(pool, req.params.id, emergency, edited_by.trim(), before);
+    await caraType.save(pool, req.params.id, typeVals);
 
     await pool.query('DELETE FROM cara_tool_links WHERE cara_id = $1', [req.params.id]);
     if (afterToolIds.length) {
@@ -2785,6 +2799,21 @@ app.get('/cara/:id', async (req, res, next) => {
 
     const checkPanel = r.archived ? '' : await caraAi.checkPanelHtml(r, req.staffUser, req.query);
     const projectsPanel = await caraProjects.caraPanelHtml(r, req.staffUser);
+    const roomName = r.room_id ? ((await pool.query('SELECT name FROM rooms WHERE id = $1', [r.room_id])).rows[0] || {}).name : null;
+    const caraVersions = (await pool.query('SELECT version, approved_by, approved_at, superseded_at FROM cara_versions WHERE cara_id = $1 ORDER BY version DESC', [r.id])).rows;
+    const vetHtml = r.cara_type === 'vet' ? `
+          <div class="detail-section">
+            <div class="detail-label">VET details</div>
+            <div class="detail-value"><strong>Qualification:</strong> ${escapeHtml(r.course || '—')}<br><strong>Delivery context:</strong> ${escapeHtml(r.delivery_context || '—')}<br><strong>Codes checked on training.gov.au:</strong> ${r.vet_codes_checked ? 'Yes' : 'No'}</div>
+            <div class="detail-label" style="margin-top:8px;">Units</div><div class="detail-value pretty-text">${escapeHtml(r.vet_units || '—')}</div>
+            <div class="detail-label" style="margin-top:8px;">Trainer/assessor competencies</div><div class="detail-value pretty-text">${escapeHtml(r.trainer_competencies || '—')}</div>
+            <div class="detail-label" style="margin-top:8px;">Training and assessment safety requirements</div><div class="detail-value pretty-text">${escapeHtml(r.vet_safety_requirements || '—')}</div>
+          </div>` : '';
+    const locationHtml = roomName || r.location_detail ? `
+          <div class="detail-section"><div class="detail-label">Location</div><div class="detail-value">${escapeHtml([roomName, r.location_detail].filter(Boolean).join(' — '))}</div></div>` : '';
+    const versionsHtml = caraVersions.length ? `
+          <div class="detail-section"><div class="detail-label">Approved versions</div>
+            <ul class="prj-versions">${caraVersions.map((v) => `<li>v${v.version} approved by ${escapeHtml(v.approved_by || '—')} ${formatDate(v.approved_at)}${v.superseded_at ? ` — superseded ${formatDate(v.superseded_at)}` : ' — current approved version'} · <a href="/cara/${r.id}/pdf?version=${v.version}">PDF</a></li>`).join('')}</ul></div>` : '';
     const caraIssueList = r.archived ? [] : await loadCaraIssues(r);
     const issuesPanel = r.archived ? '' : caraIssuesPanelHtml(r, caraIssueList, req.staffUser);
     const unapprovedPeras = toolsResult.rows.filter((t) => t.archived || t.status !== 'Approved');
@@ -2946,7 +2975,7 @@ app.get('/cara/:id', async (req, res, next) => {
         <div>
           <span class="badge ${riskBadgeClass(r.risk_level)}">${escapeHtml(r.risk_level)} risk</span>
           <h1 class="page-title" style="margin-top:10px;">${escapeHtml(r.activity_name)}</h1>
-          <p class="page-subtitle">${escapeHtml(r.class_unit || 'Class/unit not set')} · Submitted by ${escapeHtml(r.submitted_by || 'unknown')}</p>
+          <p class="page-subtitle">${escapeHtml(caraType.typeLabel(r.cara_type))} · ${escapeHtml(r.class_unit || 'Class/unit not set')} · Submitted by ${escapeHtml(r.submitted_by || 'unknown')}</p>
         </div>
         <span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span>
         ${r.archived ? `<span class="badge" style="background:#F0EDE5;color:#6B6659;margin-left:6px;">Archived</span>` : ''}
@@ -2959,6 +2988,9 @@ app.get('/cara/:id', async (req, res, next) => {
             <div class="detail-label">Activity scope</div>
             <div class="detail-value pretty-text">${escapeHtml(r.activity_scope || '—')}</div>
           </div>
+          ${locationHtml}
+          ${vetHtml}
+          ${versionsHtml}
           <div class="detail-section">
             <div class="detail-label">PERA used</div>
             ${toolChips}
@@ -3069,6 +3101,19 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     }
     const r = result.rows[0];
 
+    // An earlier approved version (kept in cara_versions).
+    if (req.query.version) {
+      const v = (await pool.query('SELECT * FROM cara_versions WHERE cara_id = $1 AND version = $2', [r.id, Number(req.query.version)])).rows[0];
+      if (!v) return res.status(404).send('Version not found.');
+      const snap = { ...v.snapshot, status: 'Approved', issues: [], projects: [], version_label: `approved version ${v.version}${v.superseded_at ? `, superseded ${formatDate(v.superseded_at)}` : ', current'}` };
+      const html = renderCaraHtml(snap, snap.peras || [], { brand: BRAND });
+      if (req.query.preview === 'html') return res.send(html);
+      const buf = await renderCaraPdf(snap, snap.peras || [], { brand: BRAND });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="CARA-${r.id} v${v.version}.pdf"`);
+      return res.end(buf);
+    }
+
     const toolsResult = await pool.query(
       `SELECT ra.activity_name, ra.risk_level
        FROM cara_tool_links l
@@ -3084,7 +3129,8 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     // the design in cara-pdf.js without downloading a PDF each time).
     if (req.query.preview === 'html') {
       r.projects = await caraProjects.projectsForCaraPdf(r.id);
-    r.issues = caraChecks.openIssues(await loadCaraIssues(r));
+      r.issues = caraChecks.openIssues(await loadCaraIssues(r));
+      r.room_name = r.room_id ? ((await pool.query('SELECT name FROM rooms WHERE id = $1', [r.room_id])).rows[0] || {}).name : null;
       return res.send(renderCaraHtml(r, toolsResult.rows, { brand: BRAND }));
     }
 
@@ -3092,6 +3138,7 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     // available, fall through to the older PDFKit export below.
     r.projects = await caraProjects.projectsForCaraPdf(r.id);
     r.issues = caraChecks.openIssues(await loadCaraIssues(r));
+    r.room_name = r.room_id ? ((await pool.query('SELECT name FROM rooms WHERE id = $1', [r.room_id])).rows[0] || {}).name : null;
     try {
       const pdf = await renderCaraPdf(r, toolsResult.rows, { brand: BRAND });
       res.setHeader('Content-Type', 'application/pdf');
@@ -3364,6 +3411,14 @@ app.post('/cara/:id/approve', requireRole('admin', 'approver'), async (req, res,
     );
     await pool.query('INSERT INTO cara_change_log (cara_id, changed_by, summary) VALUES ($1,$2,$3)',
       [req.params.id, req.staffUser.name, `Approved (approver: ${approverName})`]);
+    // Keep this approved version so later changes don't lose it.
+    {
+      const snap = (await pool.query('SELECT * FROM cara_records WHERE id = $1', [req.params.id])).rows[0];
+      snap.peras = (await pool.query('SELECT p.id, p.activity_name, p.risk_level, p.status FROM cara_tool_links l JOIN pera_records p ON p.id = l.pera_id WHERE l.cara_id = $1 ORDER BY p.activity_name', [req.params.id])).rows;
+      const next = (await pool.query('SELECT COALESCE(MAX(version), 0) + 1 AS v FROM cara_versions WHERE cara_id = $1', [req.params.id])).rows[0].v;
+      await pool.query('UPDATE cara_versions SET superseded_at = now() WHERE cara_id = $1 AND superseded_at IS NULL', [req.params.id]);
+      await pool.query('INSERT INTO cara_versions (cara_id, version, snapshot, approved_by) VALUES ($1,$2,$3,$4)', [req.params.id, next, JSON.stringify(snap), approverName]);
+    }
     res.redirect(approvalRedirect(req, `/cara/${req.params.id}`));
   } catch (err) {
     next(err);
@@ -3451,6 +3506,10 @@ app.post('/cara/:id/duplicate', async (req, res, next) => {
     const newId = insertResult.rows[0].id;
     await saveCohort(pool, newId, r);
     await caraSafety.saveEmergency(pool, newId, { first_aid_kit_location: r.first_aid_kit_location || null, first_aid_person: r.first_aid_person || null, emergency_confirmed: false }, req.staffUser.name, null);
+    await caraType.save(pool, newId, {
+      cara_type: r.cara_type || null, room_id: r.room_id || null, location_detail: r.location_detail || null, vet_units: r.vet_units || null,
+      delivery_context: r.delivery_context || null, trainer_competencies: r.trainer_competencies || null, vet_safety_requirements: r.vet_safety_requirements || null, vet_codes_checked: false,
+    });
 
     const toolLinks = await pool.query('SELECT pera_id FROM cara_tool_links WHERE cara_id = $1', [req.params.id]);
     if (toolLinks.rows.length) {
@@ -5672,6 +5731,7 @@ app.get('/admin/cara/:id/edit', requireRole('admin'), async (req, res, next) => 
       <a class="back-link" href="/admin/cara">← Back to CARA</a>
       <h1 class="page-title" style="margin-bottom:24px;">Edit CARA: ${escapeHtml(r.activity_name)}</h1>
       <form class="form-card" method="post" action="/admin/cara/${r.id}" style="max-width:760px;" data-pretty>
+        ${caraType.selectorHtml(r, escapeHtml)}
         <div class="form-row">
           <label for="activity_name">Activity name</label>
           <input type="text" id="activity_name" name="activity_name" value="${escapeHtml(r.activity_name)}" required>
@@ -5693,6 +5753,7 @@ app.get('/admin/cara/:id/edit', requireRole('admin'), async (req, res, next) => 
           <select id="status" name="status" required>${statusOptions}</select>
         </div>
 ${cohortFormHtml(r, escapeHtml)}
+${await caraType.detailsHtml(pool, r, escapeHtml)}
         <div class="form-row">
           <label for="students_notes">Students</label>
           <textarea id="students_notes" name="students_notes">${escapeHtml(r.students_notes || '')}</textarea>
@@ -5812,6 +5873,7 @@ app.post('/admin/cara/:id', requireRole('admin'), async (req, res, next) => {
       const prev = (await pool.query('SELECT first_aid_kit_location, first_aid_person, emergency_confirmed FROM cara_records WHERE id = $1', [req.params.id])).rows[0];
       await caraSafety.saveEmergency(pool, req.params.id, caraSafety.emergencyFromBody(req.body), req.staffUser.name, prev);
     }
+    await caraType.save(pool, req.params.id, caraType.fromBody(req.body));
 
     res.redirect(`/admin/cara/${req.params.id}/edit`);
   } catch (err) {

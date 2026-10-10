@@ -32,7 +32,7 @@ async function req(who, method, p, form) {
   return { status: r.status, loc: r.headers.get('location'), text, type };
 }
 const html = (s) => s.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
-const QS = ['cutting', 'chemicals', 'manual_handling', 'hot_work', 'gas_cylinders', 'rotating_machinery', 'noise', 'sharp_edges', 'fall_2m', 'heights_any', 'excavation', 'services', 'mobile_plant', 'traffic', 'structural', 'asbestos', 'tilt_up', 'confined_space', 'atmosphere', 'water', 'temperature', 'other_listed'];
+const QS = ['construction_work', 'cutting', 'chemicals', 'manual_handling', 'hot_work', 'gas_cylinders', 'rotating_machinery', 'noise', 'sharp_edges', 'fall_2m', 'heights_any', 'excavation', 'services', 'mobile_plant', 'traffic', 'structural', 'asbestos', 'tilt_up', 'confined_space', 'atmosphere', 'water', 'temperature', 'other_listed'];
 const allNo = () => Object.fromEntries(QS.map((q) => [`q_${q}`, 'No']));
 const fullCara = {
   activity_name: 'Cert II Construction', class_unit: 'Construction', risk_level: 'High', course: 'CPC20220 Certificate II in Construction Pathways',
@@ -43,6 +43,9 @@ const fullCara = {
   emergency_first_aid: 'Raise the alarm and call 000 in an emergency. Notify sick bay.', first_aid_kit_location: 'Shed by the construction area gate', first_aid_person: 'Teacher T', emergency_confirmed: 'true',
   environmental_hazards: 'Sun exposure', environmental_controls: 'Shade, hats, water', facilities_hazards: 'Mixer entanglement', facilities_controls: 'Guards in place',
   student_hazards: 'Inexperience', student_controls: 'Supervision and induction', consent_required: 'true', submitted_by: 'Teacher T', edited_by: 'Teacher T', tool_ids: ['3', '2'],
+  cara_type_fields: '1', cara_type: 'vet', room_id: '2', location_detail: 'Outdoor construction area',
+  vet_units: 'CPCCWHS2001 Apply WHS requirements, policies and procedures in the construction industry', delivery_context: 'School-based training',
+  trainer_competencies: 'TAE40116 plus current construction industry skills; RTO trainer matrix ref TM-12', vet_safety_requirements: 'General construction induction (white card) completed before practical work.', vet_codes_checked: 'true',
 };
 
 (async () => {
@@ -153,7 +156,7 @@ const fullCara = {
   ok(d.suggestions.cara_change_proposal && (await db.query('SELECT scope_exclusions FROM cara_projects WHERE id=$1', [p1])).rows[0].scope_exclusions === null, 'AI suggestions (incl. CARA changes) are not applied');
   ok((await db.query("SELECT COUNT(*)::int n FROM cara_ai_reviews WHERE kind='project_draft'")).rows[0].n >= 1, 'project AI drafts are recorded in the AI usage log');
 
-  const full = { ...brick, ...allNo(), q_cutting: 'Yes', q_dry_cutting: 'No', q_engineered_stone: 'No', q_mobile_plant: 'Yes', in_cara_scope: 'Yes',
+  const full = { ...brick, ...allNo(), q_construction_work: 'Yes', q_cutting: 'Yes', q_dry_cutting: 'No', q_engineered_stone: 'No', q_mobile_plant: 'Yes', in_cara_scope: 'Yes',
     first_aid_kit_location: 'Outdoor area shed', first_aid_person: 'Teacher T', emergency_confirmed: 'true', doc_purpose: 'SWMS for training/assessment', scope_exclusions: 'Practice wall only' };
   await req('teacher', 'POST', `/projects/${p1}/edit`, full);
   r = await req('teacher', 'POST', `/projects/${p1}/submit`); ok(r.status === 302, 'project submitted for review');
@@ -195,7 +198,7 @@ const fullCara = {
   await req('approver', 'POST', `/projects/${p2}/classify`, { activity_class: 'Actual construction work', doc_purpose: 'Project safe work procedure' });
   const purposes = (await db.query('SELECT DISTINCT doc_purpose FROM cara_projects')).rows.map((x) => x.doc_purpose);
   ok(purposes.includes('Project safe work procedure') && purposes.includes('SWMS for training/assessment'), 'safe work procedure and training SWMS kept as distinct purposes');
-  await db.query("UPDATE cara_projects SET answers = answers || '{\"fall_2m\":\"Yes\"}'::jsonb, trigger_reviews = '{}'::jsonb WHERE id=$1", [p2]);
+  await db.query("UPDATE cara_projects SET answers = answers || '{\"fall_2m\":\"Yes\",\"construction_work\":\"Yes\"}'::jsonb, trigger_reviews = '{}'::jsonb WHERE id=$1", [p2]);
   await req('approver', 'POST', `/projects/${p2}/trigger`, { trigger: 'fall_2m', decision: 'Applies', note: 'Scaffold over 2 m' });
   await db.query("UPDATE cara_projects SET status='Awaiting review', emergency_confirmed=true, class_basis=NULL WHERE id=$1", [p2]);
   r = await req('approver', 'POST', `/projects/${p2}/approve`, { approver: 'Approver B' });
@@ -208,6 +211,77 @@ const fullCara = {
   ok(r.text.includes('Unresolved items') && r.text.includes('[Year level]'), 'draft CARA export lists unresolved items');
   r = await req('teacher', 'GET', `/projects/${p1}/pdf`); ok(r.status === 200 && r.type === 'application/pdf', 'project PDF renders');
   r = await req('teacher', 'GET', '/cara/1/pdf'); ok(r.status === 200 && r.type === 'application/pdf', 'CARA PDF renders');
+
+  // ===== 7. CARA type: general curriculum / VET =====
+  r = await req('teacher', 'GET', '/cara/new');
+  ok(r.text.includes('What are you planning?') && r.text.includes('/cara/new?type=general') && r.text.includes('/cara/new?type=vet'), 'New CARA starts with the general/VET choice');
+  r = await req('teacher', 'GET', '/cara/new?type=general');
+  ok(/<option value="general" selected/.test(r.text) && r.text.includes('id="vet_section" data-show-for="vet"'), 'general form preselects general; VET section only shown for VET');
+  r = await req('teacher', 'GET', '/cara/3');
+  ok(r.status === 200 && r.text.includes('Type not set') && html(r.text).includes('Choose whether this is a general curriculum activity or a VET course'), 'existing CARA stays accessible; type shown as not set and must be confirmed');
+  r = await req('teacher', 'GET', '/cara/3/edit');
+  ok(r.status === 200 && r.text.includes('— Choose (not set yet) —') && (await db.query('SELECT cara_type FROM cara_records WHERE id=3')).rows[0].cara_type === null, 'existing CARA editable and not auto-classified from its title');
+
+  // General curriculum construction activity: same screening when the work triggers it
+  r = await req('teacher', 'POST', '/cara', { activity_name: 'Year 9 Design Tech garden shed', class_unit: 'Year 9 Design and Technologies', risk_level: 'High', cara_type_fields: '1', cara_type: 'general',
+    activity_scope: 'Students frame and clad a small garden shed on the school agriculture plot using drop saws and nail guns.', submitted_by: 'Teacher T', tool_ids: ['3'] });
+  const gc = Number(r.loc.split('/').pop());
+  ok((await db.query('SELECT cara_type FROM cara_records WHERE id=$1', [gc])).rows[0].cara_type === 'general', 'general curriculum CARA created with its type stored');
+  r = await req('teacher', 'GET', `/cara/${gc}`);
+  ok(!r.text.includes('VET details') && !html(r.text).includes('VET: '), 'general curriculum CARA shows no VET fields or VET checks');
+  ok(r.text.includes('Optional: add projects'), 'projects are optional for general curriculum');
+  r = await req('teacher', 'POST', `/cara/${gc}/projects`, { cara_id: gc, name: 'Shed frame', project_type: 'wall_frame', practice_type: 'Permanent installation for use', pera_ids: ['3'], edited_by: 'Teacher T', q_construction_work: 'Yes', q_fall_2m: 'Yes' });
+  const gp = Number(r.loc.split('/').pop());
+  r = await req('teacher', 'GET', `/projects/${gp}`);
+  ok(html(r.text).includes('Possible trigger:</strong> Work that involves a risk of a person falling more than 2 metres'), 'general curriculum construction project still gets the construction screening and trigger');
+
+  // VET hospitality: no construction questions
+  r = await req('teacher', 'POST', '/cara', { activity_name: 'SIT20322 kitchen practicals', class_unit: 'Hospitality', course: 'SIT20322 Certificate II in Hospitality', risk_level: 'Medium', cara_type_fields: '1', cara_type: 'vet',
+    activity_scope: 'Students prepare and cook menu items in the training kitchen using knives, fryers and ovens, then clean down.', submitted_by: 'Teacher T' });
+  const hc = Number(r.loc.split('/').pop());
+  r = await req('teacher', 'GET', `/cara/${hc}/projects/new`);
+  ok(r.text.includes('Hospitality (suggested)') && r.text.includes('Commercial kitchen'), 'hospitality VET course suggests the hospitality template');
+  r = await req('teacher', 'POST', `/cara/${hc}/projects`, { cara_id: hc, name: 'Cafe menu', project_type: 'kitchen', description: 'Cook with fryers and ovens', practice_type: 'Temporary educational practice', edited_by: 'Teacher T', q_construction_work: 'No', q_temperature: 'Yes', q_hot_cooking: 'Yes' });
+  const hp = Number(r.loc.split('/').pop());
+  r = await req('teacher', 'GET', `/projects/${hp}`);
+  const ht = html(r.text);
+  ok(!ht.includes('Could any person fall more than 2 metres') && !ht.includes('trench') && !ht.includes('powered mobile plant move'), 'VET hospitality project does not get construction questions');
+  ok(ht.includes('No possible high risk construction work triggers'), 'cool room (temperature) answer does not create a construction SWMS trigger outside construction work');
+  ok(ht.includes('Will gas cooking appliances be used?'), 'hospitality-specific questions are asked');
+  const hcRow = (await db.query('SELECT risk_level FROM cara_records WHERE id=$1', [hc])).rows[0];
+  ok(hcRow.risk_level === 'Medium', 'choosing VET does not change the risk rating');
+  ok((await db.query('SELECT doc_purpose, activity_class FROM cara_projects WHERE id=$1', [hp])).rows[0].doc_purpose === 'Not yet decided', 'choosing VET does not set a SWMS document purpose');
+  r = await req('teacher', 'GET', `/cara/${hc}`);
+  ok(html(r.text).includes('VET: list the units of competency') && html(r.text).includes('VET: confirm the qualification and unit codes were checked'), 'VET CARA requires units and code check before approval');
+  ok(r.text.includes('VET courses usually involve several projects'), 'projects section is prominent for VET');
+
+  // Scope sufficiency
+  await db.query("UPDATE cara_records SET activity_scope = 'VET Certificate II in Hospitality' WHERE id=$1", [hc]);
+  r = await req('teacher', 'GET', `/cara/${hc}`);
+  ok(html(r.text).includes('Activity scope only names the course'), 'a course title alone is not accepted as the activity scope');
+
+  // Changing type keeps data
+  await req('teacher', 'POST', `/cara/${hc}/edit`, { activity_name: 'SIT20322 kitchen practicals', risk_level: 'Medium', edited_by: 'Teacher T', cara_type_fields: '1', cara_type: 'vet', course: 'SIT20322 Certificate II in Hospitality', vet_units: 'SITHCCC027 Prepare dishes using basic methods of cookery', delivery_context: 'Simulated workplace' });
+  await req('teacher', 'POST', `/cara/${hc}/edit`, { activity_name: 'SIT20322 kitchen practicals', risk_level: 'Medium', edited_by: 'Teacher T', cara_type_fields: '1', cara_type: 'general', course: 'SIT20322 Certificate II in Hospitality', vet_units: 'SITHCCC027 Prepare dishes using basic methods of cookery', delivery_context: 'Simulated workplace' });
+  const hc2 = (await db.query('SELECT cara_type, vet_units, delivery_context FROM cara_records WHERE id=$1', [hc])).rows[0];
+  ok(hc2.cara_type === 'general' && hc2.vet_units.startsWith('SITHCCC027') && hc2.delivery_context === 'Simulated workplace', 'changing type to general keeps the VET data');
+  r = await req('teacher', 'GET', `/cara/${hc}/pdf?preview=html`);
+  ok(!r.text.includes('VET details'), 'general curriculum export has no VET section');
+
+  // VET export, approved versions
+  r = await req('teacher', 'GET', '/cara/1/pdf?preview=html');
+  ok(r.text.includes('VET details') && r.text.includes('CPCCWHS2001') && r.text.includes('School-based training'), 'VET export shows qualification, units and delivery context');
+  const v1 = (await db.query('SELECT version FROM cara_versions WHERE cara_id=1')).rows;
+  ok(v1.length === 1 && v1[0].version === 1, 'approved CARA version kept');
+  r = await req('teacher', 'GET', '/cara/1/pdf?version=1&preview=html');
+  ok(r.text.includes('approved version 1') && r.text.includes('small slab).'), 'earlier approved CARA version exportable with its original scope');
+
+  // AI with VET details
+  fs.writeFileSync(AI_LOG, '');
+  await req('teacher', 'POST', '/cara/ai/draft', { ...fullCara });
+  sent = fs.readFileSync(AI_LOG, 'utf8');
+  ok(sent.includes('VET course or activity') && sent.includes('CPCCWHS2001') && /never invent/i.test(sent), 'AI gets the CARA type and teacher-entered VET details, with no-invention rules');
+  ok(!sent.includes('TM-12') && !sent.includes('SECRET-STUDENT'), 'AI request excludes trainer details and the Students box');
 
   // Permissions
   r = await req('other', 'POST', `/projects/${p2}/edit`, { cara_id: 1, name: 'Hacked', edited_by: 'O' }); ok(r.status === 403, 'another teacher cannot edit the project');

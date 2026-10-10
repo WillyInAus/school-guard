@@ -254,7 +254,7 @@ function renderCaraHtml(r, peraRows, { brand = 'PracReady', generatedAt = new Da
       ${LETTERHEAD_DATA_URI ? `<img src="${LETTERHEAD_DATA_URI}" alt="">` : `<div class="school">${escapeHtml(SCHOOL_NAME)}</div>`}
       <div class="doc-id">
         <div class="type">Curriculum Activity Risk Assessment</div>
-        <div>Ref ${escapeHtml(ref)} · Last updated ${escapeHtml(formatDate(r.updated_at))}</div>
+        <div>Ref ${escapeHtml(ref)} · ${escapeHtml(r.cara_type === 'vet' ? 'VET course or activity' : r.cara_type === 'general' ? 'General curriculum activity' : 'Type not set')} · Last updated ${escapeHtml(formatDate(r.updated_at))}${r.version_label ? ` · ${escapeHtml(r.version_label)}` : ''}</div>
       </div>
     </div>
     <div class="titlebar">
@@ -295,11 +295,26 @@ function renderCaraHtml(r, peraRows, { brand = 'PracReady', generatedAt = new Da
         : '<span class="empty">No PERAs linked.</span>'}</div>
     </div>`;
 
+  // VET details appear only on VET CARAs, so general curriculum PDFs stay short.
+  const vet = r.cara_type === 'vet' ? `
+    <div class="section keep">
+      <h2>VET details</h2>
+      <table class="kv">${kvRows([
+        ['Qualification', escapeHtml(r.course || '—')],
+        ['Units of competency', richText(r.vet_units)],
+        ['Delivery context', escapeHtml(r.delivery_context || '—')],
+        ['Trainer/assessor competencies', richText(r.trainer_competencies)],
+        ['Training and assessment safety requirements', richText(r.vet_safety_requirements)],
+        ['Codes checked on training.gov.au', r.vet_codes_checked ? 'Yes' : '<b>No</b>'],
+      ])}</table>
+    </div>` : '';
+
   const people = `
     <div class="section">
       <h2>3. Students, supervision &amp; preparation</h2>
       <table class="kv">${kvRows([
         ...(cohortSummary(r) ? [['Class group', escapeHtml(cohortSummary(r))]] : []),
+        ...(r.room_name || r.location_detail ? [['Location', escapeHtml([r.room_name, r.location_detail].filter(Boolean).join(' — '))]] : []),
         ...(r.prior_experience ? [['Prior experience', richText(r.prior_experience)]] : []),
         ['Students', richText(r.students_notes)],
         ['Supervision', richText(r.supervision_notes)],
@@ -379,6 +394,7 @@ ${notice}
 ${unresolved}
 ${meta}
 ${scope}
+${vet}
 ${pera}
 ${people}
 ${hazards}
