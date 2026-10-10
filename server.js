@@ -2557,7 +2557,7 @@ app.get('/cara/:id', async (req, res, next) => {
       </div>
     ` : '';
 
-    const body = `
+    const body = `<div class="ws-page">
       <a class="back-link" href="/cara">← Back to CARA Records</a>
       <div class="page-header">
         <div>
@@ -2677,7 +2677,7 @@ app.get('/cara/:id', async (req, res, next) => {
         <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Change history</div>
         ${changeLogHtml}
       </div>
-    `;
+    </div>`;
 
     res.send(page({ title: r.activity_name, active: 'cara', body }));
   } catch (err) {

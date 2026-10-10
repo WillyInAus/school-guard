@@ -207,11 +207,11 @@ module.exports = function registerCaraProjects(app, deps) {
         <tbody>${rows.map((p) => `
           <tr>
             <td><a href="/projects/${p.id}">${escapeHtml(p.name)}</a><div class="prj-sub">${escapeHtml(ref(p))}${p.room_name ? ` · ${escapeHtml(p.room_name)}` : ''}</div></td>
-            <td>${escapeHtml((rules.TEMPLATES[p.project_type] || {}).label || p.project_type || '—')}</td>
-            <td>${escapeHtml(p.activity_class)}</td>
-            <td>${escapeHtml(purposeShown(p))}</td>
-            <td><span class="badge ${statusCls(p.status)}">${escapeHtml(p.status)}</span> <span class="prj-sub">v${p.version}</span></td>
-            <td>${p.open.length ? '<span class="badge badge-changes">Needs review</span>' : (p.status === 'Archived' ? '—' : '<span class="badge badge-approved">OK</span>')}</td>
+            <td data-label="Type">${escapeHtml((rules.TEMPLATES[p.project_type] || {}).label || p.project_type || '—')}</td>
+            <td data-label="Classification">${escapeHtml(p.activity_class)}</td>
+            <td data-label="Document">${escapeHtml(purposeShown(p))}</td>
+            <td data-label="Status"><span class="badge ${statusCls(p.status)}">${escapeHtml(p.status)}</span> <span class="prj-sub">v${p.version}</span></td>
+            <td data-label="CARA">${p.open.length ? '<span class="badge badge-changes">Needs review</span>' : (p.status === 'Archived' ? '—' : '<span class="badge badge-approved">OK</span>')}</td>
           </tr>`).join('')}</tbody></table></div>` : '<p class="detail-value">No projects linked yet.</p>';
 
     const flagHtml = flagged.length ? `
@@ -378,9 +378,9 @@ module.exports = function registerCaraProjects(app, deps) {
       </section>`;
 
     return `
-      <form class="form-card prj-form cara-stages" method="post" action="${action}" id="prj_form" style="max-width:860px;" novalidate>
+      <form class="form-card prj-form cara-stages" method="post" action="${action}" id="prj_form" novalidate>
         <nav class="stage-nav" aria-label="Project steps"><ol>
-          ${['Describe', 'Equipment, materials and hazards', 'Draft and review', 'Check and submit'].map((st, i) => `<li><button type="button" class="stage-btn" data-go="${i + 1}"><span class="stage-num">${i + 1}</span> ${st}<span class="stage-todo" data-todo="${i + 1}"></span></button></li>`).join('')}
+          ${[['Describe', 'Describe'], ['Equipment &amp; hazards', 'Equipment, materials and hazards'], ['Draft and review', 'Draft and review'], ['Check and submit', 'Check and submit']].map(([st, full], i) => `<li><button type="button" class="stage-btn" data-go="${i + 1}" title="${full}"><span class="stage-num">${i + 1}</span><span class="stage-lbl">${st}</span><span class="stage-todo" data-todo="${i + 1}"></span></button></li>`).join('')}
         </ol></nav>
         ${saved ? '<div class="saved-msg" role="status">Draft saved.</div>' : ''}
         <input type="hidden" name="cara_id" value="${cara.id}">
@@ -453,6 +453,7 @@ module.exports = function registerCaraProjects(app, deps) {
         locMode();
         form.querySelectorAll('input[name="loc_mode"]').forEach(function (r) { r.addEventListener('change', locMode); });
         form.addEventListener('submit', function () { document.getElementById('room_id').disabled = false; });
+        form.addEventListener('focusin', function (e) { var bar = form.querySelector('.stage-bar'); if (!bar || e.target.closest('.stage-bar')) return; var r = e.target.getBoundingClientRect(), b = bar.getBoundingClientRect(); if (r.bottom > b.top - 8 && r.top < b.bottom) window.scrollBy(0, r.bottom - b.top + 16); });
         var cp = document.getElementById('copy_parent_em');
         if (cp) cp.addEventListener('click', function () { document.getElementById('first_aid_kit_location').value = cp.dataset.kit; document.getElementById('first_aid_person').value = cp.dataset.person; todo(); });
         // Template prefill
@@ -527,7 +528,9 @@ module.exports = function registerCaraProjects(app, deps) {
           var u = el('button', 'btn btn-primary btn-sm', 'Use this'); u.type = 'button'; u.onclick = function () { onUse(); b.remove(); todo(); }; r.appendChild(u);
           if (onAdd) { var ad = el('button', 'btn btn-secondary btn-sm', 'Add to mine'); ad.type = 'button'; ad.onclick = function () { onAdd(); b.remove(); todo(); }; r.appendChild(ad); }
           var n = el('button', 'btn btn-secondary btn-sm', 'Dismiss'); n.type = 'button'; n.onclick = function () { b.remove(); }; r.appendChild(n);
-          b.appendChild(r); target.insertAdjacentElement('afterend', b);
+          b.appendChild(r);
+          var g = target.closest && target.closest('.cohort-grid, .hz-grid, .prj-step');
+          if (g) { b.classList.add('ai-suggest-wide'); g.insertAdjacentElement('afterend', b); } else target.insertAdjacentElement('afterend', b);
         }
         btn.addEventListener('click', function () {
           document.getElementById('room_id').disabled = false;
@@ -801,7 +804,7 @@ module.exports = function registerCaraProjects(app, deps) {
           <form method="post" action="/projects/${p.id}/submit"><button class="btn btn-primary" type="submit"${ev.blocking.length || !p.emergency_confirmed ? ' disabled' : ''}>Submit for review</button></form>
         </div>` : '';
 
-      const body = `
+      const body = `<div class="ws-page">
         <a class="back-link" href="/cara/${cara.id}#projects" id="parent">← ${escapeHtml(caraRef(cara.id))} ${escapeHtml(cara.activity_name)} (${escapeHtml(cara.status)})</a>
         <div class="page-header">
           <div>
@@ -869,7 +872,7 @@ module.exports = function registerCaraProjects(app, deps) {
               ${logs.length ? `<div class="change-log">${logs.map((l) => `<details class="change-log-entry"><summary class="change-log-summary"><span class="change-log-datetime">${formatDateTime(l.changed_at)} — ${escapeHtml(l.changed_by || '')}</span><span class="change-log-brief">${escapeHtml(l.action)}</span></summary><div class="change-log-detail">${escapeHtml(l.summary || '')}</div></details>`).join('')}</div>` : '<div class="detail-value">No history.</div>'}
             </div>
           </div>
-        </div>`;
+        </div></div>`;
       res.send(page({ title: p.name, active: 'cara', body }));
     } catch (err) { next(err); }
   });

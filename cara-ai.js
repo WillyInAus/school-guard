@@ -591,7 +591,17 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
           var no = el('button', 'btn btn-secondary btn-sm', 'Dismiss'); no.type = 'button'; no.onclick = function () { box.remove(); };
           row.appendChild(no);
           box.appendChild(row);
-          target.insertAdjacentElement('afterend', box);
+          // In the two-column hazards/controls grid, a suggestion goes full
+          // width under the hazard + control pair it belongs to.
+          var frow = target.closest && target.closest('.form-row'), grid = frow && frow.parentElement && frow.parentElement.classList.contains('hz-grid') ? frow.parentElement : null;
+          if (grid) {
+            var rows = Array.prototype.filter.call(grid.children, function (c) { return c.classList.contains('form-row'); });
+            var i = rows.indexOf(frow), ref = rows[i % 2 === 0 ? Math.min(i + 1, rows.length - 1) : i];
+            while (ref.nextElementSibling && ref.nextElementSibling.classList.contains('ai-suggest')) ref = ref.nextElementSibling;
+            var lab = frow.querySelector('label'); if (lab) box.firstChild.textContent = title + ' — ' + lab.textContent.replace(/\\s*\\*\\s*$/, '');
+            box.classList.add('ai-suggest-wide');
+            ref.insertAdjacentElement('afterend', box);
+          } else target.insertAdjacentElement('afterend', box);
         }
         btn.addEventListener('click', function () {
           var fd = new FormData(form);
