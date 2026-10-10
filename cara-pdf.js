@@ -198,6 +198,8 @@ ul.cols { columns: 2; column-gap: 24px; }
 .titlebar h1 { margin: 0; font-size: 14pt; }
 .titlebar .sub { font-size: 9pt; opacity: .9; }
 
+.unresolved { margin-top: 6px; padding: 6px 10px; border: 1px solid #E8A39B; background: #FDECEA; color: #7a1d12; font-size: 8.5pt; border-radius: 3px; }
+.unresolved ul { margin: 3px 0 0; padding-left: 16px; }
 .notice { margin-top: 6px; padding: 5px 10px; border: 1px solid #E0B252; background: #FFF6E0; color: #6b4a00; font-size: 8.5pt; border-radius: 3px; }
 
 table { width: 100%; border-collapse: collapse; }
@@ -261,14 +263,18 @@ function renderCaraHtml(r, peraRows, { brand = 'PracReady', generatedAt = new Da
     </div>`;
 
   const notice = r.status !== 'Approved'
-    ? `<div class="notice"><b>Not yet approved.</b> Status: ${escapeHtml(r.status)}. This CARA must be approved before the activity runs.</div>`
+    ? `<div class="notice"><b>DRAFT — NOT APPROVED.</b> Status: ${escapeHtml(r.status)}. This CARA must be approved before the activity runs.</div>`
+    : '';
+  const open = r.issues || [];
+  const unresolved = open.length && (r.status !== 'Approved' || open.some((i) => i.key.startsWith('unsafe:')))
+    ? `<div class="unresolved"><b>Unresolved items (${open.length})</b><ul>${open.slice(0, 15).map((i) => `<li>${escapeHtml(i.text)}${i.level === 'review' ? ' <i>(reviewer decision needed)</i>' : ''}</li>`).join('')}${open.length > 15 ? `<li>…and ${open.length - 15} more</li>` : ''}</ul></div>`
     : '';
 
   const meta = `
     <table class="meta">
       <tr>
         <th>Class / unit</th><td>${escapeHtml(r.class_unit || '—')}</td>
-        <th>Risk level</th><td>${riskPill(r.risk_level)}</td>
+        <th>Activity risk</th><td>${riskPill(r.risk_level)}</td>
         <th>Status</th><td><span class="pill ${statusCls}">${escapeHtml(r.status)}</span></td>
         <th>Parent consent</th><td>${r.consent_required ? 'Required' : 'Not required'}</td>
         <th>Next review</th><td>${escapeHtml(formatDate(r.next_review_date))}</td>
@@ -283,7 +289,7 @@ function renderCaraHtml(r, peraRows, { brand = 'PracReady', generatedAt = new Da
 
   const pera = `
     <div class="section keep">
-      <h2>2. Plant &amp; equipment risk assessments (PERA) used</h2>
+      <h2>2. Plant &amp; equipment risk assessments (PERA) used — equipment ratings</h2>
       <div class="box">${peraRows.length
         ? `<ul class="pera">${peraRows.map((t) => `<li>${riskPill(t.risk_level)} ${escapeHtml(toolName(t.activity_name))}</li>`).join('')}</ul>`
         : '<span class="empty">No PERAs linked.</span>'}</div>
@@ -370,6 +376,7 @@ function renderCaraHtml(r, peraRows, { brand = 'PracReady', generatedAt = new Da
 <body>
 ${header}
 ${notice}
+${unresolved}
 ${meta}
 ${scope}
 ${pera}
