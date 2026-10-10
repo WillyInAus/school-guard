@@ -12,6 +12,7 @@
 
 const firstAid = require('./first-aid');
 const caraType = require('./cara-type');
+const rules = require('./project-rules');
 
 // A scope must describe what students will do, not just name the course.
 const STOP = new Set(['the', 'and', 'of', 'in', 'a', 'an', 'to', 'for', 'with', 'vet', 'year', 'yr', 'students', 'student', 'unit', 'course', 'class']);
@@ -140,6 +141,15 @@ function caraIssues(r, ctx = {}) {
   ];
   for (const [k, msg] of required) if (blank(r[k])) add(`missing:${k}`, 'block', msg, k);
   if (blank(r.course) && blank(r.class_unit)) add('missing:course', 'block', 'Class group: course / subject is missing.', 'course');
+  if (!r.risk_level) add('missing:risk_level', 'block', 'Proposed activity risk rating not set (step 4).', 'risk_level');
+  // Hazard screening for the activity itself (same rules as projects).
+  {
+    const ev = rules.evaluate({ answers: r.screening || {}, project_type: null, description: `${r.activity_brief || ''} ${r.activity_scope || ''}`, materials: r.materials, peras });
+    if (ev.unanswered.length) add('screening:unanswered', 'block', `Hazard screening: ${ev.unanswered.length} question${ev.unanswered.length === 1 ? '' : 's'} to answer (step 2).`, 'screening');
+    for (const f of ev.flags.filter((x) => x.level === 'stop')) add('screening:stop', 'block', f.text, 'screening');
+    if (ev.unsure.length) add('screening:unsure', 'review', `Hazard screening: ${ev.unsure.length} answer${ev.unsure.length === 1 ? ' is' : 's are'} "Unsure" (${ev.unsure.map((q) => q.key.replace(/_/g, ' ')).join(', ')}). A reviewer must settle ${ev.unsure.length === 1 ? 'it' : 'them'}.`, 'screening');
+    for (const t of ev.triggers) add(`screening:trigger:${t.key}`, 'review', `Possible high risk construction work (${rules.JURISDICTION}): ${t.label}. Consider a project document for this work; a reviewer decides whether a SWMS is legally required.`, 'screening');
+  }
   if (!caraType.TYPES[r.cara_type]) add('missing:cara_type', 'block', 'Choose whether this is a general curriculum activity or a VET course (top of the form).', 'cara_type');
   if (scopeTooThin(r)) add('scope:thin', 'block', 'Activity scope only names the course or activity. Describe what students will actually do, with which tools, materials and processes.', 'activity_scope');
   if (!r.room_id && blank(r.location_detail)) add('missing:location', 'block', 'Location is missing.', 'room_id');

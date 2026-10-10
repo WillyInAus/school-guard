@@ -20,6 +20,7 @@ const CARA_AI_ALLOWLIST = [
   'student_hazards', 'student_controls',
   // CARA type and teacher-entered VET details (no trainer names: trainer_competencies is not sent)
   'cara_type', 'location_detail', 'vet_units', 'delivery_context', 'vet_safety_requirements',
+  'activity_brief', 'materials', 'sds_refs', 'screening_text',
 ];
 // Explicitly excluded (checked in tests): never present in an AI request.
 const CARA_AI_EXCLUDED = ['students_notes', 'submitted_by', 'approver', 'teacher_signature', 'review_notes', 'first_aid_person', 'created_by_staff_id', 'edited_by', 'trainer_competencies'];
@@ -58,6 +59,6 @@ function redactedNote(n) {
   return n ? `${n} line${n === 1 ? ' was' : 's were'} not sent to the AI because ${n === 1 ? 'it looked' : 'they looked'} like individual student or medical details.` : null;
 }
 
-const AI_SENT_TEXT = 'Sent to the AI: the activity, hazard, supervision and emergency text, the selected PERAs, the CARA type, any VET details you entered (qualification, units, delivery context, training safety requirements) and class-level details (year level, course, class size, age range, prior experience). Not sent: the Students box, trainer/assessor details, names or signatures. Lines that look like individual student or medical details are removed first.';
+const AI_SENT_TEXT = 'Sent to the AI: the activity description, materials, hazard answers, hazard, supervision and emergency text, the selected PERAs, the CARA type, any VET details you entered (qualification, units, delivery context, training safety requirements) and class-level details (year level, course, class size, age range, prior experience). Not sent: the Students box, trainer/assessor details, names or signatures. Lines that look like individual student or medical details are removed first.';
 
 module.exports = { CARA_AI_ALLOWLIST, CARA_AI_EXCLUDED, redact, caraForAi, redactedNote, AI_SENT_TEXT };

@@ -1481,3 +1481,72 @@ tr.row-link:hover {
 .prj-q .prj-crit { display: none; }
 .prj-q.prj-q-critical .prj-crit { display: inline; }
 .prj-more summary { cursor: pointer; color: #1B5E52; font-weight: 600; padding: 6px 0; }
+
+/* Staged CARA / project forms (cara-form.js) */
+.stage-nav ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; list-style: none; padding: 0; margin: 0 0 18px; }
+.stage-btn { width: 100%; text-align: left; border: 1px solid #E4DFD3; background: #F7F5F1; border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13.5px; color: #3f3b33; cursor: pointer; min-height: 44px; }
+.stage-btn.current { background: #1B5E52; color: #fff; border-color: #1B5E52; }
+.stage-btn:focus-visible { outline: 3px solid #F3D19E; outline-offset: 2px; }
+.stage-num { display: inline-block; width: 20px; height: 20px; line-height: 20px; text-align: center; border-radius: 50%; background: rgba(0,0,0,.08); font-weight: 700; margin-right: 4px; font-size: 12px; }
+.stage-btn.current .stage-num { background: rgba(255,255,255,.25); }
+.stage-todo { display: block; font-size: 11.5px; margin-top: 2px; opacity: .85; }
+.stage-todo.has-todo { color: #B7791F; }
+.stage-btn.current .stage-todo.has-todo { color: #FFE2A8; }
+.stage-todo.done { color: #2F7D5A; }
+.stage-btn.current .stage-todo.done { color: #CDEFD9; }
+@media (max-width: 640px) { .stage-nav ol { grid-template-columns: 1fr 1fr; } }
+.stage-title { font-size: 18px; margin: 0 0 12px; color: #1A1D1B; }
+.stage-sub { font-size: 15px; margin: 18px 0 6px; color: #1B5E52; }
+.field-help { font-size: 12.5px; color: #6B6659; margin: 4px 0 0; }
+.stage-bar { position: sticky; bottom: 0; background: #fff; border-top: 1px solid #E4DFD3; padding: 10px 0 4px; margin-top: 18px; display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; z-index: 5; }
+.stage-bar #stage_back { margin-right: auto; }
+.saved-msg { background: #E4F3EA; color: #1d5a37; border-radius: 8px; padding: 6px 10px; margin-bottom: 10px; font-size: 13.5px; }
+.type-radios { border: none; padding: 0; margin: 0 0 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.type-radios legend { font-weight: 600; margin-bottom: 6px; padding: 0; }
+.type-radio { display: flex; gap: 8px; align-items: flex-start; border: 1px solid #E4DFD3; border-radius: 12px; padding: 10px 12px; cursor: pointer; background: #fff; }
+.type-radio:has(input:checked) { border-color: #1B5E52; background: #F2F8F6; }
+.type-radio strong { display: block; color: #1B5E52; }
+.type-radio small { display: block; color: #6B6659; font-size: 12.5px; line-height: 1.4; margin-top: 2px; }
+@media (max-width: 640px) { .type-radios { grid-template-columns: 1fr; } }
+.tool-selected { font-size: 13.5px; margin: 6px 0 10px; line-height: 2; }
+.tool-chip-sel { display: inline-block; background: #E4F3EA; color: #1d5a37; border-radius: 999px; padding: 0 10px; font-size: 12.5px; }
+.tool-chip-sel.unapproved { background: #FBEBD0; color: #7a5a00; }
+.equip-info { font-size: 13px; color: #1B5E52; margin: 6px 0; }
+.draft-group { border: 1px solid #E4DFD3; border-radius: 12px; padding: 4px 12px 8px; margin: 10px 0; background: #fff; }
+.draft-group > summary { cursor: pointer; font-weight: 600; color: #1B5E52; padding: 8px 0; }
+.draft-count { font-weight: 400; font-size: 12.5px; color: #B7791F; margin-left: 6px; }
+.hz-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+@media (max-width: 640px) { .hz-grid { grid-template-columns: 1fr; } }
+.ai-privacy-more { display: inline; }
+.ai-privacy-more summary { display: inline; cursor: pointer; color: #1B5E52; text-decoration: underline; }
+.prj-q-note summary { cursor: pointer; color: #1B5E52; font-size: 12.5px; }
+
+/* CARA overview workspace */
+.ws-next { display: flex; align-items: center; gap: 12px; background: #F2F8F6; border: 1px solid #CFE3DC; border-radius: 12px; padding: 10px 14px; margin: 0 0 16px; flex-wrap: wrap; }
+.ws-next span { font-size: 12px; text-transform: uppercase; letter-spacing: .4px; color: #6B6659; }
+.ws-next-bad { background: #FBE0DD; border-color: #E8A39B; }
+.ws-next-ok { background: #E4F3EA; border-color: #BFDCCB; }
+.ws-h { font-size: 15px; margin: 0 0 8px; color: #1A1D1B; }
+.ws-checks { margin-bottom: 16px; }
+.chk-groups { display: grid; gap: 8px; }
+.chk-group { border: 1px solid #E4DFD3; border-radius: 10px; padding: 6px 12px; background: #fff; }
+.chk-group > summary { cursor: pointer; padding: 4px 0; }
+.chk-count { display: inline-block; min-width: 20px; text-align: center; border-radius: 999px; background: #F0EDE5; padding: 0 6px; font-size: 12px; margin-left: 4px; }
+.chk-sub { color: #6B6659; font-size: 12.5px; margin-left: 6px; }
+.chk-g-teacher { border-left: 4px solid #C0392B; }
+.chk-g-equipment { border-left: 4px solid #B7791F; }
+.chk-g-projects { border-left: 4px solid #B7791F; }
+.chk-g-reviewer { border-left: 4px solid #3E7D71; }
+.ws-actions { padding: 18px; margin-bottom: 16px; }
+.ws-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.ws-tools form { margin: 0; }
+.full-assessment { border: 1px solid #E4DFD3; border-radius: 12px; background: #fff; padding: 4px 14px; margin-bottom: 16px; }
+.full-assessment > summary { cursor: pointer; font-weight: 600; color: #1B5E52; padding: 10px 0; }
+.full-assessment-body { padding-bottom: 10px; }
+
+/* The hidden attribute always wins over button/display styles. */
+[hidden] { display: none !important; }
+.loc-mode { border: 1px solid var(--border, #e3dfd6); border-radius: 10px; padding: 10px 14px 12px; margin: 4px 0 12px; }
+.loc-mode legend { font-weight: 600; font-size: 14px; padding: 0 6px; }
+.loc-mode label { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; margin: 6px 0; font-weight: 400; }
+.loc-mode input[type="radio"] { margin-top: 3px; flex: none; }

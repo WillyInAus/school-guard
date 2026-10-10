@@ -1815,6 +1815,14 @@ async function migrate() {
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS trainer_competencies TEXT;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS vet_safety_requirements TEXT;`);
   await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS vet_codes_checked BOOLEAN NOT NULL DEFAULT false;`);
+  // Staged CARA form (cara-form.js): brief description, materials, risk basis,
+  // hazard screening answers; the activity risk can be left unset in a draft.
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS activity_brief TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS materials TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS sds_refs TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS risk_basis TEXT;`);
+  await pool.query(`ALTER TABLE cara_records ADD COLUMN IF NOT EXISTS screening JSONB;`);
+  await pool.query(`ALTER TABLE cara_records ALTER COLUMN risk_level DROP NOT NULL;`);
   // Approved CARA versions are kept when a CARA is changed and re-approved.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cara_versions (

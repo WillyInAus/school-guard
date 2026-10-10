@@ -7,6 +7,8 @@ http.createServer((req, res) => {
   let b = ''; req.on('data', (c) => b += c); req.on('end', () => {
     fs.appendFileSync(LOG, b + '\n');
     const body = JSON.parse(b); const tool = body.tools[0].name;
+    // A request mentioning FAIL-AI simulates the AI service being overloaded.
+    if (b.includes('FAIL-AI')) { res.statusCode = 529; res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } })); }
     let input;
     if (tool === 'project_draft') input = {
       scope_exclusions: 'In scope:\n- Practice wall to 600 mm\n**Not included:**\n- Permanent walls',
