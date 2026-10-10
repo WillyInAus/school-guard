@@ -26,6 +26,7 @@ function caraApprovalTexts() {
 
 // After saving the staged form: stay on the same step, or go to sign & submit.
 function caraSaveRedirect(req, id) {
+  if (req.body.after === 'checks') return `/cara/${id}/edit?stage=4&checked=1#checks`;
   if (req.body.after === 'submit') return `/cara/${id}#submit`;
   if (req.body.stage) return `/cara/${id}/edit?stage=${Math.max(1, Math.min(4, Number(req.body.stage) || 1))}&saved=1`;
   return `/cara/${id}`;
@@ -2221,7 +2222,7 @@ app.get('/cara/:id/edit', async (req, res, next) => {
       <p class="page-subtitle" style="margin-bottom:16px;">Changes are recorded in the change history.</p>
       ${await caraForm.caraFormHtml({
         pool, r, escapeHtml, riskBadgeClass, user: req.staffUser, caraAi, approvalText: caraApprovalTexts(), issues,
-        stage: Number(req.query.stage) || 1, saved: req.query.saved === '1',
+        stage: Number(req.query.stage) || 1, saved: req.query.saved === '1', checked: req.query.checked === '1',
       })}`;
     res.send(page({ title: `Edit — ${r.activity_name}`, active: 'cara', body }));
   } catch (err) {
@@ -2345,6 +2346,10 @@ app.post('/cara/:id/edit', async (req, res, next) => {
       changedLabels.push('PERA used');
     }
 
+    if ('no_equipment' in extra && !!before.no_equipment !== !!extra.no_equipment) {
+      changeLines.push(extra.no_equipment ? 'Marked as using no tools or equipment' : 'No longer marked as using no tools or equipment');
+      changedLabels.push('No tools or equipment');
+    }
     if (extra.screening && JSON.stringify(before.screening || {}) !== JSON.stringify(extra.screening)) {
       changeLines.push('Hazard screening answers changed');
       changedLabels.push('Hazard screening');
@@ -2473,95 +2478,20 @@ app.get('/cara/:id', async (req, res, next) => {
     const next = caraNextAction(r, caraIssueList, req.staffUser);
     const nextHtml = `<div class="ws-next ${next.cls || ''}"><span>Next step</span>${next.href ? `<a class="btn btn-primary" href="${next.href}">${escapeHtml(next.text)}</a>` : `<strong>${escapeHtml(next.text)}</strong>`}</div>`;
     const unapprovedPeras = toolsResult.rows.filter((t) => t.archived || t.status !== 'Approved');
+    // One equipment list only (in the checks above); here just a short line.
     const unapprovedNotice = unapprovedPeras.length
-      ? `<div class="alert alert-warning cara-unapproved">
-          <strong>Can't submit yet.</strong> ${unapprovedPeras.length === 1 ? 'This PERA needs' : 'These PERAs need'} to be approved first:
-          <ul>${unapprovedPeras.map((t) => `<li><a href="/pera/${t.id}">${escapeHtml(t.activity_name)}</a> (${escapeHtml(t.archived ? 'Archived' : t.status)})</li>`).join('')}</ul>
-        </div>`
+      ? `<div class="submit-blocked"><strong>Waiting for equipment approval:</strong> <a href="#chk_equipment">${unapprovedPeras.length} equipment assessment${unapprovedPeras.length === 1 ? '' : 's'}</a> must be approved by an authorised approver first.</div>`
       : '';
 
     let actionsHtml = '';
-    if (r.status === 'Draft' && unapprovedPeras.length) {
-      actionsHtml = unapprovedNotice + checkPanel;
-    } else if (r.status === 'Draft') {
-      actionsHtml = `
-        ${checkPanel}
-        <div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Teacher signature</div>
-        <p class="form-section-hint">Sign below to confirm this CARA is accurate before submitting for approval.</p>
-        <div class="signature-pad-wrap">
-          <canvas id="signature_pad" class="signature-pad" width="400" height="150"></canvas>
-        </div>
-        <div class="signature-pad-actions">
-          <button type="button" class="btn btn-secondary" onclick="window.clearSignature()">Clear</button>
-        </div>
-        <form method="post" action="/cara/${r.id}/submit" id="cara_submit_form" onsubmit="return window.prepareSignature(event)">
-          <input type="hidden" id="teacher_signature" name="teacher_signature">
-          <button type="submit" class="btn btn-primary" style="width:100%;">Submit for approval</button>
-        </form>
-        <script>
-          (function () {
-            const canvas = document.getElementById('signature_pad');
-            const ctx = canvas.getContext('2d');
-            ctx.strokeStyle = '#1B5E52';
-            ctx.lineWidth = 2;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-            let drawing = false;
-            let hasDrawn = false;
-
-            function getPos(e) {
-              const rect = canvas.getBoundingClientRect();
-              const scaleX = canvas.width / rect.width;
-              const scaleY = canvas.height / rect.height;
-              if (e.touches && e.touches.length) {
-                return { x: (e.touches[0].clientX - rect.left) * scaleX, y: (e.touches[0].clientY - rect.top) * scaleY };
-              }
-              return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
-            }
-
-            function start(e) {
-              e.preventDefault();
-              drawing = true;
-              const pos = getPos(e);
-              ctx.beginPath();
-              ctx.moveTo(pos.x, pos.y);
-            }
-            function move(e) {
-              if (!drawing) return;
-              e.preventDefault();
-              const pos = getPos(e);
-              ctx.lineTo(pos.x, pos.y);
-              ctx.stroke();
-              hasDrawn = true;
-            }
-            function stop() {
-              drawing = false;
-            }
-
-            canvas.addEventListener('mousedown', start);
-            canvas.addEventListener('mousemove', move);
-            window.addEventListener('mouseup', stop);
-            canvas.addEventListener('touchstart', start, { passive: false });
-            canvas.addEventListener('touchmove', move, { passive: false });
-            canvas.addEventListener('touchend', stop);
-
-            window.clearSignature = function () {
-              ctx.clearRect(0, 0, canvas.width, canvas.height);
-              hasDrawn = false;
-            };
-
-            window.prepareSignature = function (ev) {
-              if (!hasDrawn) {
-                alert('Please sign in the box above before submitting.');
-                ev.preventDefault();
-                return false;
-              }
-              document.getElementById('teacher_signature').value = canvas.toDataURL('image/png');
-              return true;
-            };
-          })();
-        </script>
-      `;
+    if (r.status === 'Draft') {
+      const blocked = caraForm.submitBlockers(caraIssueList);
+      actionsHtml = blocked.length
+        ? `${caraForm.blockedSummaryHtml(caraIssueList, '#')}
+           ${canManageOwnRecord(req.staffUser, r) ? `<p class="form-section-hint"><a class="btn btn-secondary btn-sm" href="/cara/${r.id}/edit?stage=4&checked=1#checks">Open the checks in step 4</a></p>` : ''}
+           ${checkPanel}`
+        : `${canManageOwnRecord(req.staffUser, r) ? `${caraForm.submitFormTag('cara_submit_form', r.id)}<div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Teacher signature</div>${caraForm.signaturePadHtml('cara_submit_form')}` : '<p class="form-section-hint">Ready for the teacher to sign and submit.</p>'}
+           ${checkPanel}`;
     } else if (r.status === 'Pending approval' || r.status === 'Changes requested') {
       actionsHtml = `
         ${unapprovedNotice.replace("Can't submit yet.", "Can't approve yet.")}
@@ -3027,9 +2957,21 @@ app.post('/cara/:id/submit', async (req, res, next) => {
       return res.status(400).send('A teacher signature is required before this CARA can be submitted for approval. Please go back and sign.');
     }
 
+    const rec = (await pool.query('SELECT * FROM cara_records WHERE id = $1', [req.params.id])).rows[0];
+    if (!rec) return res.status(404).send('CARA record not found.');
+    if (!canManageOwnRecord(req.staffUser, rec)) return res.status(403).send('You can only submit CARA records you created yourself.');
+    if (rec.archived || !['Draft', 'Changes requested'].includes(rec.status)) {
+      return res.status(400).send(`This CARA is "${escapeHtml(rec.status)}", so it can't be submitted. <a href="/cara/${rec.id}">Back</a>`);
+    }
     const notApproved = await unapprovedCaraPeras(req.params.id);
     if (notApproved.length) {
       return res.status(400).send(`This CARA can't be submitted until these PERAs are approved: ${notApproved.map((p) => escapeHtml(p.activity_name)).join(', ')}. <a href="/cara/${Number(req.params.id)}">Back</a>`);
+    }
+    // Same checks as the form and overview: nothing the teacher must fix may
+    // be open (reviewer decisions are made after submission).
+    const blocking = caraForm.submitBlockers(await loadCaraIssues(rec));
+    if (blocking.length) {
+      return res.status(400).send(`This CARA can't be submitted yet:<ul>${blocking.map((i) => `<li>${escapeHtml(i.text)}</li>`).join('')}</ul><a href="/cara/${rec.id}/edit?stage=4&checked=1#checks">Back to the checks</a>`);
     }
 
     await pool.query(

@@ -289,7 +289,7 @@ module.exports = function registerCaraProjects(app, deps) {
     const ev = rules.evaluate({ ...p, peras: p.peras || [] });
 
     const stage1 = `
-      <section class="stage" data-stage="1" aria-labelledby="pst1"><h2 class="stage-title" id="pst1">1. Describe the project</h2>
+      <section class="stage" data-stage="1" aria-labelledby="pst1"><h2 class="stage-title" id="pst1" tabindex="-1">1. Describe the project</h2>
         <details class="prj-cara-ref"><summary>Parent CARA: ${escapeHtml(caraRef(cara.id))} ${escapeHtml(cara.activity_name)} (${escapeHtml(cara.status)})</summary>
           <p class="field-help">${escapeHtml(cohortSummary(cara) || 'Class details not set')}${parentRoom || cara.location_detail ? ` · ${escapeHtml([parentRoom, cara.location_detail].filter(Boolean).join(' — '))}` : ''}</p>
           <div class="detail-value pretty-text">${nl2(cara.activity_scope || '—')}</div></details>
@@ -305,14 +305,14 @@ module.exports = function registerCaraProjects(app, deps) {
           <label><input type="radio" name="loc_mode" value="change"${sameAsParent ? '' : ' checked'}> Change the location for this project</label>
         </fieldset>
         <div class="cohort-grid" id="loc_fields">
-          ${field('room_id', 'Room / area', `<select id="room_id" name="room_id"><option value="">— Not in the room list —</option>${rooms.map((x) => `<option value="${x.id}"${Number(isNew ? cara.room_id : p.room_id) === x.id ? ' selected' : ''}>${escapeHtml(x.name)}</option>`).join('')}</select>`)}
+          ${field('room_id', 'Room / area', `<select id="room_id" name="room_id"><option value="">Select a location</option>${rooms.map((x) => `<option value="${x.id}"${Number(isNew ? cara.room_id : p.room_id) === x.id ? ' selected' : ''}>${escapeHtml(x.name)}</option>`).join('')}<option value="other"${!(isNew ? cara.room_id : p.room_id) && String((isNew ? cara.location_detail : p.location_detail) || '').trim() ? ' selected' : ''}>Other location</option></select>`)}
           <div class="form-row" style="grid-column: span 2;"><label for="location_detail">Location detail</label><input type="text" id="location_detail" name="location_detail" value="${nl2(isNew ? cara.location_detail : p.location_detail)}" placeholder="e.g. outdoor slab area behind the IDT workshop"></div>
         </div>
         ${field('in_cara_scope', "Does the parent CARA's scope already describe this project's work?", `<select id="in_cara_scope" name="in_cara_scope">${opt(['Unsure', 'Yes', 'No'], p.in_cara_scope || 'Unsure')}</select>`)}
       </section>`;
 
     const stage2 = `
-      <section class="stage" data-stage="2" aria-labelledby="pst2" hidden><h2 class="stage-title" id="pst2">2. Equipment, materials and hazards</h2>
+      <section class="stage" data-stage="2" aria-labelledby="pst2" hidden inert><h2 class="stage-title" id="pst2" tabindex="-1">2. Equipment, materials and hazards</h2>
         <h3 class="stage-sub" id="prj_pera_list_h">Tools and equipment</h3>
         ${peraPicker}
         <h3 class="stage-sub">Materials</h3>
@@ -324,13 +324,14 @@ module.exports = function registerCaraProjects(app, deps) {
       </section>`;
 
     const stage3 = `
-      <section class="stage" data-stage="3" aria-labelledby="pst3" hidden><h2 class="stage-title" id="pst3">3. Draft and review</h2>
+      <section class="stage" data-stage="3" aria-labelledby="pst3" hidden inert><h2 class="stage-title" id="pst3" tabindex="-1">3. Draft and review</h2>
         ${caraAi.apiEnabled() ? `
         <div class="ai-draft-panel" id="prj_ai_panel">
           <div class="ai-draft-text"><strong>AI draft</strong>
             <span>Uses steps 1 and 2, the parent CARA and the equipment controls. Suggestions appear under each section; nothing changes until you choose <em>Use this</em>. You can also fill these in yourself.</span>
             <span class="ai-privacy-note">Student notes, names and signatures are never sent. <details class="ai-privacy-more"><summary>What information is sent?</summary>This project's details and answers, the selected equipment assessments, and the parent CARA's activity, hazard, supervision and emergency text, its type and VET details, and class-level details (year level, course, class size, age range, prior experience). Not sent: the CARA's Students box, trainer/assessor details, names or signatures. Lines that look like individual student or medical details are removed first.</details></span></div>
           <button type="button" class="btn btn-primary" id="prj_ai_btn">Generate project draft</button>
+          <div class="ai-draft-ready" id="prj_ai_ready" aria-live="polite"></div>
           <div class="ai-draft-status" id="prj_ai_status" role="status" aria-live="polite"></div>
         </div>` : '<p class="field-help">The AI assistant isn\'t set up on this server. Fill in the sections below yourself.</p>'}
         <details class="draft-group" open><summary>Scope and exclusions</summary><div class="form-row"><textarea id="scope_exclusions" name="scope_exclusions" rows="3" aria-label="Scope and exclusions">${v('scope_exclusions')}</textarea></div></details>
@@ -349,7 +350,7 @@ module.exports = function registerCaraProjects(app, deps) {
 
     const parentConfirmed = cara.emergency_confirmed && cara.first_aid_kit_location;
     const stage4 = `
-      <section class="stage" data-stage="4" aria-labelledby="pst4" hidden><h2 class="stage-title" id="pst4">4. Check and submit</h2>
+      <section class="stage" data-stage="4" aria-labelledby="pst4" hidden inert><h2 class="stage-title" id="pst4" tabindex="-1">4. Check and submit</h2>
         <h3 class="stage-sub">Document purpose</h3>
         <p class="field-help">${ev.unanswered.length ? `Answer the hazard questions in step 2 first; a suggestion appears once they are saved` : `Suggested from the screening: <strong id="purpose_suggest">${escapeHtml(rules.purposeLabel(ev.suggestedPurpose))}</strong>`}. A reviewer confirms the purpose and whether a SWMS is legally required.</p>
         <div class="form-row"><select id="doc_purpose" name="doc_purpose" aria-label="Document purpose">${opt(rules.DOC_PURPOSES, p.doc_purpose || 'Not yet decided', { 'Legally required SWMS': rules.purposeLabel('Legally required SWMS') })}</select></div>
@@ -403,22 +404,27 @@ module.exports = function registerCaraProjects(app, deps) {
         var PARENT = ${JSON.stringify({ room_id: cara.room_id ? String(cara.room_id) : '', location_detail: cara.location_detail || '' }).replace(/</g, '\\u003c')};
         var stageInput = document.getElementById('stage_input'), cur = Number(stageInput.value) || 1;
         function filled(n) { var el = form.elements[n]; return el && !!String(el.value || '').trim(); }
+        // Simple status per stage (Not started / In progress / Ready); the
+        // detailed checks are on the project page after saving.
         function todo() {
-          var c = { 1: ['name', 'description'].filter(function (n) { return !filled(n); }).length + (form.elements.practice_type.value === 'Unsure' ? 1 : 0),
-            2: form.querySelectorAll('.prj-q.prj-q-missing').length + (form.querySelector('input[name="pera_ids"]:checked') ? 0 : 1),
-            3: ['scope_exclusions', 'ppe', 'induction_supervision'].filter(function (n) { return !filled(n); }).length + (readSteps().length ? 0 : 1),
-            4: ['first_aid_kit_location', 'first_aid_person'].filter(function (n) { return !filled(n); }).length + (form.querySelector('input[name="emergency_confirmed"]').checked ? 0 : 1) };
-          document.querySelectorAll('[data-todo]').forEach(function (el) { var n = c[el.dataset.todo]; el.textContent = n ? ' · ' + n + ' to do' : ' ✓'; el.className = 'stage-todo' + (n ? ' has-todo' : ' done'); });
+          var c = { 1: [['name', 'description'].filter(function (n) { return !filled(n); }).length, filled('name') || filled('description')],
+            2: [form.querySelectorAll('.prj-q.prj-q-missing').length, !!form.querySelector('.prj-q input:checked') || !!form.querySelector('input[name="pera_ids"]:checked') || filled('materials')],
+            3: [['scope_exclusions', 'ppe', 'induction_supervision'].filter(function (n) { return !filled(n); }).length + (readSteps().length ? 0 : 1), filled('scope_exclusions') || filled('ppe') || filled('induction_supervision') || readSteps().length > 0],
+            4: [['first_aid_kit_location', 'first_aid_person'].filter(function (n) { return !filled(n); }).length + (form.querySelector('input[name="emergency_confirmed"]').checked ? 0 : 1), filled('first_aid_kit_location') || filled('first_aid_person')] };
+          document.querySelectorAll('[data-todo]').forEach(function (el) { var x = c[el.dataset.todo], st = !x[0] ? 'Ready' : (x[1] ? 'In progress' : 'Not started'); el.textContent = ' · ' + st; el.className = 'stage-todo st-' + st.toLowerCase().replace(' ', '-'); });
         }
         function show(n, focusEl) {
           cur = Math.max(1, Math.min(4, n)); stageInput.value = cur;
-          form.querySelectorAll('.stage').forEach(function (s) { s.hidden = Number(s.dataset.stage) !== cur; });
+          form.querySelectorAll('.stage').forEach(function (s) { var on = Number(s.dataset.stage) === cur; s.hidden = !on; if (on) s.removeAttribute('inert'); else s.setAttribute('inert', ''); });
           document.querySelectorAll('.stage-btn').forEach(function (b) { var on = Number(b.dataset.go) === cur; b.classList.toggle('current', on); if (on) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current'); });
-          document.getElementById('stage_back').disabled = cur === 1;
+          document.getElementById('stage_back').hidden = cur === 1;
           document.getElementById('stage_next').hidden = cur === 4;
           document.getElementById('stage_submit').hidden = cur !== 4;
-          if (focusEl) { var d = focusEl.closest('details'); if (d) d.open = true; focusEl.scrollIntoView({ block: 'center' }); try { focusEl.focus({ preventScroll: true }); } catch (e) {} }
-          else window.scrollTo(0, form.getBoundingClientRect().top + window.scrollY - 80);
+          var t = focusEl || document.getElementById('pst' + cur);
+          var d = t.closest('details'); if (d) d.open = true;
+          t.scrollIntoView({ block: focusEl ? 'center' : 'start' });
+          if (focusEl && !focusEl.matches('input,select,textarea,button,a,[tabindex]')) { var inner = focusEl.querySelector('input,select,textarea'); if (inner) t = inner; }
+          try { t.focus({ preventScroll: true }); } catch (e) {}
           todo();
         }
         document.querySelectorAll('.stage-btn').forEach(function (b) { b.addEventListener('click', function () { show(Number(b.dataset.go)); }); });
@@ -504,6 +510,15 @@ module.exports = function registerCaraProjects(app, deps) {
         // AI draft: suggestions only, applied by "Use this".
         var btn = document.getElementById('prj_ai_btn'); if (!btn) return;
         var statusEl = document.getElementById('prj_ai_status');
+        var readyEl = document.getElementById('prj_ai_ready');
+        function prjMissing() {
+          var m = [];
+          if (!filled('name')) m.push('the project name (step 1)');
+          if (String(form.elements.description.value || '').trim().length < 15) m.push('what students will do (step 1)');
+          return m;
+        }
+        function prjReady() { var m = prjMissing(); btn.disabled = !!m.length; readyEl.textContent = m.length ? 'To generate a draft, first add ' + m.join(' and ') + '. You can also fill in the sections yourself.' : ''; }
+        form.addEventListener('input', prjReady); prjReady();
         function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
         function suggestBox(target, title, text, onUse, onAdd) {
           var b = el('div', 'ai-suggest'); b.appendChild(el('div', 'ai-suggest-title', title));
@@ -521,12 +536,12 @@ module.exports = function registerCaraProjects(app, deps) {
           fd.set('work_steps_json', JSON.stringify(readSteps()));
           var params = new URLSearchParams();
           fd.forEach(function (v, k) { if (typeof v === 'string') params.append(k, v); });
-          if (!(fd.get('name') || '').trim()) { statusEl.textContent = 'Enter the project name in step 1 first.'; return; }
+          if (prjMissing().length) { prjReady(); return; }
           btn.disabled = true; statusEl.textContent = 'Drafting… this can take up to a minute.';
           fetch('/projects/ai/draft', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(), credentials: 'same-origin' })
             .then(function (r) { return r.json(); })
             .then(function (d) {
-              btn.disabled = false;
+              prjReady();
               if (!d.ok) { statusEl.textContent = (d.error || 'Something went wrong.') + ' Nothing you entered has been lost — try again, or fill the sections in yourself.'; return; }
               document.querySelectorAll('.ai-suggest').forEach(function (n) { n.remove(); });
               var s = d.suggestions || {}, count = 0;
@@ -547,7 +562,7 @@ module.exports = function registerCaraProjects(app, deps) {
               statusEl.appendChild(el('div', null, count ? count + ' suggestion' + (count === 1 ? '' : 's') + ' added below the matching sections. Review each one before using it.' : 'No changes suggested.'));
               if ((d.notes || []).length) { var ul = el('ul', 'ai-draft-notes'); d.notes.forEach(function (m) { ul.appendChild(el('li', null, m)); }); statusEl.appendChild(ul); }
             })
-            .catch(function () { btn.disabled = false; statusEl.textContent = 'Could not reach the AI assistant. Nothing you entered has been lost — check your connection and try again, or fill the sections in yourself.'; });
+            .catch(function () { prjReady(); statusEl.textContent = 'Could not reach the AI assistant. Nothing you entered has been lost — check your connection and try again, or fill the sections in yourself.'; });
         });
       })();
       </script>`;
@@ -1017,7 +1032,7 @@ Rules:
       const cara = await loadCara(b.cara_id);
       if (!cara || !canEdit(req.staffUser, null, cara)) return res.status(403).json({ ok: false, error: 'You can only draft projects for CARAs you can edit.' });
       const f = fromBody(b);
-      if (!f.name) return res.status(400).json({ ok: false, error: 'Enter the project name first.' });
+      if (!f.name || String(f.description || '').trim().length < 15) return res.status(400).json({ ok: false, error: 'Before generating a draft, add the project name and what students will do (step 1).' });
       const peras = await caraAi.loadPeras(f.pera_ids);
       const room = f.room_id ? (await pool.query('SELECT name FROM rooms WHERE id=$1', [f.room_id])).rows[0] : null;
       const clip = caraAi.clip;

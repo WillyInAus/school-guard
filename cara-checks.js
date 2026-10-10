@@ -145,9 +145,14 @@ function caraIssues(r, ctx = {}) {
   // Hazard screening for the activity itself (same rules as projects).
   {
     const ev = rules.evaluate({ answers: r.screening || {}, project_type: null, description: `${r.activity_brief || ''} ${r.activity_scope || ''}`, materials: r.materials, peras });
-    if (ev.unanswered.length) add('screening:unanswered', 'block', `Hazard screening: ${ev.unanswered.length} question${ev.unanswered.length === 1 ? '' : 's'} to answer (step 2).`, 'screening');
+    if (ev.unanswered.length) {
+      const gate = ev.unanswered.some((q) => q.key === 'construction_work');
+      add('screening:unanswered', 'block', gate
+        ? `Hazard screening: answer whether the activity involves construction-type work${ev.unanswered.length > 1 ? `, then ${ev.unanswered.length - 1} more question${ev.unanswered.length === 2 ? '' : 's'}` : ''} (step 2).`
+        : `Hazard screening: ${ev.unanswered.length} question${ev.unanswered.length === 1 ? '' : 's'} to answer (step 2).`, gate ? 'q_construction_work' : `q_${ev.unanswered[0].key}`);
+    }
     for (const f of ev.flags.filter((x) => x.level === 'stop')) add('screening:stop', 'block', f.text, 'screening');
-    if (ev.unsure.length) add('screening:unsure', 'review', `Hazard screening: ${ev.unsure.length} answer${ev.unsure.length === 1 ? ' is' : 's are'} "Unsure" (${ev.unsure.map((q) => q.key.replace(/_/g, ' ')).join(', ')}). A reviewer must settle ${ev.unsure.length === 1 ? 'it' : 'them'}.`, 'screening');
+    if (ev.unsure.length) add('screening:unsure', 'review', `Hazard screening: ${ev.unsure.length} answer${ev.unsure.length === 1 ? ' is' : 's are'} "Unsure" (${ev.unsure.map((q) => q.key.replace(/_/g, ' ')).join(', ')}). A reviewer must settle ${ev.unsure.length === 1 ? 'it' : 'them'}.`, `q_${ev.unsure[0].key}`);
     for (const t of ev.triggers) add(`screening:trigger:${t.key}`, 'review', `Possible high risk construction work (${rules.JURISDICTION}): ${t.label}. Consider a project document for this work; a reviewer decides whether a SWMS is legally required.`, 'screening');
   }
   if (!caraType.TYPES[r.cara_type]) add('missing:cara_type', 'block', 'Choose whether this is a general curriculum activity or a VET course (top of the form).', 'cara_type');
@@ -165,7 +170,7 @@ function caraIssues(r, ctx = {}) {
     if (!r.vet_codes_checked) add('vet:codes-checked', 'block', 'VET: confirm the qualification and unit codes were checked against training.gov.au.', 'vet_section');
     if (/Workplace|Mixed/.test(r.delivery_context || '')) add('vet:workplace', 'review', 'VET delivery includes a workplace or placement. The host workplace has its own WHS duties; a reviewer should confirm placement arrangements (agreement, host induction, supervision) are in place.', 'delivery_context');
   }
-  if (!peras.length) add('missing:peras', 'review', 'No equipment (PERA) is linked. Confirm the activity uses no plant or equipment.', 'tool_search');
+  if (!peras.length && !r.no_equipment) add('missing:peras', 'block', 'Tools and equipment: select what is used, or tick "No tools or equipment are used" (step 2).', 'tool_ids');
 
   for (const [h, c, label] of [['environmental_hazards', 'environmental_controls', 'Environmental'], ['facilities_hazards', 'facilities_controls', 'Facilities and equipment'], ['student_hazards', 'student_controls', 'Student']]) {
     if (!blank(r[h]) && blank(r[c])) add(`missing:${c}`, 'block', `${label} hazards are listed but there are no control measures.`, c);
