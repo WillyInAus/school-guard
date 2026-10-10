@@ -140,11 +140,23 @@ const allNo = () => Object.fromEntries(rules.QUESTIONS.map((q) => [q.key, 'No'])
   ok(top.includes("Can't submit yet:") && top.includes('href="#chk_equipment"') && top.includes('needs an authorised approver, not you'), 'submission-blocked message links to the approver group; teacher and approver tasks separate');
   ok(!top.includes('Automatic checks'), 'no second, separate list of automatic checks on the overview');
 
-  // ===== 7. Risk guidance =====
+  // ===== 7. Risk guidance (Queensland Department of Education levels) =====
   r = await req('teacher', 'GET', `/cara/${eq}/edit?stage=4`);
   t = html(r.text);
-  ok(t.includes('residual risk') && t.includes("school's risk matrix") && t.includes('decides who must approve') && !t.includes('Highest equipment rating is High'), 'risk guidance uses activity, likelihood, consequence, controls and the matrix; no equipment anchor');
-  ok(t.includes('inform the review but do not set this rating'), 'equipment ratings do not set the activity rating');
+  ok(t.includes('Queensland Department of Education risk levels') && t.includes('<strong>inherent</strong> risk') && t.includes('Some chance of an incident occurring which would result in an injury requiring first aid.') && t.includes('managing-risks-in-school-curriculum-activities-procedure'), 'stage 4 shows the DoE risk levels, rated on inherent risk, with the source');
+  ok(t.includes('Activity risk level (inherent, before controls)') && t.includes('Risk remaining with controls (optional)') && t.includes('does not change the approval requirement'), 'inherent and residual risk are clearly separate; inherent drives approval');
+  ok(t.includes('inform the review but do not set this rating') && !t.includes('Highest equipment rating is High'), 'equipment ratings do not set the activity rating');
+  ok(t.includes('Medium: the HOD, HOSES or HOC must give documented approval'), 'approval requirements follow the DoE procedure');
+  await req('teacher', 'POST', `/cara/${eq}/edit`, { ...base, activity_name: 'Scroll saw puzzles', tool_ids: [String(draftPera)], ...screen({ ...allNo() }), ...complete, risk_level: 'Extreme', residual_risk: 'Medium', consent_required: 'false', stage: '4' });
+  r = await req('teacher', 'GET', `/cara/${eq}`);
+  t = html(r.text);
+  ok(t.includes('Extreme risk: parent/carer consent is mandatory') && t.includes('Risk remaining with controls:</strong> Medium'), 'Extreme without consent is blocked; residual risk shown to the reviewer');
+  ok((await db.query('SELECT residual_risk FROM cara_records WHERE id=$1', [eq])).rows[0].residual_risk === 'Medium', 'residual risk saved');
+  await req('teacher', 'POST', `/cara/${eq}/edit`, { ...base, activity_name: 'Scroll saw puzzles', tool_ids: [String(draftPera)], ...screen({ ...allNo() }), ...complete, risk_level: 'Low', residual_risk: 'High', stage: '4' });
+  r = await req('teacher', 'GET', `/cara/${eq}`);
+  ok(html(r.text).includes('higher than the inherent risk'), 'a residual risk above the inherent risk is flagged');
+  r = await req('teacher', 'GET', `/cara/${eq}/pdf?preview=html`);
+  ok(r.text.includes('Activity risk (inherent)') && r.text.includes('With controls: High'), 'PDF labels inherent risk and shows the risk with controls');
 
   // ===== 8. Existing records =====
   for (const p of ['/cara/3', '/cara/3/edit', '/cara/3/edit?stage=4&checked=1', '/cara', '/admin/approvals']) { r = await req('admin', 'GET', p); ok(r.status === 200, `existing pages load: ${p}`); }

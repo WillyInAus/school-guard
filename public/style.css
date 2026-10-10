@@ -1577,3 +1577,6 @@ tr.row-link:hover {
 .risk-help { margin: 6px 0 10px; font-size: 14px; }
 .risk-help summary { cursor: pointer; color: #1B5E52; font-weight: 600; }
 .risk-help ol { margin: 6px 0 6px 18px; padding: 0; }
+.risk-levels { border: 1px solid #E3DFD6; border-radius: 10px; padding: 10px 12px; margin: 6px 0 12px; background: #FBFAF7; }
+.risk-level-row { display: flex; gap: 10px; align-items: baseline; font-size: 14px; margin: 4px 0; }
+.risk-level-row .badge { flex: none; min-width: 64px; text-align: center; }

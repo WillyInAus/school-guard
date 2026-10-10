@@ -75,7 +75,7 @@ Rules:
 - Never write first aid treatment instructions (e.g. how to treat burns, eye injuries, bleeding, shock). The school inserts reviewed first aid wording separately.
 - For VET activities use only the qualification and unit codes the teacher entered. Never invent or guess codes, unit titles, assessment requirements, completed inductions, trainer or student competency, consent or first aid arrangements. If something is missing, write [confirm: ...].
 - The CARA type (general curriculum or VET) does not by itself change the risk level or require a SWMS.
-- A suggested activity risk level is only a suggestion for the teacher and reviewer to confirm. Base it on the actual activity, likelihood, consequence and existing controls (residual risk), not on the highest equipment rating.
+- A suggested activity risk level is only a suggestion for the teacher and reviewer to confirm. Use the Queensland Department of Education levels, rated on INHERENT risk (before control measures): Low = little chance of an incident resulting in an injury; Medium = some chance of an incident resulting in an injury requiring first aid; High = inherently dangerous, high chance of a serious incident with major consequences (e.g. specialist treatment or hospitalisation); Extreme = inherently dangerous, high chance of a serious incident with critical consequences (e.g. permanent disability or loss of life). Base it on the actual activity, not on the highest equipment rating.
 - Do not invent school-specific facts (names, room numbers, staff, qualifications held, first aid locations). Where something school-specific is needed, write a short placeholder in square brackets, e.g. [name of supervising teacher].
 - Use Australian English, plain language a teacher can paste straight in, and short "- " bullet lines where a list helps.
 - Plain text only: NO markdown. Never use **, __, # headings or backticks. To group bullets, put a short sub-heading on its own line ending in ":" (e.g. "Prior experience:"), then its "- " bullets underneath. Keep each bullet to one or two short lines.
@@ -317,7 +317,7 @@ module.exports = function registerCaraAi({ app, pool, escapeHtml, canManageOwnRe
       properties: {
         ...Object.fromEntries(Object.entries(DRAFT_FIELDS).map(([k, label]) => [k, { type: 'string', description: `Suggested text for "${label}". ${FIELD_GUIDE[k] || ''} Omit or leave empty if the existing text is already good.` }])),
         suggested_risk_level: { type: 'string', enum: RISK_LEVELS },
-        risk_reason: { type: 'string', description: 'One or two sentences: the main hazards of this activity, how likely and how serious harm would be with the planned controls in place (residual risk). Do not set it simply from the highest equipment rating.' },
+        risk_reason: { type: 'string', description: 'One or two sentences: the main hazards of this activity and how likely and how serious an injury could be BEFORE control measures (inherent risk, Queensland Department of Education levels). Do not set it simply from the highest equipment rating.' },
         consent_recommended: { type: 'boolean' },
         consent_reason: { type: 'string', description: 'One sentence.' },
         notes: { type: 'array', items: { type: 'string' }, description: 'Up to 3 short notes for the teacher, e.g. missing information.' },

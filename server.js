@@ -17,6 +17,7 @@ const caraSafety = require('./cara-safety');
 const caraChecks = require('./cara-checks');
 const caraType = require('./cara-type');
 const caraForm = require('./cara-form');
+const qldRisk = require('./qld-risk');
 
 function caraApprovalTexts() {
   const out = { '': 'Set a proposed activity risk rating to see the approval requirement.' };
@@ -346,6 +347,7 @@ function approvalRequirement(riskLevel) {
 }
 
 function caraApprovalRequirement(riskLevel) {
+  if (qldRisk.LEVELS[riskLevel]) return qldRisk.LEVELS[riskLevel].approval;
   if (riskLevel === 'Extreme') {
     return 'Extreme risk: consider an alternative or modified activity. This CARA must be completed and approved by the principal before proceeding, and parent/carer consent is required.';
   }
@@ -2572,6 +2574,7 @@ app.get('/cara/:id', async (req, res, next) => {
       <div class="ws-actions card" id="submit">
         <h2 class="ws-h">Review and approval</h2>
         <div class="note-box">${caraApprovalRequirement(r.risk_level)}</div>
+        ${r.residual_risk ? `<p class="field-help"><strong>Risk remaining with controls:</strong> ${escapeHtml(r.residual_risk)}</p>` : ''}
         ${r.risk_basis ? `<p class="field-help"><strong>Basis for proposed rating:</strong> ${escapeHtml(r.risk_basis)}</p>` : ''}
         ${actionsHtml}
         <div class="ws-tools">

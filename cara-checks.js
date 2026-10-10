@@ -141,7 +141,12 @@ function caraIssues(r, ctx = {}) {
   ];
   for (const [k, msg] of required) if (blank(r[k])) add(`missing:${k}`, 'block', msg, k);
   if (blank(r.course) && blank(r.class_unit)) add('missing:course', 'block', 'Class group: course / subject is missing.', 'course');
-  if (!r.risk_level) add('missing:risk_level', 'block', 'Proposed activity risk rating not set (step 4).', 'risk_level');
+  if (!r.risk_level) add('missing:risk_level', 'block', 'Activity risk level not set (step 4).', 'risk_level');
+  // Department of Education CARA procedure: consent is mandatory for
+  // Extreme and strongly recommended for High.
+  if (r.risk_level === 'Extreme' && !r.consent_required) add('consent:extreme', 'block', 'Extreme risk: parent/carer consent is mandatory. Tick "Parent consent required" (step 4).', 'consent_required');
+  if (r.risk_level === 'High' && !r.consent_required) add('consent:high', 'review', 'High risk: parent/carer consent is strongly recommended as a condition of approval, but is not marked as required.', 'consent_required');
+  if (r.risk_level && r.residual_risk && RISK_ORDER[r.residual_risk] > RISK_ORDER[r.risk_level]) add('risk:residual-above', 'block', `The risk with controls (${r.residual_risk}) is higher than the inherent risk (${r.risk_level}). Check both ratings (step 4).`, 'residual_risk');
   // Hazard screening for the activity itself (same rules as projects).
   {
     const ev = rules.evaluate({ answers: r.screening || {}, project_type: null, description: `${r.activity_brief || ''} ${r.activity_scope || ''}`, materials: r.materials, peras });

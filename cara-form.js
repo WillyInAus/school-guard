@@ -10,6 +10,7 @@ const caraSafety = require('./cara-safety');
 const aiPrivacy = require('./ai-privacy');
 const screening = require('./screening-ui');
 const checks = require('./cara-checks');
+const qldRisk = require('./qld-risk');
 
 const STAGES = ['Describe', 'Select', 'Draft and review', 'Check and submit'];
 
@@ -22,7 +23,7 @@ const STAGE_OF_FIELD = {
   student_hazards: 3, student_controls: 3, induction_instruction: 3, supervision_notes: 3, supervisor_qualification: 3,
   facilities_equipment: 3, students_notes: 3, emergency_first_aid: 3, vet_section: 3, vet_units: 3, trainer_competencies: 3,
   vet_safety_requirements: 3,
-  risk_level: 4, risk_basis: 4, consent_required: 4, emergency_confirm: 4, first_aid_kit_location: 4, first_aid_person: 4, submitted_by: 4,
+  risk_level: 4, residual_risk: 4, risk_basis: 4, consent_required: 4, emergency_confirm: 4, first_aid_kit_location: 4, first_aid_person: 4, submitted_by: 4,
 };
 
 const EXAMPLES = {
@@ -294,22 +295,18 @@ async function caraFormHtml(o) {
     <section class="stage" data-stage="4" aria-labelledby="stage4_h" hidden inert>
       <h2 class="stage-title" id="stage4_h" tabindex="-1">4. Check and submit</h2>
       <h3 class="stage-sub">Proposed activity risk</h3>
-      <p class="field-help">Rate the activity as it will actually run, with the controls from step 3 in place, using the school's risk matrix (likelihood × consequence). This is the residual risk, and it sets the approval requirement below. Equipment ratings inform the review but do not set this rating. A reviewer confirms it when approving.</p>
-      <div class="cohort-grid">
-        ${field('risk_level', 'Proposed activity risk rating', `<select id="risk_level" name="risk_level"><option value="">Select a rating</option>${['Low', 'Medium', 'High', 'Extreme'].map((l) => `<option${r.risk_level === l ? ' selected' : ''}>${l}</option>`).join('')}</select>`, null, true)}
-        <div class="form-row" style="grid-column: span 2;"><label for="risk_basis">Basis for this rating</label>${ta('risk_basis', 3, 'e.g. Main hazards: sharp edges and the guillotine. With induction, guards and direct supervision an injury is unlikely and would need first aid at most, so Medium on the school risk matrix.')}</div>
+      <p class="field-help">Use the Queensland Department of Education risk levels. Rate the activity's <strong>inherent</strong> risk: the risk before control measures, judged on how likely an incident is and how serious the injury could be. This level sets the approval and consent requirement below. Equipment ratings inform the review but do not set this rating. A reviewer confirms it when approving.</p>
+      <div class="risk-levels" role="group" aria-label="Department of Education risk levels">
+        ${Object.entries(qldRisk.LEVELS).map(([l, x]) => `<div class="risk-level-row"><span class="badge ${riskBadgeClass(l)}">${l}</span> <span>${escapeHtml(x.meaning)}</span></div>`).join('')}
+        <p class="field-help">Source: <a href="${qldRisk.SOURCE.url}" target="_blank" rel="noopener">${escapeHtml(qldRisk.SOURCE.title)}</a></p>
       </div>
-      <details class="risk-help"><summary>How to work out the rating</summary>
-        <ol>
-          <li>Start from what students will actually do and the hazards in steps 2 and 3.</li>
-          <li>Likelihood: with the controls in place, how likely is someone to be hurt?</li>
-          <li>Consequence: if they were, how serious would it be (first aid, medical treatment, serious injury)?</li>
-          <li>Read the rating off the school's risk matrix.</li>
-        </ol>
-        <p>If you also note the risk before controls (inherent risk), say so in the basis. The rating chosen here is the risk with controls, and it is the one that decides who must approve.</p>
-      </details>
+      <div class="cohort-grid">
+        ${field('risk_level', 'Activity risk level (inherent, before controls)', `<select id="risk_level" name="risk_level"><option value="">Select a level</option>${['Low', 'Medium', 'High', 'Extreme'].map((l) => `<option${r.risk_level === l ? ' selected' : ''}>${l}</option>`).join('')}</select>`, null, true)}
+        ${field('residual_risk', 'Risk remaining with controls (optional)', `<select id="residual_risk" name="residual_risk"><option value="">Not recorded</option>${['Low', 'Medium', 'High', 'Extreme'].map((l) => `<option${r.residual_risk === l ? ' selected' : ''}>${l}</option>`).join('')}</select>`, 'For the approver: what is left once the controls in step 3 are in place. It does not change the approval requirement.')}
+      </div>
+      ${field('risk_basis', 'Basis for this rating', ta('risk_basis', 3, 'e.g. Guillotine and sharp sheet edges: some chance of a cut needing first aid, so Medium inherent risk. With induction, guards and direct supervision the remaining risk is Low.'), 'Name the main hazards, how likely an incident is and how serious it could be, and what the controls change.')}
       <div class="note-box" id="approval_req" data-texts="${escapeHtml(JSON.stringify(approvalText))}">${escapeHtml(approvalText[r.risk_level] || approvalText[''] || '')}</div>
-      <label class="checkbox-row" id="consent_required"><input type="checkbox" name="consent_required" value="true"${r.consent_required ? ' checked' : ''}> Parent consent required (required for Extreme, recommended for High)</label>
+      <label class="checkbox-row" id="consent_required"><input type="checkbox" name="consent_required" value="true"${r.consent_required ? ' checked' : ''}> Parent/carer consent required (mandatory for Extreme, strongly recommended for High, consider for Medium)</label>
       <h3 class="stage-sub" id="emergency_confirm">Emergency arrangements for this location ${req}</h3>
       <div class="cohort-grid">
         <div class="form-row" style="grid-column: span 2;"><label for="first_aid_kit_location">First aid kit location ${req}</label><input type="text" id="first_aid_kit_location" name="first_aid_kit_location" value="${v('first_aid_kit_location')}" placeholder="Where exactly"></div>
@@ -369,7 +366,7 @@ async function caraFormHtml(o) {
           2: [], 3: ['activity_scope', 'induction_instruction', 'supervision_notes', 'supervisor_qualification', 'emergency_first_aid'].concat(vet ? ['vet_units', 'trainer_competencies', 'vet_safety_requirements', 'vet_codes_checked'] : []),
           4: ['risk_level', 'first_aid_kit_location', 'first_aid_person', 'emergency_confirmed']
         };
-        var any = { 1: ['class_unit', 'age_range', 'prior_experience', 'room_id', 'location_detail', 'activity_brief'], 2: ['tool_ids', 'materials', 'sds_refs', 'no_equipment'], 3: ['environmental_hazards', 'facilities_equipment', 'students_notes'], 4: ['risk_basis', 'consent_required'] };
+        var any = { 1: ['class_unit', 'age_range', 'prior_experience', 'room_id', 'location_detail', 'activity_brief'], 2: ['tool_ids', 'materials', 'sds_refs', 'no_equipment'], 3: ['environmental_hazards', 'facilities_equipment', 'students_notes'], 4: ['risk_basis', 'residual_risk', 'consent_required'] };
         var out = {};
         Object.keys(req).forEach(function (s) {
           var missing = req[s].filter(function (n) { return !filled(n); }).length, done = req[s].length - missing;
@@ -489,11 +486,13 @@ async function caraFormHtml(o) {
 // Extra CARA fields introduced with the staged form.
 const EXTRA_FIELDS = [
   ['activity_brief', 'What students will do (brief)'], ['materials', 'Materials'], ['sds_refs', 'SDS references'], ['risk_basis', 'Basis for risk rating'],
+  ['residual_risk', 'Risk remaining with controls'],
 ];
 function extraFromBody(b) {
   const clean = (v) => { const t = v == null ? '' : String(v).replace(/\r\n?/g, '\n').trim(); return t || null; };
   const out = {};
   for (const [k] of EXTRA_FIELDS) if (k in b) out[k] = clean(b[k]);
+  if ('residual_risk' in out && !['Low', 'Medium', 'High', 'Extreme'].includes(out.residual_risk)) out.residual_risk = null;
   if (b.no_equipment_field === '1') out.no_equipment = b.no_equipment === 'true' && ![].concat(b.tool_ids || []).filter(Boolean).length;
   if (b.screening_fields === '1') {
     const rules = require('./project-rules');
