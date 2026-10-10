@@ -135,7 +135,7 @@ const allNo = () => Object.fromEntries(rules.QUESTIONS.map((q) => [q.key, 'No'])
   ok(!t.includes('style="width:100%;">Approve'), 'Approve button is not full width');
   r = await req('teacher', 'GET', `/cara/${ck}`);
   t = html(r.text);
-  ok(t.includes('Waiting for approval') && !t.includes(`action="/cara/${ck}/approve"`), 'teacher sees "Waiting for approval", not the reviewer buttons');
+  ok(t.includes('Waiting for approval') && !t.includes(`action="/cara/${ck}/approve"`), 'teacher/trainer sees "Waiting for approval", not the reviewer buttons');
   r = await req('approver', 'POST', `/cara/${ck}/reject`, { review_notes: '' });
   ok(r.status === 400, 'sending back needs a note');
   r = await req('approver', 'POST', `/cara/${ck}/reject`, { review_notes: 'Add the guillotine supervision ratio.' });

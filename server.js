@@ -2492,7 +2492,7 @@ app.get('/cara/:id', async (req, res, next) => {
         ? `${caraForm.blockedSummaryHtml(caraIssueList, '#')}
            ${canManageOwnRecord(req.staffUser, r) ? `<p class="form-section-hint"><a class="btn btn-secondary btn-sm" href="/cara/${r.id}/edit?stage=4&checked=1#checks">Open the checks in step 4</a></p>` : ''}
            ${checkPanel}`
-        : `${canManageOwnRecord(req.staffUser, r) ? `${caraForm.submitFormTag('cara_submit_form', r.id)}<div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Teacher signature</div>${caraForm.signaturePadHtml('cara_submit_form')}` : '<p class="form-section-hint">Ready for the teacher to sign and submit.</p>'}
+        : `${canManageOwnRecord(req.staffUser, r) ? `${caraForm.submitFormTag('cara_submit_form', r.id)}<div class="form-section-title" style="margin-top:0;padding-top:0;border-top:none;">Teacher/Trainer signature</div>${caraForm.signaturePadHtml('cara_submit_form')}` : '<p class="form-section-hint">Ready for the teacher/trainer to sign and submit.</p>'}
            ${checkPanel}`;
     } else if (r.status === 'Pending approval' || r.status === 'Changes requested') {
       const isReviewer = ['admin', 'approver'].includes(req.staffUser.role);
@@ -2507,20 +2507,20 @@ app.get('/cara/:id', async (req, res, next) => {
         const blocked = caraForm.submitBlockers(caraIssueList);
         actionsHtml = `
         ${notesBox}
-        ${sentBack ? '<p class="form-section-hint">This CARA was sent back to the teacher. You can still approve it if the changes are no longer needed.</p>' : ''}
+        ${sentBack ? '<p class="form-section-hint">This CARA was sent back to the teacher/trainer. You can still approve it if the changes are no longer needed.</p>' : ''}
         <div class="review-decision">
           <form method="post" action="/cara/${r.id}/approve" class="review-col review-approve">
             <h3>Approve</h3>
             <div class="form-row"><label for="approver">Approved by</label>
               <input type="text" id="approver" name="approver" placeholder="Principal / school leader name" value="${escapeHtml(req.staffUser.name)}" required></div>
-            ${blocked.length ? `<p class="review-blocked">Can't approve yet: <a href="#approval-checks">${blocked.length} item${blocked.length === 1 ? '' : 's'} in the checks</a> must be resolved first${unapprovedPeras.length ? `, including ${unapprovedPeras.length} equipment approval${unapprovedPeras.length === 1 ? '' : 's'}` : ''}. Send it back if the teacher needs to fix them.</p>
+            ${blocked.length ? `<p class="review-blocked">Can't approve yet: <a href="#approval-checks">${blocked.length} item${blocked.length === 1 ? '' : 's'} in the checks</a> must be resolved first${unapprovedPeras.length ? `, including ${unapprovedPeras.length} equipment approval${unapprovedPeras.length === 1 ? '' : 's'}` : ''}. Send it back if the teacher/trainer needs to fix them.</p>
             <button type="submit" class="btn btn-primary" disabled>Approve</button>` : '<button type="submit" class="btn btn-primary">Approve</button>'}
           </form>
           <form method="post" action="/cara/${r.id}/reject" class="review-col review-return">
             <h3>Send back for more work</h3>
             <div class="form-row"><label for="review_notes">What needs to change?</label>
               <textarea id="review_notes" name="review_notes" rows="3" required placeholder="e.g. Add the eyewash location and the supervision ratio for the guillotine."></textarea></div>
-            <button type="submit" class="btn btn-return">Send back to teacher</button>
+            <button type="submit" class="btn btn-return">Send back to teacher/trainer</button>
           </form>
         </div>
         ${checkPanel}`;
@@ -2614,7 +2614,7 @@ app.get('/cara/:id', async (req, res, next) => {
             ${toolChips}
           </div>
           <div class="detail-section">
-            <div class="detail-label">Teacher signature</div>
+            <div class="detail-label">Teacher/Trainer signature</div>
             ${r.teacher_signature
               ? `<img src="${r.teacher_signature}" alt="Teacher signature" class="signature-image">${r.signed_at ? `<div class="detail-value" style="margin-top:4px;font-size:12px;color:#6B6659;">Signed ${formatDate(r.signed_at)}</div>` : ''}`
               : `<div class="detail-value">—</div>`}
@@ -2939,7 +2939,7 @@ app.get('/cara/:id/pdf', async (req, res, next) => {
     } else {
       signatureParts.push({ text: 'No signature captured.', gapBefore: 6, size: 9, color: MUTED });
     }
-    multiPanel('Teacher signature', signatureParts, (startX) => {
+    multiPanel('Teacher/Trainer signature', signatureParts, (startX) => {
       if (signatureImage) {
         try {
           doc.image(signatureImage, startX, doc.y, { fit: [200, 80] });
