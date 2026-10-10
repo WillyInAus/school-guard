@@ -1660,3 +1660,6 @@ textarea.ph-flash { animation: phflash 1.6s ease-out; }
 @media (max-width: 760px) { .review-decision { grid-template-columns: 1fr; } }
 .review-blocked { font-size: 13.5px; color: #8A4B0F; margin: 0 0 10px; } .review-blocked a { color: #1B5E52; font-weight: 600; }
 .review-col .btn { justify-content: center; text-align: center; }
+/* Long PERA forms: Save stays visible at the bottom of the screen. */
+.form-actions.sticky-actions { position: sticky; bottom: 0; z-index: 5; background: #fff; border-top: 1px solid #E4DFD3; padding: 10px 0 6px; margin-top: 18px; box-shadow: 0 -6px 12px -10px rgba(26, 29, 27, .25); }
+@media (max-width: 768px) { .form-actions.sticky-actions { bottom: calc(60px + env(safe-area-inset-bottom, 0px)); } }
